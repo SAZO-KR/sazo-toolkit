@@ -27,6 +27,17 @@ Slack 채널에서 익명으로 메시지를 게시할 수 있는 대나무숲 �
 - ✅ 선택적 닉네임 설정
 - ✅ AWS Lambda 서버리스 아키텍처
 
+### [ai-prompts](./packages/ai-prompts)
+팀 공용 AI 프롬프트 (Commands & Skills) 저장소
+
+- ✅ 팀 공용 슬래시 커맨드/스킬 공유
+- ✅ Claude 세션 시작 시 자동 업데이트
+- ✅ sparse-checkout으로 ai-prompts만 설치 (전체 레포 X)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/ai-prompts/install.sh | bash
+```
+
 ## 📝 기여 가이드
 
 새로운 도구를 추가할 때는 `packages/` 디렉토리에 별도 패키지로 추가하고 해당 README를 작성해주세요.
