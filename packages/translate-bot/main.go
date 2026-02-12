@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -27,7 +28,32 @@ import (
 var (
 	japaneseRegex = regexp.MustCompile(`[\p{Hiragana}\p{Katakana}]`)
 	koreanRegex   = regexp.MustCompile(`[\p{Hangul}]`)
+
+	// 통화 금액 패턴 (긴 단위부터 매칭하여 부분 매칭 방지)
+	koreanWonRegex   = regexp.MustCompile(`(\d[\d,.]*\s*)(만\s*원|천\s*원|억\s*원|조\s*원|원)`)
+	japaneseYenRegex = regexp.MustCompile(`(\d[\d,.]*\s*)(万\s*円|千\s*円|億\s*円|兆\s*円|円)`)
+
+	koreanLaughRegex   = regexp.MustCompile(`[ㅋ]{2,}|[ㅎ]{2,}`)
+	japaneseLaughRegex = regexp.MustCompile(`w{3,}`)
 )
+
+// 통화 단위 매핑 (한→일)
+var wonToJapanese = map[string]string{
+	"만원": "万ウォン",
+	"천원": "千ウォン",
+	"억원": "億ウォン",
+	"조원": "兆ウォン",
+	"원":  "ウォン",
+}
+
+// 통화 단위 매핑 (일→한)
+var yenToKorean = map[string]string{
+	"万円": "만엔",
+	"千円": "천엔",
+	"億円": "억엔",
+	"兆円": "조엔",
+	"円":  "엔",
+}
 
 // ─────────────────────────────────────
 // 설정
@@ -147,6 +173,106 @@ func splitByNewlineChunk(msg string, minB, maxB int) []string {
 		data = data[cut:]
 	}
 	return parts
+}
+
+// ─────────────────────────────────────
+// 통화 금액 보호 (번역 전처리/후처리)
+func protectCurrency(text string, targetLang string) (string, []string) {
+	var re *regexp.Regexp
+	var unitMap map[string]string
+
+	switch targetLang {
+	case "ja":
+		re = koreanWonRegex
+		unitMap = wonToJapanese
+	case "ko":
+		re = japaneseYenRegex
+		unitMap = yenToKorean
+	default:
+		return text, nil
+	}
+
+	var replacements []string
+	result := re.ReplaceAllStringFunc(text, func(match string) string {
+		subs := re.FindStringSubmatch(match)
+		if len(subs) < 3 {
+			return match
+		}
+		number := strings.TrimSpace(subs[1])
+		unit := strings.ReplaceAll(subs[2], " ", "")
+
+		targetUnit, ok := unitMap[unit]
+		if !ok {
+			return match
+		}
+
+		placeholder := fmt.Sprintf("__CUR%d__", len(replacements))
+		replacements = append(replacements, number+targetUnit)
+		return placeholder
+	})
+
+	return result, replacements
+}
+
+func restoreCurrency(text string, replacements []string) string {
+	for i, replacement := range replacements {
+		placeholder := fmt.Sprintf("__CUR%d__", i)
+		text = strings.ReplaceAll(text, placeholder, replacement)
+	}
+	return text
+}
+
+// ─────────────────────────────────────
+// 웃음 표현 보호 (ㅋㅋㅋ↔www 폭발 방지)
+func protectLaughter(text string, targetLang string) (string, []string) {
+	var replacements []string
+
+	switch targetLang {
+	case "ja":
+		result := koreanLaughRegex.ReplaceAllStringFunc(text, func(match string) string {
+			n := utf8.RuneCountInString(match)
+			placeholder := fmt.Sprintf("__LAU%d__", len(replacements))
+			replacements = append(replacements, strings.Repeat("w", n))
+			return placeholder
+		})
+		return result, replacements
+
+	case "ko":
+		indices := japaneseLaughRegex.FindAllStringIndex(text, -1)
+		if len(indices) == 0 {
+			return text, nil
+		}
+
+		var buf strings.Builder
+		prev := 0
+		for _, loc := range indices {
+			start, end := loc[0], loc[1]
+			// www. → URL이므로 skip
+			if end < len(text) && text[end] == '.' {
+				buf.WriteString(text[prev:end])
+				prev = end
+				continue
+			}
+			buf.WriteString(text[prev:start])
+			n := end - start
+			placeholder := fmt.Sprintf("__LAU%d__", len(replacements))
+			replacements = append(replacements, strings.Repeat("ㅋ", n))
+			buf.WriteString(placeholder)
+			prev = end
+		}
+		buf.WriteString(text[prev:])
+		return buf.String(), replacements
+	}
+
+	return text, nil
+}
+
+func restoreLaughter(text string, replacements []string) string {
+	for i, replacement := range replacements {
+		placeholder := fmt.Sprintf("__LAU%d__", i)
+		text = strings.ReplaceAll(text, placeholder, replacement)
+	}
+	return text
 }
 
 // ─────────────────────────────────────
@@ -280,10 +406,24 @@ func (app *App) processMessage(ev *slackevents.MessageEvent) error {
 	// 메시지 분할 (긴 메시지 대응)
 	chunks := splitByNewlineChunk(ev.Text, 1600, 1800)
 
+	// 번역 전처리: 통화 금액 + 웃음 표현 보호
+	currencyRepls := make([][]string, len(chunks))
+	laughterRepls := make([][]string, len(chunks))
+	for i, chunk := range chunks {
+		chunks[i], currencyRepls[i] = protectCurrency(chunk, lang)
+		chunks[i], laughterRepls[i] = protectLaughter(chunks[i], lang)
+	}
+
 	// 번역
 	translated, err := app.translateChunks(chunks, lang)
 	if err != nil {
 		return err
+	}
+
+	// 번역 후처리: 보호된 표현 복원
+	for i := range translated {
+		translated[i] = restoreLaughter(translated[i], laughterRepls[i])
+		translated[i] = restoreCurrency(translated[i], currencyRepls[i])
 	}
 
 	// 결과 합치기
