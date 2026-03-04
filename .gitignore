@@ -42,5 +42,9 @@ tmp/
 temp/
 *.tmp
 
+# Go build outputs
+bootstrap
+*.zip
+
 # Git worktrees
 .worktrees/
