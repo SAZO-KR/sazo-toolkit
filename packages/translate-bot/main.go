@@ -37,6 +37,8 @@ var (
 	japaneseLaughRegex = regexp.MustCompile(`w{3,}`)
 )
 
+const noTranslateEmoji = "no_translate"
+
 // 통화 단위 매핑 (한→일)
 var wonToJapanese = map[string]string{
 	"만원": "万ウォン",
@@ -122,15 +124,24 @@ func LoadConfigFromSecrets(ctx context.Context) (*Config, error) {
 // ─────────────────────────────────────
 // App 구조체
 type App struct {
-	cfg   *Config
-	slack *slack.Client
+	cfg       *Config
+	slack     *slack.Client
+	botUserID string
 }
 
 func NewApp(cfg *Config) (*App, error) {
 	if cfg.SlackBotToken == "" || cfg.SlackSigningSecret == "" {
 		return nil, fmt.Errorf("Slack 설정 누락")
 	}
-	return &App{cfg: cfg, slack: slack.New(cfg.SlackBotToken)}, nil
+	client := slack.New(cfg.SlackBotToken)
+
+	resp, err := client.AuthTest()
+	if err != nil {
+		return nil, fmt.Errorf("봇 인증 실패: %w", err)
+	}
+	log.Printf("[디버그] 봇 유저 ID: %s", resp.UserID)
+
+	return &App{cfg: cfg, slack: client, botUserID: resp.UserID}, nil
 }
 
 // ─────────────────────────────────────
@@ -389,10 +400,74 @@ func (app *App) translateChunks(chunks []string, targetLang string) ([]string, e
 }
 
 // ─────────────────────────────────────
+// 번역 금지 이모지 확인/추가
+func (app *App) hasNoTranslateEmoji(channel, ts string) bool {
+	reactions, err := app.slack.GetReactions(slack.NewRefToMessage(channel, ts), slack.NewGetReactionsParameters())
+	if err != nil {
+		log.Printf("[경고] 리액션 조회 실패: %v", err)
+		return false
+	}
+	for _, r := range reactions {
+		if r.Name == noTranslateEmoji {
+			for _, uid := range r.Users {
+				if uid == app.botUserID {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (app *App) addNoTranslateEmoji(channel, ts string) {
+	err := app.slack.AddReaction(noTranslateEmoji, slack.NewRefToMessage(channel, ts))
+	if err != nil && !strings.Contains(err.Error(), "already_reacted") {
+		log.Printf("[경고] 이모지 추가 실패: %v", err)
+	}
+}
+
+func (app *App) removeNoTranslateEmoji(channel, ts string) {
+	err := app.slack.RemoveReaction(noTranslateEmoji, slack.NewRefToMessage(channel, ts))
+	if err != nil {
+		log.Printf("[경고] 이모지 제거 실패: %v", err)
+	}
+}
+
+// ─────────────────────────────────────
 // 메시지 이벤트 처리
 func (app *App) processMessage(ev *slackevents.MessageEvent) error {
 	// 봇 메시지 무시
 	if ev.BotID != "" {
+		return nil
+	}
+
+	// !tt 명령어: 번역 금지 토글 (이모지 추가/제거 + ephemeral 피드백)
+	if strings.Contains(ev.Text, "!tt") {
+		threadTS := ev.ThreadTimeStamp
+		if threadTS == "" {
+			threadTS = ev.TimeStamp
+		}
+		if app.hasNoTranslateEmoji(ev.Channel, threadTS) {
+			app.removeNoTranslateEmoji(ev.Channel, threadTS)
+			app.slack.PostEphemeral(ev.Channel, ev.User, slack.MsgOptionText("🔊 이 스레드의 번역을 재개했습니다", false), slack.MsgOptionTS(threadTS))
+			log.Printf("[번역 재개] 이모지 제거 (channel=%s, thread=%s)", ev.Channel, threadTS)
+			ev.Text = strings.ReplaceAll(ev.Text, "!tt", "")
+			ev.Text = strings.TrimSpace(ev.Text)
+			if ev.Text == "" {
+				return nil
+			}
+			// !tt 제거 후 남은 텍스트를 번역 처리로 계속 진행
+		} else {
+			app.addNoTranslateEmoji(ev.Channel, threadTS)
+			app.slack.PostEphemeral(ev.Channel, ev.User, slack.MsgOptionText("🔇 이 스레드의 번역을 중지했습니다", false), slack.MsgOptionTS(threadTS))
+			log.Printf("[번역 금지] 이모지 추가 (channel=%s, thread=%s)", ev.Channel, threadTS)
+			return nil
+		}
+	}
+
+	// 스레드 답글: 부모 메시지의 번역 금지 이모지 확인
+	if ev.ThreadTimeStamp != "" && app.hasNoTranslateEmoji(ev.Channel, ev.ThreadTimeStamp) {
+		log.Printf("[스킵] 번역 금지 스레드 (channel=%s, thread=%s)", ev.Channel, ev.ThreadTimeStamp)
 		return nil
 	}
 
