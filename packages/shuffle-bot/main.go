@@ -476,6 +476,18 @@ func (app *App) refreshUserCache() {
 
 func (app *App) getUserLocale(userID string) string {
 	app.userCacheMu.RLock()
+	if app.userLocale != nil && time.Since(app.userCacheAt) < 10*time.Minute {
+		defer app.userCacheMu.RUnlock()
+		if l, ok := app.userLocale[userID]; ok {
+			return l
+		}
+		return "en-US"
+	}
+	app.userCacheMu.RUnlock()
+
+	app.refreshUserCache()
+
+	app.userCacheMu.RLock()
 	defer app.userCacheMu.RUnlock()
 	if l, ok := app.userLocale[userID]; ok {
 		return l
@@ -1082,7 +1094,8 @@ func respondWithSlackError(message string) (events.LambdaFunctionURLResponse, er
 
 func respondWithHelpMessage(locale string) (events.LambdaFunctionURLResponse, error) {
 	var help string
-	if strings.HasPrefix(locale, "ko") {
+	switch {
+	case strings.HasPrefix(locale, "ko"):
 		help = strings.Join([]string{
 			"*🎲 /shuffle 사용법*",
 			"",
@@ -1100,10 +1113,52 @@ func respondWithHelpMessage(locale string) (events.LambdaFunctionURLResponse, er
 			"`/shuffle 점심당번 @A @B @C`",
 			"`/shuffle 리뷰어 2 @here`",
 			"",
-			"*모달* — 제외 인원 등 상세 설정",
+			"*입력 화면* — 인자 없이 입력하면 설정 화면이 열립니다",
 			"`/shuffle`",
 		}, "\n")
-	} else {
+	case strings.HasPrefix(locale, "ja"):
+		help = strings.Join([]string{
+			"*🎲 /shuffle の使い方*",
+			"",
+			"*基本*",
+			"`/shuffle @A @B @C` — シャッフル",
+			"`/shuffle @here` — このチャンネルのメンバーをシャッフル",
+			"`/shuffle @ユーザーグループ` — グループメンバーをシャッフル",
+			"`/shuffle N @A @B @C` — N人をルーレット",
+			"`/shuffle N @here` — このチャンネルからN人をルーレット",
+			"",
+			"*除外* — `--` の後にメンションすると除外（複数可）",
+			"`/shuffle @here -- @除外1 @除外2`",
+			"",
+			"*タイトル* — メンションの前にテキストを付けると結果のタイトルに",
+			"`/shuffle ランチ当番 @A @B @C`",
+			"`/shuffle レビュアー 2 @here`",
+			"",
+			"*入力画面* — 引数なしで入力すると設定画面が開きます",
+			"`/shuffle`",
+		}, "\n")
+	case strings.HasPrefix(locale, "zh"):
+		help = strings.Join([]string{
+			"*🎲 /shuffle 使用方法*",
+			"",
+			"*基本*",
+			"`/shuffle @A @B @C` — 随机排序",
+			"`/shuffle @here` — 随机排序本频道成员",
+			"`/shuffle @用户组` — 随机排序用户组成员",
+			"`/shuffle N @A @B @C` — 抽取N人",
+			"`/shuffle N @here` — 从本频道抽取N人",
+			"",
+			"*排除* — 在 `--` 后面提及要排除的人（可多人）",
+			"`/shuffle @here -- @排除1 @排除2`",
+			"",
+			"*标题* — 在提及前添加文字作为结果标题",
+			"`/shuffle 午餐值班 @A @B @C`",
+			"`/shuffle 审阅人 2 @here`",
+			"",
+			"*输入界面* — 不带参数直接输入即可打开设置界面",
+			"`/shuffle`",
+		}, "\n")
+	default:
 		help = strings.Join([]string{
 			"*🎲 /shuffle usage*",
 			"",
@@ -1121,15 +1176,20 @@ func respondWithHelpMessage(locale string) (events.LambdaFunctionURLResponse, er
 			"`/shuffle lunch duty @A @B @C`",
 			"`/shuffle reviewer 2 @here`",
 			"",
-			"*Modal* — detailed settings (exclude, user groups, etc.)",
+			"*Input form* — run without arguments to open the settings form",
 			"`/shuffle`",
 		}, "\n")
 	}
 
+	response := map[string]interface{}{
+		"response_type": "ephemeral",
+		"text":          help,
+	}
+	body, _ := json.Marshal(response)
 	return events.LambdaFunctionURLResponse{
 		StatusCode: 200,
-		Headers:    map[string]string{"Content-Type": "text/plain; charset=utf-8"},
-		Body:       help,
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		Body:       string(body),
 	}, nil
 }
 
