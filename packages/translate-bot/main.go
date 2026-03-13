@@ -481,11 +481,13 @@ func (app *App) processMessage(ev *slackevents.MessageEvent) error {
 	// 메시지 분할 (긴 메시지 대응)
 	chunks := splitByNewlineChunk(ev.Text, 1600, 1800)
 
-	// 번역 전처리: 통화 금액 + 웃음 표현 보호
+	// 번역 전처리: 반복 문자 정규화 + 통화 금액 + 웃음 표현 보호
+	maxRepeats := make([]int, len(chunks))
 	currencyRepls := make([][]string, len(chunks))
 	laughterRepls := make([][]string, len(chunks))
 	for i, chunk := range chunks {
-		chunks[i], currencyRepls[i] = protectCurrency(chunk, lang)
+		chunks[i], maxRepeats[i] = normalizeRepetition(chunk)
+		chunks[i], currencyRepls[i] = protectCurrency(chunks[i], lang)
 		chunks[i], laughterRepls[i] = protectLaughter(chunks[i], lang)
 	}
 
@@ -495,10 +497,11 @@ func (app *App) processMessage(ev *slackevents.MessageEvent) error {
 		return err
 	}
 
-	// 번역 후처리: 보호된 표현 복원
+	// 번역 후처리: 보호된 표현 복원 + 반복 폭발 캡
 	for i := range translated {
 		translated[i] = restoreLaughter(translated[i], laughterRepls[i])
 		translated[i] = restoreCurrency(translated[i], currencyRepls[i])
+		translated[i] = capRepetition(translated[i], maxRepeats[i])
 	}
 
 	// 결과 합치기
