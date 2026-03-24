@@ -189,7 +189,7 @@ OPENCODE_AGENTS_TEMPLATE="$HARNESS_DIR/opencode/agents.json"
 if [ -f "$OPENCODE_AGENTS_TEMPLATE" ] && command -v jq &> /dev/null; then
     AGENT_OBJ="{}"
 
-    for agent_name in $(jq -r 'keys[]' "$OPENCODE_AGENTS_TEMPLATE"); do
+    while IFS= read -r agent_name; do
         agent_file="$HOME/.claude/agents/${agent_name}.md"
         [ -e "$agent_file" ] || [ -L "$agent_file" ] || continue
 
@@ -197,7 +197,7 @@ if [ -f "$OPENCODE_AGENTS_TEMPLATE" ] && command -v jq &> /dev/null; then
             '.[$k] + {prompt: $prompt}' "$OPENCODE_AGENTS_TEMPLATE")
         AGENT_OBJ=$(echo "$AGENT_OBJ" | jq --arg k "$agent_name" --argjson v "$entry" '.[$k] = $v')
         echo "  OpenCode agent: $agent_name"
-    done
+    done < <(jq -r 'keys[]' "$OPENCODE_AGENTS_TEMPLATE")
 
     if [ "$AGENT_OBJ" != "{}" ]; then
         mkdir -p "$HOME/.config/opencode"

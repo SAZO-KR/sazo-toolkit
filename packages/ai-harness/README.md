@@ -245,7 +245,7 @@ rm -f ~/.config/opencode/plugins/sazo-ai-prompts-update.ts
 
 if [ -f ~/.claude/settings.json ]; then
     TMP=$(mktemp)
-    jq '.hooks.SessionStart = [.hooks.SessionStart[]? | select(.hooks[]?.command | contains("auto-update.sh") | not)]' ~/.claude/settings.json > "$TMP" && mv "$TMP" ~/.claude/settings.json 2>/dev/null || rm -f "$TMP"
+    jq '.hooks.SessionStart = [.hooks.SessionStart[]? | select(.hooks[]?.command | contains("auto-update.sh") | not)]' ~/.claude/settings.json > "$TMP" && mv "$TMP" ~/.claude/settings.json || rm -f "$TMP"
 fi
 
 # 새로 설치
@@ -265,6 +265,6 @@ rm -f ~/.config/opencode/plugins/sazo-ai-prompts-update.ts
 
 if [ -f ~/.claude/settings.json ]; then
     TMP=$(mktemp)
-    jq '.hooks.SessionStart = [.hooks.SessionStart[]? | select(.hooks[]?.command | contains("auto-update.sh") | not)]' ~/.claude/settings.json > "$TMP" && mv "$TMP" ~/.claude/settings.json 2>/dev/null || rm -f "$TMP"
+    jq '.hooks.SessionStart = [.hooks.SessionStart[]? | select(.hooks[]?.command | contains("auto-update.sh") | not)]' ~/.claude/settings.json > "$TMP" && mv "$TMP" ~/.claude/settings.json || rm -f "$TMP"
 fi
 ```
