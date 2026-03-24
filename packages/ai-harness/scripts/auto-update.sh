@@ -2,8 +2,12 @@
 
 set -u
 
-INSTALL_DIR="$HOME/.config/sazo-ai-prompts"
-LOG_FILE="$HOME/.claude/logs/ai-prompts-update.log"
+INSTALL_DIR="$HOME/.config/sazo-ai-harness"
+# Support migration from old install path
+if [ ! -d "$INSTALL_DIR/.git" ] && [ -d "$HOME/.config/sazo-ai-prompts/.git" ]; then
+    INSTALL_DIR="$HOME/.config/sazo-ai-prompts"
+fi
+LOG_FILE="$HOME/.claude/logs/ai-harness-update.log"
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -90,10 +94,14 @@ if git fetch origin main --quiet 2>/dev/null; then
         if git pull --ff-only --quiet 2>/dev/null; then
             log "SUCCESS: Updated"
             
-            AI_PROMPTS_DIR="$INSTALL_DIR/packages/ai-prompts"
-            CMD_LINKED=$(link_new_files "$AI_PROMPTS_DIR/commands" "$HOME/.claude/commands")
-            SKILL_LINKED=$(link_new_files "$AI_PROMPTS_DIR/skills" "$HOME/.claude/skills")
-            AGENT_LINKED=$(link_new_files "$AI_PROMPTS_DIR/agents" "$HOME/.claude/agents")
+            HARNESS_DIR="$INSTALL_DIR/packages/ai-harness"
+            # Fallback for old path
+            if [ ! -d "$HARNESS_DIR" ]; then
+                HARNESS_DIR="$INSTALL_DIR/packages/ai-prompts"
+            fi
+            CMD_LINKED=$(link_new_files "$HARNESS_DIR/commands" "$HOME/.claude/commands")
+            SKILL_LINKED=$(link_new_files "$HARNESS_DIR/skills" "$HOME/.claude/skills")
+            AGENT_LINKED=$(link_new_files "$HARNESS_DIR/agents" "$HOME/.claude/agents")
             
             TOTAL=$((CMD_LINKED + SKILL_LINKED + AGENT_LINKED))
             if [ "$TOTAL" -gt 0 ]; then
