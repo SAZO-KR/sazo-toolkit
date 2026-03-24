@@ -254,7 +254,6 @@ else
                 # Merge disabled_providers (union, no duplicates)
                 # Deep merge provider models
                 jq -s '
-                    def union_array: [.[0], .[1]] | add | unique;
                     .[0] as $existing | .[1] as $template |
                     $existing
                     | .plugin = ([$existing.plugin // [], $template.plugin // []] | add | unique)

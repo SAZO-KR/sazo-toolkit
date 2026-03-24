@@ -261,8 +261,6 @@ find ~/.claude/commands -type l -lname '*sazo-ai-harness*' -delete 2>/dev/null
 find ~/.claude/skills -type l -lname '*sazo-ai-harness*' -delete 2>/dev/null
 find ~/.claude/agents -type l -lname '*sazo-ai-harness*' -delete 2>/dev/null
 
-rm -f ~/.config/opencode/plugins/sazo-ai-prompts-update.ts
-
 if [ -f ~/.claude/settings.json ]; then
     TMP=$(mktemp)
     jq '.hooks.SessionStart = [.hooks.SessionStart[]? | select(.hooks[]?.command | contains("auto-update.sh") | not)]' ~/.claude/settings.json > "$TMP" && mv "$TMP" ~/.claude/settings.json || rm -f "$TMP"
