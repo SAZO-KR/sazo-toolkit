@@ -266,13 +266,6 @@ else
                 cp "$OPENCODE_CONFIG_TEMPLATE" "$OPENCODE_CONFIG"
                 echo "  Created new config"
             fi
-
-            # Remove deprecated cached plugin
-            DEPRECATED_PLUGIN="$HOME/.cache/opencode/node_modules/opencode-anthropic-auth"
-            if [ -d "$DEPRECATED_PLUGIN" ]; then
-                rm -rf "$DEPRECATED_PLUGIN"
-                echo "  Removed deprecated cached plugin"
-            fi
         fi
 
         # --- Install claude-sync (token sync) ---
