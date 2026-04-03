@@ -76,17 +76,21 @@ jq --argjson tools "$TOOLS" '.permissions.allow = ((.permissions.allow // []) + 
 **사용자가 거부하면** 권한 등록을 건너뛰고 매번 수동 승인으로 진행합니다.
 
 **이 셋업은 최초 1회만 실행합니다.** 이미 권한이 등록되어 있으면 이 단계를 건너뜁니다.
-판단 기준: `settings.json`의 `permissions.allow`에 위 목록의 항목이 **하나라도** 포함되어 있으면 셋업 완료로 간주합니다.
+판단 기준: `settings.json`의 `permissions.allow`에 위 목록의 항목이 **모두** 포함되어 있으면 셋업 완료로 간주합니다. 일부만 있으면 누락된 항목만 추가 등록합니다.
 
 ## Step 1: 날짜 범위 계산
 
 ```bash
-# 가장 최근 금요일 계산 (금요일에 실행하면 오늘)
+# 지난 금요일 계산 (금요일에 실행하면 지난주 금요일)
 DOW=$(date +%u)
 if [[ $DOW -ge 5 ]]; then
   DAYS_BACK=$((DOW - 5))
 else
   DAYS_BACK=$((DOW + 2))
+fi
+# 금요일(DAYS_BACK=0)에 실행하면 지난주 금요일(7일 전)을 기준으로 함
+if [[ $DAYS_BACK -eq 0 ]]; then
+  DAYS_BACK=7
 fi
 LAST_FRIDAY=$(date -v-${DAYS_BACK}d +%Y-%m-%d 2>/dev/null || date -d "${DAYS_BACK} days ago" +%Y-%m-%d)
 TODAY=$(date +%Y-%m-%d)
