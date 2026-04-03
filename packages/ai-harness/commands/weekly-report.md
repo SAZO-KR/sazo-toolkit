@@ -87,7 +87,7 @@ jq --argjson tools "$TOOLS" '.permissions.allow = ((.permissions.allow // []) + 
 ## Step 1: 날짜 범위 계산
 
 ```bash
-# 지난 금요일 계산 (한 주간의 시작점)
+# 가장 최근 금요일 계산 (한 주간의 시작점)
 DOW=$(date +%u)  # 1=Mon ... 7=Sun
 if [[ $DOW -le 4 ]]; then
   # 월~목: 지난주 금요일
@@ -96,8 +96,8 @@ elif [[ $DOW -eq 5 ]]; then
   # 금요일: 지난주 금요일 (7일 전)
   DAYS_BACK=7
 else
-  # 토(6)/일(7): 이번 주 금요일이 아닌 지난주 금요일
-  DAYS_BACK=$((DOW - 5 + 7))
+  # 토(6)/일(7): 이번 주 금요일 (가장 최근)
+  DAYS_BACK=$((DOW - 5))
 fi
 LAST_FRIDAY=$(date -v-${DAYS_BACK}d +%Y-%m-%d 2>/dev/null || date -d "${DAYS_BACK} days ago" +%Y-%m-%d)
 TODAY=$(date +%Y-%m-%d)
