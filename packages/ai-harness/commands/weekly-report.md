@@ -63,17 +63,23 @@ if [ ! -f "$SETTINGS" ]; then
 fi
 
 # TOOLS 배열을 연결 성공한 서비스의 도구만으로 동적 구성
+# CRITICAL: 아래는 의사코드입니다. probe가 성공한 서비스만 해당 블록을 실행하세요.
 TOOLS='[]'
-# Slack 연결 성공 시:
-TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Slack__slack_search_public_and_private","mcp__claude_ai_Slack__slack_read_thread","mcp__claude_ai_Slack__slack_read_channel","mcp__claude_ai_Slack__slack_read_user_profile"]')
-# Linear 연결 성공 시:
-TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Linear__list_issues","mcp__claude_ai_Linear__get_issue","mcp__claude_ai_Linear__get_authenticated_user","mcp__claude_ai_Linear__get_project"]')
-# Gmail 연결 성공 시:
-TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Gmail__gmail_search_messages","mcp__claude_ai_Gmail__gmail_read_message","mcp__claude_ai_Gmail__gmail_get_profile"]')
-# Google Calendar 연결 성공 시:
-TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Google_Calendar__gcal_list_events","mcp__claude_ai_Google_Calendar__gcal_list_calendars"]')
-# Notion 연결 성공 시:
-TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Notion__search","mcp__claude_ai_Notion__fetch"]')
+if [ "$SLACK_CONNECTED" = true ]; then
+  TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Slack__slack_search_public_and_private","mcp__claude_ai_Slack__slack_read_thread","mcp__claude_ai_Slack__slack_read_channel","mcp__claude_ai_Slack__slack_read_user_profile"]')
+fi
+if [ "$LINEAR_CONNECTED" = true ]; then
+  TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Linear__list_issues","mcp__claude_ai_Linear__get_issue","mcp__claude_ai_Linear__get_authenticated_user","mcp__claude_ai_Linear__get_project"]')
+fi
+if [ "$GMAIL_CONNECTED" = true ]; then
+  TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Gmail__gmail_search_messages","mcp__claude_ai_Gmail__gmail_read_message","mcp__claude_ai_Gmail__gmail_get_profile"]')
+fi
+if [ "$CALENDAR_CONNECTED" = true ]; then
+  TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Google_Calendar__gcal_list_events","mcp__claude_ai_Google_Calendar__gcal_list_calendars"]')
+fi
+if [ "$NOTION_CONNECTED" = true ]; then
+  TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Notion__search","mcp__claude_ai_Notion__fetch"]')
+fi
 
 TMP=$(mktemp)
 jq --argjson tools "$TOOLS" '.permissions.allow = ((.permissions.allow // []) + ($tools - (.permissions.allow // [])))' "$SETTINGS" > "$TMP" && mv "$TMP" "$SETTINGS"
@@ -118,13 +124,14 @@ git fetch origin main
 GIT_AUTHOR=$(git config user.email)
 if [ -z "$GIT_AUTHOR" ]; then
   echo "ERROR: git user.email이 설정되지 않았습니다."
-  # Claude: 이 에러가 발생하면 사용자에게 'git config --global user.email' 설정을 요청하고 Git 수집을 건너뛰세요.
-fi
-git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --oneline --no-merges
+  # Claude: 이 에러가 발생하면 사용자에게 'git config --global user.email' 설정을 요청하고 Git 수집 전체를 건너뛰세요.
+else
+  git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --oneline --no-merges
 
-# 본인 커밋의 변경 내용만 추출 (팀원 커밋 제외)
-git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --no-merges --stat
-git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --no-merges -p | head -3000
+  # 본인 커밋의 변경 내용만 추출 (팀원 커밋 제외)
+  git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --no-merges --stat
+  git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --no-merges -p | head -3000
+fi
 ```
 
 **참고:** `git log -p`는 author 필터가 적용된 커밋의 diff만 출력하므로 팀원 변경이 섞이지 않습니다. `head -3000`으로 컨텍스트 초과를 방지합니다. 기간 내 본인 커밋이 없으면 출력이 비어있으며, 이 경우 건너뜁니다.
