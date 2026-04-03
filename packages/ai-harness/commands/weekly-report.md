@@ -108,15 +108,19 @@ echo "분석 기간: $LAST_FRIDAY ~ $TODAY"
 ```bash
 git fetch origin main
 
-# --since 기반으로 기간 내 커밋을 직접 조회 (범위 연산자 .. 의 제외 문제 회피)
-git log origin/main --since="$LAST_FRIDAY" --oneline --no-merges
+# 본인 커밋만 조회 (--author로 필터링)
+GIT_AUTHOR=$(git config user.name)
+git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --oneline --no-merges
 
-# 변경 통계 및 diff
-git diff $(git log origin/main --since="$LAST_FRIDAY" --reverse --format="%H" | head -1)~1..origin/main --stat
-git diff $(git log origin/main --since="$LAST_FRIDAY" --reverse --format="%H" | head -1)~1..origin/main
+# 변경 통계 및 diff (본인 커밋이 있을 때만)
+FIRST_COMMIT=$(git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --reverse --format="%H" | head -1)
+if [ -n "$FIRST_COMMIT" ]; then
+  git diff ${FIRST_COMMIT}~1..origin/main --stat
+  git diff ${FIRST_COMMIT}~1..origin/main
+fi
 ```
 
-**참고:** `--since` 기간 내 커밋이 없으면 diff를 건너뜁니다.
+**참고:** 기간 내 본인 커밋이 없으면 diff를 건너뜁니다.
 
 ### 2-2. Linear 이슈
 
