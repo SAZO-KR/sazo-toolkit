@@ -25,7 +25,7 @@ description: 주간 업무 보고서 생성 — 코드, 이슈, 메일, 슬랙, 
 | Git | `git log --oneline -1` | 커밋 해시 반환 | (ID 불필요) |
 
 **Notion 사용자 조회 순서:** Gmail `{MY_EMAIL}` → 없으면 `git config user.email` → 둘 다 없으면 Notion 건너뜀.
-이를 위해 Notion probe는 이메일을 확보한 뒤 실행합니다. 나머지 5개는 병렬로 호출합니다.
+이를 위해 Notion probe는 이메일을 확보한 뒤 실행합니다. 나머지 MCP probe 4개(Slack, Linear, Gmail, Calendar)와 Git 확인은 병렬로 호출합니다.
 
 **연결 실패한 서비스**는 사용자에게 알리고, 해당 서비스를 건너뛴 채 진행합니다.
 **모든 MCP 서비스가 실패하면** Git만으로 코드 변경 보고서를 생성합니다.
@@ -62,8 +62,18 @@ if [ ! -f "$SETTINGS" ]; then
   echo '{}' > "$SETTINGS"
 fi
 
-# TOOLS 배열은 연결 성공한 서비스의 도구만 포함 (위 테이블에서 선별)
-TOOLS='[...연결 성공한 서비스의 도구만...]'
+# TOOLS 배열을 연결 성공한 서비스의 도구만으로 동적 구성
+TOOLS='[]'
+# Slack 연결 성공 시:
+TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Slack__slack_search_public_and_private","mcp__claude_ai_Slack__slack_read_thread","mcp__claude_ai_Slack__slack_read_channel","mcp__claude_ai_Slack__slack_read_user_profile"]')
+# Linear 연결 성공 시:
+TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Linear__list_issues","mcp__claude_ai_Linear__get_issue","mcp__claude_ai_Linear__get_authenticated_user","mcp__claude_ai_Linear__get_project"]')
+# Gmail 연결 성공 시:
+TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Gmail__gmail_search_messages","mcp__claude_ai_Gmail__gmail_read_message","mcp__claude_ai_Gmail__gmail_get_profile"]')
+# Google Calendar 연결 성공 시:
+TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Google_Calendar__gcal_list_events","mcp__claude_ai_Google_Calendar__gcal_list_calendars"]')
+# Notion 연결 성공 시:
+TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Notion__search","mcp__claude_ai_Notion__fetch"]')
 
 TMP=$(mktemp)
 jq --argjson tools "$TOOLS" '.permissions.allow = ((.permissions.allow // []) + ($tools - (.permissions.allow // [])))' "$SETTINGS" > "$TMP" && mv "$TMP" "$SETTINGS"
@@ -71,22 +81,23 @@ jq --argjson tools "$TOOLS" '.permissions.allow = ((.permissions.allow // []) + 
 
 **사용자가 거부하면** 권한 등록을 건너뛰고 매번 수동 승인으로 진행합니다.
 
-**이 셋업은 최초 1회만 실행합니다.** 이미 권한이 등록되어 있으면 이 단계를 건너뜁니다.
-판단 기준: 연결 성공한 서비스의 도구가 `settings.json`의 `permissions.allow`에 **모두** 포함되어 있으면 셋업 완료로 간주합니다. 일부라도 누락된 도구가 있으면 누락분만 추가 등록합니다 (사용자에게 재확인).
+**이 셋업은 도구 권한이 모두 등록되면 건너뜁니다.**
+판단 기준: 연결 성공한 서비스의 도구가 `settings.json`의 `permissions.allow`에 **모두** 포함되어 있으면 셋업 완료. 일부라도 누락된 도구가 있으면 (새 서비스 연결 등) 누락분만 추가 등록합니다 (사용자에게 재확인).
 
 ## Step 1: 날짜 범위 계산
 
 ```bash
-# 지난 금요일 계산 (금요일에 실행하면 지난주 금요일)
-DOW=$(date +%u)
-if [[ $DOW -ge 5 ]]; then
-  DAYS_BACK=$((DOW - 5))
-else
+# 지난 금요일 계산 (한 주간의 시작점)
+DOW=$(date +%u)  # 1=Mon ... 7=Sun
+if [[ $DOW -le 4 ]]; then
+  # 월~목: 지난주 금요일
   DAYS_BACK=$((DOW + 2))
-fi
-# 금요일(DAYS_BACK=0)에 실행하면 지난주 금요일(7일 전)을 기준으로 함
-if [[ $DAYS_BACK -eq 0 ]]; then
+elif [[ $DOW -eq 5 ]]; then
+  # 금요일: 지난주 금요일 (7일 전)
   DAYS_BACK=7
+else
+  # 토(6)/일(7): 이번 주 금요일이 아닌 지난주 금요일
+  DAYS_BACK=$((DOW - 5 + 7))
 fi
 LAST_FRIDAY=$(date -v-${DAYS_BACK}d +%Y-%m-%d 2>/dev/null || date -d "${DAYS_BACK} days ago" +%Y-%m-%d)
 TODAY=$(date +%Y-%m-%d)
@@ -105,17 +116,17 @@ git fetch origin main
 # 본인 커밋만 조회 (--author=email로 정확한 필터링)
 GIT_AUTHOR=$(git config user.email)
 if [ -z "$GIT_AUTHOR" ]; then
-  echo "ERROR: git user.email이 설정되지 않았습니다. 'git config user.email'을 확인하세요."
-  exit 1
+  echo "ERROR: git user.email이 설정되지 않았습니다."
+  # Claude: 이 에러가 발생하면 사용자에게 'git config --global user.email' 설정을 요청하고 Git 수집을 건너뛰세요.
 fi
 git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --oneline --no-merges
 
 # 본인 커밋의 변경 내용만 추출 (팀원 커밋 제외)
 git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --no-merges --stat
-git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --no-merges -p
+git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --no-merges -p | head -3000
 ```
 
-**참고:** `git log -p`는 author 필터가 적용된 커밋의 diff만 출력하므로 팀원 변경이 섞이지 않습니다. 기간 내 본인 커밋이 없으면 출력이 비어있으며, 이 경우 건너뜁니다.
+**참고:** `git log -p`는 author 필터가 적용된 커밋의 diff만 출력하므로 팀원 변경이 섞이지 않습니다. `head -3000`으로 컨텍스트 초과를 방지합니다. 기간 내 본인 커밋이 없으면 출력이 비어있으며, 이 경우 건너뜁니다.
 
 ### 2-2. Linear 이슈
 
@@ -132,9 +143,6 @@ gcal_list_events(timeMin: "${LAST_FRIDAY}T00:00:00", timeMax: "${NOW_ISO}", time
 ```
 
 `${NOW_ISO}`는 현재 시각의 RFC3339 형식 (예: `2026-04-03T14:30:00`). 아직 시작하지 않은 미래 일정은 제외합니다.
-
-```
-```
 
 ### 2-4. Slack 메시지
 
@@ -231,6 +239,13 @@ search(query: "", query_type: "internal", filters: { created_by_user_ids: ["{MY_
 - **📧 외부 커뮤니케이션**
     - [대상]: 목적과 결과
 
+## 나쁜 예 vs 좋은 예
+❌ "Joom 관련 슬랙 메시지 3건" — 내용 없는 집계
+✅ "Joom 배송비 정책 변경: 무게 기반에서 부피 기반으로 전환하기로 합의 (4/1 슬랙 논의)"
+
+❌ "팀장님과 DM 5건" — 상대만 있고 내용 없음
+✅ "Q2 로드맵 우선순위 조정: 번역 품질 개선을 상품 확장보다 앞으로 당기기로 결정"
+
 업무와 무관한 메시지만 있다면 "특이사항 없음"으로 응답하세요.
 최대 7개 항목. Notion에 바로 복사할 수 있는 포맷만 출력합니다.
 ```
@@ -261,6 +276,13 @@ search(query: "", query_type: "internal", filters: { created_by_user_ids: ["{MY_
     - 정기 회의 N회 (스탠드업, 위클리 등)
 - **📝 작성 문서**
     - [문서 제목]: 목적과 대상
+
+## 나쁜 예 vs 좋은 예
+❌ "제품 회의 참석" — 회의 이름만, 내용 없음
+✅ "제품 회의: eBay 카테고리 매핑 자동화 범위를 1차 100개 카테고리로 확정"
+
+❌ "API 가이드 작성" — 목적/대상 불명
+✅ "파트너사(Rakuten) 연동을 위한 상품 등록 API 가이드 초안 작성"
 
 회의나 문서가 없으면 해당 섹션을 생략합니다.
 최대 7개 항목. Notion에 바로 복사할 수 있는 포맷만 출력합니다.

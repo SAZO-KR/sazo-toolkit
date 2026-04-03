@@ -225,7 +225,7 @@ color: red
 
 | 타입    | 파일명                | 예시                    |
 | ------- | --------------------- | ----------------------- |
-| Command | `kebab-case.md`       | `generate-changelog.md` |
+| Command | `kebab-case.md`       | `weekly-report.md`      |
 | Skill   | `kebab-case/SKILL.md` | `code-review/SKILL.md`  |
 | Agent   | `kebab-case.md`       | `security-reviewer.md`  |
 
