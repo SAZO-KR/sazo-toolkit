@@ -101,7 +101,8 @@ else
 fi
 LAST_FRIDAY=$(date -v-${DAYS_BACK}d +%Y-%m-%d 2>/dev/null || date -d "${DAYS_BACK} days ago" +%Y-%m-%d)
 TODAY=$(date +%Y-%m-%d)
-echo "분석 기간: $LAST_FRIDAY ~ $TODAY"
+NOW_ISO=$(date +%Y-%m-%dT%H:%M:%S)
+echo "분석 기간: $LAST_FRIDAY ~ $TODAY ($NOW_ISO)"
 ```
 
 ## Step 2: 데이터 수집
