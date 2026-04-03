@@ -108,19 +108,16 @@ echo "분석 기간: $LAST_FRIDAY ~ $TODAY"
 ```bash
 git fetch origin main
 
-# 본인 커밋만 조회 (--author로 필터링)
-GIT_AUTHOR=$(git config user.name)
+# 본인 커밋만 조회 (--author=email로 정확한 필터링)
+GIT_AUTHOR=$(git config user.email)
 git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --oneline --no-merges
 
-# 변경 통계 및 diff (본인 커밋이 있을 때만)
-FIRST_COMMIT=$(git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --reverse --format="%H" | head -1)
-if [ -n "$FIRST_COMMIT" ]; then
-  git diff ${FIRST_COMMIT}~1..origin/main --stat
-  git diff ${FIRST_COMMIT}~1..origin/main
-fi
+# 본인 커밋의 변경 내용만 추출 (팀원 커밋 제외)
+git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --no-merges --stat
+git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --no-merges -p
 ```
 
-**참고:** 기간 내 본인 커밋이 없으면 diff를 건너뜁니다.
+**참고:** `git log -p`는 author 필터가 적용된 커밋의 diff만 출력하므로 팀원 변경이 섞이지 않습니다. 기간 내 본인 커밋이 없으면 출력이 비어있으며, 이 경우 건너뜁니다.
 
 ### 2-2. Linear 이슈
 
