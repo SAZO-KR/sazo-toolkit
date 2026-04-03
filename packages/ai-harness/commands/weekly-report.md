@@ -35,30 +35,22 @@ description: 주간 업무 보고서 생성 — 코드, 이슈, 메일, 슬랙, 
 
 > "연결된 서비스들의 읽기 권한을 영구적으로 허용하시겠습니까? (매 실행마다 승인 팝업이 뜨지 않게 됩니다)"
 
-**사용자가 승인하면** `~/.claude/settings.json`의 `permissions.allow` 배열에 아래 항목을 추가합니다.
+**사용자가 승인하면** `~/.claude/settings.json`의 `permissions.allow` 배열에 **연결 성공한 서비스의 도구만** 추가합니다.
 이미 존재하는 항목은 건너뜁니다.
 
-```json
-[
-  "mcp__claude_ai_Slack__slack_search_public_and_private",
-  "mcp__claude_ai_Slack__slack_read_thread",
-  "mcp__claude_ai_Slack__slack_read_channel",
-  "mcp__claude_ai_Slack__slack_read_user_profile",
-  "mcp__claude_ai_Linear__list_issues",
-  "mcp__claude_ai_Linear__get_issue",
-  "mcp__claude_ai_Linear__get_authenticated_user",
-  "mcp__claude_ai_Linear__get_project",
-  "mcp__claude_ai_Gmail__gmail_search_messages",
-  "mcp__claude_ai_Gmail__gmail_read_message",
-  "mcp__claude_ai_Gmail__gmail_get_profile",
-  "mcp__claude_ai_Google_Calendar__gcal_list_events",
-  "mcp__claude_ai_Google_Calendar__gcal_list_calendars",
-  "mcp__claude_ai_Notion__search",
-  "mcp__claude_ai_Notion__fetch"
-]
-```
+서비스별 도구 목록:
 
-설정 파일 수정은 `jq`를 사용합니다:
+| 서비스 | 도구 |
+|--------|------|
+| Slack | `mcp__claude_ai_Slack__slack_search_public_and_private`, `mcp__claude_ai_Slack__slack_read_thread`, `mcp__claude_ai_Slack__slack_read_channel`, `mcp__claude_ai_Slack__slack_read_user_profile` |
+| Linear | `mcp__claude_ai_Linear__list_issues`, `mcp__claude_ai_Linear__get_issue`, `mcp__claude_ai_Linear__get_authenticated_user`, `mcp__claude_ai_Linear__get_project` |
+| Gmail | `mcp__claude_ai_Gmail__gmail_search_messages`, `mcp__claude_ai_Gmail__gmail_read_message`, `mcp__claude_ai_Gmail__gmail_get_profile` |
+| Google Calendar | `mcp__claude_ai_Google_Calendar__gcal_list_events`, `mcp__claude_ai_Google_Calendar__gcal_list_calendars` |
+| Notion | `mcp__claude_ai_Notion__search`, `mcp__claude_ai_Notion__fetch` |
+
+**CRITICAL: probe가 실패한 서비스의 도구는 등록하지 않습니다.**
+
+설정 파일 수정은 `jq`를 사용합니다. 연결 성공한 서비스의 도구만으로 TOOLS 배열을 동적으로 구성합니다:
 
 ```bash
 SETTINGS="$HOME/.claude/settings.json"
@@ -69,7 +61,8 @@ if [ ! -f "$SETTINGS" ]; then
   echo '{}' > "$SETTINGS"
 fi
 
-TOOLS='["mcp__claude_ai_Slack__slack_search_public_and_private","mcp__claude_ai_Slack__slack_read_thread","mcp__claude_ai_Slack__slack_read_channel","mcp__claude_ai_Slack__slack_read_user_profile","mcp__claude_ai_Linear__list_issues","mcp__claude_ai_Linear__get_issue","mcp__claude_ai_Linear__get_authenticated_user","mcp__claude_ai_Linear__get_project","mcp__claude_ai_Gmail__gmail_search_messages","mcp__claude_ai_Gmail__gmail_read_message","mcp__claude_ai_Gmail__gmail_get_profile","mcp__claude_ai_Google_Calendar__gcal_list_events","mcp__claude_ai_Google_Calendar__gcal_list_calendars","mcp__claude_ai_Notion__search","mcp__claude_ai_Notion__fetch"]'
+# TOOLS 배열은 연결 성공한 서비스의 도구만 포함 (위 테이블에서 선별)
+TOOLS='[...연결 성공한 서비스의 도구만...]'
 
 TMP=$(mktemp)
 jq --argjson tools "$TOOLS" '.permissions.allow = ((.permissions.allow // []) + ($tools - (.permissions.allow // [])))' "$SETTINGS" > "$TMP" && mv "$TMP" "$SETTINGS"
@@ -78,7 +71,7 @@ jq --argjson tools "$TOOLS" '.permissions.allow = ((.permissions.allow // []) + 
 **사용자가 거부하면** 권한 등록을 건너뛰고 매번 수동 승인으로 진행합니다.
 
 **이 셋업은 최초 1회만 실행합니다.** 이미 권한이 등록되어 있으면 이 단계를 건너뜁니다.
-판단 기준: `settings.json`의 `permissions.allow`에 위 목록의 항목이 **모두** 포함되어 있으면 셋업 완료로 간주합니다. 일부만 있으면 누락된 항목만 추가 등록합니다.
+판단 기준: 위 테이블의 도구 중 하나라도 `settings.json`의 `permissions.allow`에 포함되어 있으면 셋업이 이미 실행된 것으로 간주합니다. 단, 새로 연결된 서비스가 있으면 해당 서비스의 도구를 추가 등록합니다.
 
 ## Step 1: 날짜 범위 계산
 
@@ -110,6 +103,10 @@ git fetch origin main
 
 # 본인 커밋만 조회 (--author=email로 정확한 필터링)
 GIT_AUTHOR=$(git config user.email)
+if [ -z "$GIT_AUTHOR" ]; then
+  echo "ERROR: git user.email이 설정되지 않았습니다. 'git config user.email'을 확인하세요."
+  exit 1
+fi
 git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --oneline --no-merges
 
 # 본인 커밋의 변경 내용만 추출 (팀원 커밋 제외)
