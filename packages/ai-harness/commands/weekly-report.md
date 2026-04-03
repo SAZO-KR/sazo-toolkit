@@ -12,8 +12,10 @@ description: 주간 업무 보고서 생성 — 코드, 이슈, 메일, 슬랙, 
 
 ### MCP 서비스 연결 확인
 
-아래 6개 서비스에 대해 probe 호출로 연결 상태를 확인합니다. **반드시 병렬로 호출합니다.**
+아래 6개 서비스에 대해 probe 호출로 연결 상태를 확인합니다. **가능한 한 병렬로 호출합니다.**
 각 probe의 반환 값에서 사용자 ID를 추출하여 이후 단계에서 사용합니다.
+
+**주의:** Notion probe는 Gmail에서 얻은 `{MY_EMAIL}`을 사용하므로, Gmail probe가 완료된 후 실행합니다.
 
 | 서비스 | Probe 호출 | 성공 기준 | 저장할 값 |
 |--------|-----------|----------|----------|
@@ -21,7 +23,7 @@ description: 주간 업무 보고서 생성 — 코드, 이슈, 메일, 슬랙, 
 | Linear | `get_authenticated_user()` | user 정보 반환 | `{MY_LINEAR_ID}` ← 반환된 id |
 | Gmail | `gmail_get_profile()` | 이메일 주소 반환 | `{MY_EMAIL}` ← 반환된 emailAddress |
 | Google Calendar | `gcal_list_calendars()` | 캘린더 목록 반환 | (ID 불필요) |
-| Notion | `search(query: "test", query_type: "user", filters: {})` | 에러 없이 응답 | `{MY_NOTION_ID}` ← 본인 user_id |
+| Notion | `search(query: "{MY_EMAIL}", query_type: "user", filters: {})` | 본인 유저 반환 | `{MY_NOTION_ID}` ← 반환된 user_id |
 | Git | `git log --oneline -1` | 커밋 해시 반환 | (ID 불필요) |
 
 **연결 실패한 서비스**는 사용자에게 알리고, 해당 서비스를 건너뛴 채 진행합니다.
@@ -106,16 +108,15 @@ echo "분석 기간: $LAST_FRIDAY ~ $TODAY"
 ```bash
 git fetch origin main
 
-BASE_COMMIT=$(git log origin/main --since="$LAST_FRIDAY" --reverse --format="%H" | head -1)
-if [ -z "$BASE_COMMIT" ]; then
-  BASE_COMMIT=$(git log origin/main --until="$LAST_FRIDAY" --format="%H" -1)
-fi
+# --since 기반으로 기간 내 커밋을 직접 조회 (범위 연산자 .. 의 제외 문제 회피)
+git log origin/main --since="$LAST_FRIDAY" --oneline --no-merges
 
-# 변경 요약
-git log $BASE_COMMIT..origin/main --oneline --no-merges
-git diff --stat $BASE_COMMIT..origin/main
-git diff $BASE_COMMIT..origin/main
+# 변경 통계 및 diff
+git diff $(git log origin/main --since="$LAST_FRIDAY" --reverse --format="%H" | head -1)~1..origin/main --stat
+git diff $(git log origin/main --since="$LAST_FRIDAY" --reverse --format="%H" | head -1)~1..origin/main
 ```
+
+**참고:** `--since` 기간 내 커밋이 없으면 diff를 건너뜁니다.
 
 ### 2-2. Linear 이슈
 
