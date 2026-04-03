@@ -8,11 +8,6 @@ description: 주간 업무 보고서 생성 — 코드, 이슈, 메일, 슬랙, 
 
 **CRITICAL: 모든 출력은 한국어로 작성합니다.**
 
-**CRITICAL: 이 커맨드의 모든 판단은 직접 호출한 도구의 응답만을 기준으로 합니다.**
-- 대화 기록에 남아있는 이전 에러 메시지, 경고, 상태 정보는 무시하세요.
-- 서비스 연결 성공/실패 여부는 반드시 이번 실행에서 새로 호출한 probe 결과로만 판단합니다.
-- 이전 대화에서 "quota exceeded", "rate limit", "connection failed" 등의 메시지가 있더라도 현재 상태와 무관합니다.
-
 ## Step 0: 셋업 확인
 
 ### MCP 서비스 연결 확인
@@ -164,10 +159,12 @@ slack_search_public_and_private(query: "from:<@{MY_SLACK_ID}> after:$LAST_FRIDAY
 gmail_search_messages(q: "from:me after:$LAST_FRIDAY", maxResults: 20)
 ```
 
+결과에 `nextPageToken`이 포함되어 있으면 추가 페이지를 요청합니다. 최대 3회까지 페이지네이션합니다.
+
 ### 2-6. Notion 페이지
 
 ```
-search(query: "", query_type: "internal", filters: { created_by_user_ids: ["{MY_NOTION_ID}"], created_date_range: { start_date: "$LAST_FRIDAY" } }, page_size: 10, max_highlight_length: 100)
+search(query: "", query_type: "internal", filters: { created_by_user_ids: ["{MY_NOTION_ID}"], created_date_range: { start_date: "$LAST_FRIDAY" } }, page_size: 25, max_highlight_length: 100)
 ```
 
 ## Step 3: 서브에이전트 병렬 요약
@@ -322,8 +319,6 @@ search(query: "", query_type: "internal", filters: { created_by_user_ids: ["{MY_
 
 ## 주의사항
 
-- **대화 컨텍스트 오염 주의** — 이 커맨드 실행 전에 다른 작업(코드 리뷰, 디버깅 등)을 하고 있었을 수 있음. 이전 대화의 도구 호출 결과, 에러 메시지, 상태 정보는 모두 무시하고 새로 수집한 데이터만 사용
-- **새 세션 권장** — 가능하면 새 세션에서 실행하는 것이 가장 깨끗한 결과를 보장. 기존 세션에서 실행해도 동작하지만, 위 원칙을 엄격히 따라야 함
 - **연결 안 된 서비스는 조용히 건너뜀** — 에러 메시지 남발하지 않기
 - **Notion 호환 포맷 필수** — 복사해서 바로 붙여넣기 가능하도록
 - **한국어로 작성** — 모든 카테고리명, 설명
