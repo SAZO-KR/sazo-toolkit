@@ -344,7 +344,7 @@ echo ""
 echo "Version: $VERSION"
 echo ""
 echo "Claude Code:"
-echo "  /generate-changelog     Generate weekly report"
+echo "  /weekly-report          주간 업무 보고서 생성 (코드+이슈+메일+슬랙+캘린더+문서)"
 echo ""
 if [ "$SKIP_OPENCODE" -eq 0 ]; then
 echo "OpenCode:"

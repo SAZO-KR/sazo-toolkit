@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/
 
 | 커맨드                | 설명                             |
 | --------------------- | -------------------------------- |
-| `/generate-changelog` | 주간 개발 리포트 생성 (Notion용) |
+| `/weekly-report` | 주간 업무 보고서 생성 — 코드, 이슈, 메일, 슬랙, 캘린더, 문서 전체 취합 (Notion용) |
 
 ### Skills
 
