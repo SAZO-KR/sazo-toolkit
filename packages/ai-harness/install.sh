@@ -155,6 +155,16 @@ link_files "$HARNESS_DIR/skills" "$HOME/.claude/skills"
 echo "Agents:"
 link_files "$HARNESS_DIR/agents" "$HOME/.claude/agents"
 
+# --- OpenCode commands ---
+
+OPENCODE_COMMANDS_DIR="$HOME/.config/opencode/commands"
+if [ -d "$HOME/.config/opencode" ]; then
+    echo ""
+    echo "OpenCode commands:"
+    mkdir -p "$OPENCODE_COMMANDS_DIR"
+    link_files "$HARNESS_DIR/commands" "$OPENCODE_COMMANDS_DIR"
+fi
+
 # --- Auto-update hook (Claude Code) ---
 
 echo ""
