@@ -155,15 +155,17 @@ link_files "$HARNESS_DIR/skills" "$HOME/.claude/skills"
 echo "Agents:"
 link_files "$HARNESS_DIR/agents" "$HOME/.claude/agents"
 
-# --- OpenCode commands ---
+link_opencode_commands() {
+    if [ -d "$HOME/.config/opencode" ]; then
+        local oc_cmd_dir="$HOME/.config/opencode/commands"
+        mkdir -p "$oc_cmd_dir"
+        echo ""
+        echo "OpenCode commands:"
+        link_files "$HARNESS_DIR/commands" "$oc_cmd_dir"
+    fi
+}
 
-OPENCODE_COMMANDS_DIR="$HOME/.config/opencode/commands"
-if [ -d "$HOME/.config/opencode" ]; then
-    echo ""
-    echo "OpenCode commands:"
-    mkdir -p "$OPENCODE_COMMANDS_DIR"
-    link_files "$HARNESS_DIR/commands" "$OPENCODE_COMMANDS_DIR"
-fi
+link_opencode_commands
 
 # --- Auto-update hook (Claude Code) ---
 
@@ -333,14 +335,7 @@ else
             fi
         fi
 
-        # --- Link commands into OpenCode (after setup created the dir) ---
-        if [ -d "$HOME/.config/opencode" ]; then
-            OPENCODE_COMMANDS_DIR="$HOME/.config/opencode/commands"
-            mkdir -p "$OPENCODE_COMMANDS_DIR"
-            echo ""
-            echo "OpenCode commands (post-setup):"
-            link_files "$HARNESS_DIR/commands" "$OPENCODE_COMMANDS_DIR"
-        fi
+        link_opencode_commands
 
         echo ""
         echo "OpenCode setup complete!"
