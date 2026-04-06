@@ -333,6 +333,15 @@ else
             fi
         fi
 
+        # --- Link commands into OpenCode (after setup created the dir) ---
+        if [ -d "$HOME/.config/opencode" ]; then
+            OPENCODE_COMMANDS_DIR="$HOME/.config/opencode/commands"
+            mkdir -p "$OPENCODE_COMMANDS_DIR"
+            echo ""
+            echo "OpenCode commands (post-setup):"
+            link_files "$HARNESS_DIR/commands" "$OPENCODE_COMMANDS_DIR"
+        fi
+
         echo ""
         echo "OpenCode setup complete!"
     else
