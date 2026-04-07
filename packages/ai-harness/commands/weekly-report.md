@@ -30,62 +30,58 @@ description: 주간 업무 보고서 생성 — 코드, 이슈, 메일, 슬랙, 
 **연결 실패한 서비스**는 사용자에게 알리고, 해당 서비스를 건너뛴 채 진행합니다.
 **모든 MCP 서비스가 실패하면** Git만으로 코드 변경 보고서를 생성합니다.
 
-### MCP 도구 권한 영구 허용
+### 도구 권한 영구 등록
 
-연결 확인이 끝나면 사용자에게 한 번 물어봅니다:
+**CRITICAL: probe 호출 전에** 모든 도구 권한을 등록해야 승인 팝업이 뜨지 않습니다.
 
-> "연결된 서비스들의 읽기 권한을 영구적으로 허용하시겠습니까? (매 실행마다 승인 팝업이 뜨지 않게 됩니다)"
+사용자에게 한 번 물어봅니다:
 
-**사용자가 승인하면** `~/.claude/settings.json`의 `permissions.allow` 배열에 **연결 성공한 서비스의 도구만** 추가합니다.
-이미 존재하는 항목은 건너뜁니다.
+> "주간 보고서에 필요한 모든 도구 권한(MCP 읽기 + Bash + 파일)을 영구 등록하시겠습니까? (다음 세션부터 승인 팝업 없이 실행됩니다)"
 
-서비스별 도구 목록:
-
-| 서비스 | 도구 |
-|--------|------|
-| Slack | `mcp__claude_ai_Slack__slack_search_public_and_private`, `mcp__claude_ai_Slack__slack_read_thread`, `mcp__claude_ai_Slack__slack_read_channel`, `mcp__claude_ai_Slack__slack_read_user_profile` |
-| Linear | `mcp__claude_ai_Linear__list_issues`, `mcp__claude_ai_Linear__get_issue`, `mcp__claude_ai_Linear__get_authenticated_user`, `mcp__claude_ai_Linear__get_project` |
-| Gmail | `mcp__claude_ai_Gmail__gmail_search_messages`, `mcp__claude_ai_Gmail__gmail_read_message`, `mcp__claude_ai_Gmail__gmail_get_profile` |
-| Google Calendar | `mcp__claude_ai_Google_Calendar__gcal_list_events`, `mcp__claude_ai_Google_Calendar__gcal_list_calendars` |
-| Notion | `mcp__claude_ai_Notion__search`, `mcp__claude_ai_Notion__fetch` |
-
-**CRITICAL: probe가 실패한 서비스의 도구는 등록하지 않습니다.**
-
-설정 파일 수정은 `jq`를 사용합니다. 연결 성공한 서비스의 도구만으로 TOOLS 배열을 동적으로 구성합니다:
+**사용자가 승인하면** probe **이전에** 아래 스크립트를 실행합니다:
 
 ```bash
 SETTINGS="$HOME/.claude/settings.json"
 
-# 설정 파일이 없으면 생성
 if [ ! -f "$SETTINGS" ]; then
   mkdir -p "$(dirname "$SETTINGS")"
   echo '{}' > "$SETTINGS"
 fi
 
-# TOOLS 배열을 연결 성공한 서비스의 도구만으로 동적 구성
-# CRITICAL: 아래는 의사코드입니다. probe가 성공한 서비스만 해당 블록을 실행하세요.
-TOOLS='[]'
-if [ "$SLACK_CONNECTED" = true ]; then
-  TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Slack__slack_search_public_and_private","mcp__claude_ai_Slack__slack_read_thread","mcp__claude_ai_Slack__slack_read_channel","mcp__claude_ai_Slack__slack_read_user_profile"]')
-fi
-if [ "$LINEAR_CONNECTED" = true ]; then
-  TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Linear__list_issues","mcp__claude_ai_Linear__get_issue","mcp__claude_ai_Linear__get_authenticated_user","mcp__claude_ai_Linear__get_project"]')
-fi
-if [ "$GMAIL_CONNECTED" = true ]; then
-  TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Gmail__gmail_search_messages","mcp__claude_ai_Gmail__gmail_read_message","mcp__claude_ai_Gmail__gmail_get_profile"]')
-fi
-if [ "$CALENDAR_CONNECTED" = true ]; then
-  TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Google_Calendar__gcal_list_events","mcp__claude_ai_Google_Calendar__gcal_list_calendars"]')
-fi
-if [ "$NOTION_CONNECTED" = true ]; then
-  TOOLS=$(echo "$TOOLS" | jq '. + ["mcp__claude_ai_Notion__search","mcp__claude_ai_Notion__fetch"]')
-fi
+# 모든 도구를 무조건 등록 (연결 여부 무관)
+TOOLS='[
+  "mcp__claude_ai_Slack__slack_search_public_and_private",
+  "mcp__claude_ai_Slack__slack_read_thread",
+  "mcp__claude_ai_Slack__slack_read_channel",
+  "mcp__claude_ai_Slack__slack_read_user_profile",
+  "mcp__claude_ai_Linear__list_issues",
+  "mcp__claude_ai_Linear__get_issue",
+  "mcp__claude_ai_Linear__get_authenticated_user",
+  "mcp__claude_ai_Linear__get_project",
+  "mcp__claude_ai_Gmail__gmail_search_messages",
+  "mcp__claude_ai_Gmail__gmail_read_message",
+  "mcp__claude_ai_Gmail__gmail_get_profile",
+  "mcp__claude_ai_Google_Calendar__gcal_list_events",
+  "mcp__claude_ai_Google_Calendar__gcal_list_calendars",
+  "mcp__claude_ai_Notion__search",
+  "mcp__claude_ai_Notion__fetch",
+  "Bash(git *)", "Bash(date*)", "Bash(jq *)", "Bash(jq\t*)",
+  "Bash(cat *)", "Bash(python3 *)", "Bash(mktemp*)", "Bash(mv *)",
+  "Bash(grep *)", "Bash(sed *)", "Bash(head *)", "Bash(echo *)",
+  "Bash(DOW=*)", "Bash(LAST_FRIDAY=*)", "Bash(GH_REMOTE=*)",
+  "Bash(GIT_AUTHOR=*)", "Bash(SETTINGS=*)", "Bash(TOOLS=*)", "Bash(TMP=*)",
+  "Read", "Write", "Edit"
+]'
 
 TMP=$(mktemp)
 jq --argjson tools "$TOOLS" '.permissions.allow = ((.permissions.allow // []) + ($tools - (.permissions.allow // [])))' "$SETTINGS" > "$TMP" && mv "$TMP" "$SETTINGS"
 ```
 
+등록 후 **새 세션을 시작해야 반영**됩니다. 최초 1회만 필요하며, 이후 실행부터는 팝업 없이 전체 커맨드가 수행됩니다.
+
 **사용자가 거부하면** 권한 등록을 건너뛰고 매번 수동 승인으로 진행합니다.
+
+**이 셋업은 도구 권한이 모두 등록되어 있으면 건너뜁니다.**
 
 **이 셋업은 도구 권한이 모두 등록되면 건너뜁니다.**
 판단 기준: 연결 성공한 서비스의 도구가 `settings.json`의 `permissions.allow`에 **모두** 포함되어 있으면 셋업 완료. 일부라도 누락된 도구가 있으면 (새 서비스 연결 등) 누락분만 추가 등록합니다 (사용자에게 재확인).
@@ -115,10 +111,24 @@ echo "분석 기간: $LAST_FRIDAY ~ $TODAY ($NOW_ISO)"
 
 **연결 확인된 서비스에 대해서만 수집합니다. 가능한 한 병렬로 호출합니다.**
 
+**CRITICAL: 각 소스에서 URL/링크를 반드시 함께 수집합니다.** 최종 보고서에서 항목을 클릭하면 원본을 볼 수 있도록 하기 위함입니다.
+
+| 소스 | 수집할 링크 |
+|---|---|
+| Git | GitHub remote URL + commit SHA → `https://github.com/{owner}/{repo}/commit/{sha}` |
+| Linear | 이슈 `identifier` + `url` 필드 |
+| Slack | 메시지 `permalink` 필드 |
+| Gmail | 메시지 `id` → `https://mail.google.com/mail/u/0/#inbox/{id}` |
+| Notion | 페이지 `url` 필드 |
+| Calendar | 이벤트 `htmlLink` 필드 |
+
 ### 2-1. Git 커밋 (필수)
 
 ```bash
 git fetch origin main
+
+# GitHub remote URL 추출 (링크 생성용)
+GH_REMOTE=$(git remote get-url origin | sed 's/\.git$//' | sed 's|git@github.com:|https://github.com/|')
 
 # 본인 커밋만 조회 (--author=email로 정확한 필터링)
 GIT_AUTHOR=$(git config user.email)
@@ -126,13 +136,19 @@ if [ -z "$GIT_AUTHOR" ]; then
   echo "ERROR: git user.email이 설정되지 않았습니다."
   # Claude: 이 에러가 발생하면 사용자에게 'git config --global user.email' 설정을 요청하고 Git 수집 전체를 건너뛰세요.
 else
+  # 커밋 목록 + SHA (링크 생성에 필요)
   git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --oneline --no-merges
 
   # 본인 커밋의 변경 내용만 추출 (팀원 커밋 제외)
   git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --no-merges --stat
   git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --no-merges -p | head -3000
+
+  # 관련 PR 목록 (merge 커밋에서 PR 번호 추출)
+  git log origin/main --since="$LAST_FRIDAY" --author="$GIT_AUTHOR" --merges --oneline | grep -oE '#[0-9]+' | sort -u
 fi
 ```
+
+**Git 링크 형식:** `$GH_REMOTE/commit/{sha}` (커밋), `$GH_REMOTE/pull/{number}` (PR)
 
 **참고:** `git log -p`는 author 필터가 적용된 커밋의 diff만 출력하므로 팀원 변경이 섞이지 않습니다. `head -3000`으로 컨텍스트 초과를 방지합니다. 기간 내 본인 커밋이 없으면 출력이 비어있으며, 이 경우 건너뜁니다.
 
@@ -207,18 +223,35 @@ search(query: "", query_type: "internal", filters: { created_by_user_ids: ["{MY_
 **포함:** 비즈니스 영향이 있는 변경 (기능, 성능, 안정성, 연동, 버그픽스)
 **축소:** 내부 정리(타입, 린트, 테스트, 의존성) → 많으면 "내부 코드 품질 개선" 1줄로 묶기
 
-## 출력 형식 (Notion 호환)
-- **[emoji] 카테고리명**
-    - 항목: 임팩트 설명 (기술 배경)
+## 출력 형식
 
-이모지: 🔐보안 ⚡성능 🏷️카테고리 🎵K-POP 🎛️설정 🤖AI/번역 📦상품 🔔알림 🐛버그 ✨신기능 🔧리팩토링 🔄동기화 🔍검색 🌍배송 🔜진행중
+섹션 헤딩 + bullet 구조로 가독성 최우선. 카테고리별 이모지 헤딩으로 시각적 구분.
+
+```
+**✨ 신기능**
+- 임팩트 설명 (기술 배경) — [PR #N](URL)
+
+**🔧 리팩토링**
+- 임팩트 설명 — [PR #N](URL)
+
+**🔜 진행 중**
+- [항목] — 다음 주 계속 ([PROJ-N](URL))
+```
+
+이모지: 🔐보안 ⚡성능 🏷️카테고리 🤖AI/번역 📦상품 🔔알림 🐛버그 ✨신기능 🔧리팩토링 🔄동기화 🔍검색 🌍배송 🔜진행중
+
+**CRITICAL 링크 규칙:**
+- 모든 항목에 관련 PR, Linear 이슈 중 대표 1~2개의 **클릭 가능한 마크다운 링크** 필수
+- 형식: `[PR #N](https://github.com/OWNER/REPO/pull/N)` 또는 `[PROJ-N](https://linear.app/TEAM/issue/PROJ-N)`
+- `PR #587` (plain text) ← **금지**. 반드시 `[PR #587](URL)` 형태여야 함
+- 데이터에서 GitHub remote URL(`$GH_REMOTE`)과 Linear issue URL을 사용하여 실제 URL 생성
 
 ## 나쁜 예 vs 좋은 예
-❌ "externalProducts 필드 제거" — 코드 레벨, 임팩트 없음
-✅ "상품 모델 단순화로 동기화 안정성 향상 — 외부 플랫폼 의존 필드를 독립 구조로 분리하여 데이터 불일치 위험 제거"
+❌ "상품 모델 단순화 — PR #572, PR #573" — 링크가 plain text, 클릭 불가
+✅ "상품 모델 단순화로 동기화 안정성 향상 — 외부 플랫폼 의존 필드를 독립 구조로 분리 ([PR #572](https://github.com/.../pull/572), [PR #573](https://github.com/.../pull/573))"
 
-❌ "checksum 계산에 translationHash 추가" — 무엇을 했는지만
-✅ "번역 변경 시 자동 재동기화 — 번역 해시를 체크섬에 포함하여 번역 수정이 즉시 반영"
+❌ "번역 재동기화 추가" — 링크 자체가 없음
+✅ "번역 변경 시 자동 재동기화 — 번역 해시를 체크섬에 포함 ([INTG-89](https://linear.app/.../INTG-89))"
 
 최대 10개 항목. Notion에 바로 복사할 수 있는 포맷만 출력합니다.
 ```
@@ -243,18 +276,30 @@ search(query: "", query_type: "internal", filters: { created_by_user_ids: ["{MY_
 4. **외부 커뮤니케이션은 상대방과 목적을 명시** — "Joom 담당자에게 배송 정책 변경 문의"
 5. **팀원이 몰랐을 수 있는 정보 우선** — 공개 채널 공지보다는 DM/소규모 채널에서 나온 결정이 더 가치 있음
 
-## 출력 형식 (Notion 호환)
-- **💬 주요 논의/의사결정**
-    - [주제]: 결정 내용 또는 합의사항
-- **📧 외부 커뮤니케이션**
-    - [대상]: 목적과 결과
+## 출력 형식
+
+섹션 헤딩으로 구분. 가독성 최우선.
+
+```
+**💬 주요 논의/의사결정**
+- [주제]: 결정 내용 또는 합의사항 — [스레드](permalink)
+
+**📧 외부 커뮤니케이션** (내용이 있을 때만)
+- [대상]: 목적과 결과 — [메일](URL)
+```
+
+**CRITICAL 링크 규칙:**
+- 모든 항목에 원본 Slack permalink 또는 Gmail 링크를 **클릭 가능한 마크다운 링크** 필수
+- 형식: `[스레드](https://sazo-kr.slack.com/archives/...)` 또는 `[메일](https://mail.google.com/...)`
+- `— 스레드` (plain text) ← **금지**. 반드시 `[스레드](permalink_URL)` 형태여야 함
+- Slack 검색 결과의 `permalink` 필드에서 실제 URL을 추출하여 사용
 
 ## 나쁜 예 vs 좋은 예
-❌ "Joom 관련 슬랙 메시지 3건" — 내용 없는 집계
-✅ "Joom 배송비 정책 변경: 무게 기반에서 부피 기반으로 전환하기로 합의 (4/1 슬랙 논의)"
+❌ "ES 비용 대응 결정 — 스레드" — 링크가 plain text, 클릭 불가
+✅ "ES 비용 대응: 통합 DB 작업으로 해결하기로 결론 ([스레드](https://sazo-kr.slack.com/archives/C.../p...))"
 
 ❌ "팀장님과 DM 5건" — 상대만 있고 내용 없음
-✅ "Q2 로드맵 우선순위 조정: 번역 품질 개선을 상품 확장보다 앞으로 당기기로 결정"
+✅ "Q2 로드맵 우선순위 조정: 번역 품질 개선을 앞으로 당기기로 결정 ([스레드](https://sazo-kr.slack.com/archives/C.../p...))"
 
 업무와 무관한 메시지만 있다면 "특이사항 없음"으로 응답하세요.
 최대 7개 항목. Notion에 바로 복사할 수 있는 포맷만 출력합니다.
@@ -278,21 +323,34 @@ search(query: "", query_type: "internal", filters: { created_by_user_ids: ["{MY_
 2. **정기 회의는 묶기** — 데일리 스탠드업, 위클리 등 반복 회의는 "정기 회의 N회" 1줄로. 단, 특별한 안건이 있었으면 별도 언급
 3. **문서는 목적과 대상을 명시** — "API 가이드 작성"이 아니라 "파트너사 연동을 위한 API 가이드 초안 작성"
 4. **템플릿만 생성한 Notion 페이지는 제외** — 내용이 거의 없는 것은 skip
-5. **팀에게 공유할 가치** 기준으로 필터링 — 개인 메모성 문서는 제외
+5. **참조만 한 기존 문서는 제외** — 본인이 해당 기간에 새로 작성하거나 실질적으로 내용을 추가한 문서만 포함. 단순 열람·댓글·참조는 보고 가치 없음
+6. **팀에게 공유할 가치** 기준으로 필터링 — 개인 메모성 문서는 제외
+7. **Notion 데이터가 참조 위주뿐이면 📝 섹션 자체를 생략** — "작성 문서 없음"도 쓰지 않음
 
-## 출력 형식 (Notion 호환)
-- **📅 주요 회의**
-    - [회의명]: 핵심 안건/결정사항
-    - 정기 회의 N회 (스탠드업, 위클리 등)
-- **📝 작성 문서**
-    - [문서 제목]: 목적과 대상
+## 출력 형식
+
+섹션 헤딩으로 구분. 가독성 최우선.
+
+```
+**📅 주요 회의**
+- [회의명](htmlLink): 핵심 안건/결정사항
+- 정기 회의 N회 (스탠드업, 위클리 등)
+
+**📝 작성 문서** (내용이 있을 때만)
+- [문서 제목](notion_url): 목적과 대상
+```
+
+**CRITICAL 링크 규칙:**
+- 회의: Calendar `htmlLink`로 **클릭 가능한 마크다운 링크** 필수. 형식: `[회의명](htmlLink)`
+- 문서: Notion 페이지 `url`로 문서 제목을 링크화. 형식: `[문서 제목](notion_url)`
+- 링크 없는 plain text 출력 금지
 
 ## 나쁜 예 vs 좋은 예
-❌ "제품 회의 참석" — 회의 이름만, 내용 없음
-✅ "제품 회의: eBay 카테고리 매핑 자동화 범위를 1차 100개 카테고리로 확정"
+❌ "제품 회의 참석" — 회의 이름만, 링크 없음
+✅ "[제품 회의](https://calendar.google.com/...): eBay 카테고리 매핑 자동화 범위를 1차 100개 카테고리로 확정"
 
-❌ "API 가이드 작성" — 목적/대상 불명
-✅ "파트너사(Rakuten) 연동을 위한 상품 등록 API 가이드 초안 작성"
+❌ "API 가이드 작성" — 목적/대상 불명, 링크 없음
+✅ "[파트너사 연동 API 가이드](https://notion.so/...): Rakuten 상품 등록 API 초안, 개발팀 리뷰용"
 
 회의나 문서가 없으면 해당 섹션을 생략합니다.
 최대 7개 항목. Notion에 바로 복사할 수 있는 포맷만 출력합니다.
@@ -300,28 +358,95 @@ search(query: "", query_type: "internal", filters: { created_by_user_ids: ["{MY_
 
 ## Step 4: 최종 보고서 조합
 
-3개 에이전트의 응답을 취합합니다. **단순 이어붙이기가 아니라:**
+3개 에이전트의 응답을 취합하여 **팀 주간보고 템플릿 형식**으로 조합합니다.
 
 1. **교차 소스 중복 제거** — 같은 작업이 Git + Linear + Slack에 걸쳐 있으면 가장 풍부한 설명으로 병합
-2. **비즈니스 스토리 재구성** — 개별 항목을 "이번 주 핵심 성과"와 "진행 중인 과제"로 재배치
-3. **한 줄 하이라이트** — 보고서 최상단에 이번 주 가장 임팩트 있는 1~2가지를 한 줄로 요약
+2. **섹션 구조 유지** — 에이전트별 결과를 섹션 헤딩 + `---` 구분선으로 시각적으로 분리. 개발 → 논의 → 회의/문서 순서
+3. **한 줄 하이라이트** — `> 💡` blockquote로 보고서 최상단에 배치
+4. **링크 보존** — 중복 제거로 항목을 병합할 때, 각 소스의 링크는 모두 유지
+
+**출력 형식:** 가독성 최우선. 섹션 헤딩 + 이모지 + 구분선으로 시각적 구조를 유지합니다.
+
+```markdown
+## 📊 금주 작업 사항
+
+> 💡 **하이라이트**: [가장 중요한 1~2가지 한 줄 요약]
+
+[Agent A — 개발 활동: 카테고리별 이모지 헤딩 + bullet]
+
+---
+
+[Agent B — 논의/의사결정 (내용이 있을 때만)]
+
+---
+
+[Agent C — 회의/문서 (내용이 있을 때만)]
+
+---
+
+## 🔜 차주 작업 사항
+
+[Linear 기반 자동 생성 또는 사용자 직접 작성]
+```
+
+## Step 5: 차주 작업 사항
+
+금주 작업 사항을 먼저 사용자에게 보여준 뒤, 차주 작업 사항 작성 방식을 물어봅니다:
+
+> "차주 작업 사항을 Linear 이슈 기반으로 자동 작성할까요, 아니면 직접 작성하시겠습니까?"
+
+### 사용자가 "자동"을 선택한 경우
+
+Linear에서 다음 조건에 해당하는 이슈를 조회합니다:
 
 ```
-📊 주간 업무 보고 ($LAST_FRIDAY ~ $TODAY)
+# 1. 진행 중이지만 미완료 (In Progress)
+list_issues(assignee: "me", status: "In Progress")
 
-> 💡 이번 주 하이라이트: [가장 중요한 1~2가지 한 줄 요약]
+# 2. Due date가 차주 중인 이슈
+list_issues(assignee: "me", dueDate: { gte: "$NEXT_MONDAY", lte: "$NEXT_FRIDAY" })
 
-[Agent A 결과 — 개발 활동]
-
-[Agent B 결과 — 커뮤니케이션 (내용이 있을 때만)]
-
-[Agent C 결과 — 문서/회의 (내용이 있을 때만)]
+# 3. Todo 상태인 이슈
+list_issues(assignee: "me", status: "Todo")
 ```
 
-## Step 5: 사용자에게 제시
+```bash
+# 차주 날짜 계산
+NEXT_MONDAY=$(date -v+monday +%Y-%m-%d 2>/dev/null || date -d "next monday" +%Y-%m-%d)
+NEXT_FRIDAY=$(date -v+friday +%Y-%m-%d 2>/dev/null || date -d "next friday" +%Y-%m-%d)
+```
 
-1. 분석 기간 표시: `$LAST_FRIDAY ~ $TODAY`
-2. 위 포맷으로 보고서 출력
+조회된 이슈를 **금주 작업 사항과 동일한 방식**으로 정리합니다:
+- 비즈니스 임팩트 중심 서술
+- 관련 이슈는 하나의 스토리로 묶기
+- 각 항목에 Linear 이슈 링크 첨부: `[PROJ-N](URL)`
+- flat bullet list 형식
+
+### 사용자가 "직접"을 선택한 경우
+
+차주 작업 사항을 비워두고 사용자가 채울 수 있도록 placeholder를 남깁니다:
+
+```markdown
+- 차주 작업 사항
+    - (직접 작성)
+```
+
+## Step 6: 파일 저장 및 사용자에게 제시
+
+보고서를 마크다운 파일로 저장합니다. 링크가 클릭 가능하려면 파일로 열어야 합니다.
+
+```bash
+# 프로젝트 루트에 저장 (날짜 기반 파일명)
+REPORT_FILE="weekly-report-${LAST_FRIDAY}-${TODAY}.md"
+```
+
+1. 보고서를 `$REPORT_FILE`에 Write 도구로 저장
+2. 터미널에 요약(하이라이트 + 파일 경로)만 출력:
+   ```
+   ✅ 주간 보고서 생성 완료: $REPORT_FILE
+   💡 하이라이트: [한 줄 요약]
+   📎 링크 포함 전체 보고서 → $REPORT_FILE 을 열어주세요.
+   ```
 3. "수정이 필요한 부분이 있으면 말씀해주세요" 로 마무리
 
 ## 주의사항
