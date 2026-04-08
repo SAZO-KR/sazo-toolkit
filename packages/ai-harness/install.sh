@@ -170,6 +170,79 @@ link_opencode_commands() {
 
 link_opencode_commands
 
+# --- CLAUDE.md managed block ---
+
+CLAUDE_MD_SOURCE="$HARNESS_DIR/claude-md/CLAUDE.md"
+MERGE_SCRIPT="$HARNESS_DIR/scripts/merge-claude-md.sh"
+
+if [ ! -f "$MERGE_SCRIPT" ] || [ ! -f "$CLAUDE_MD_SOURCE" ]; then
+    echo "  CLAUDE.md setup skipped (files not found)"
+else
+source "$MERGE_SCRIPT"
+
+echo ""
+echo "Setting up development workflow (CLAUDE.md)..."
+
+if [ ! -f "$CLAUDE_MD_FILE" ]; then
+    create_with_managed_block "$CLAUDE_MD_SOURCE"
+    echo "  Created: ~/.claude/CLAUDE.md"
+elif has_managed_block; then
+    replace_managed_block "$CLAUDE_MD_SOURCE"
+    echo "  Updated: managed block replaced with latest"
+else
+    echo "  Existing ~/.claude/CLAUDE.md found (no managed block)."
+    echo ""
+    echo "  Options:"
+    echo "    1) Append  — add team workflow after your existing content"
+    echo "    2) Replace — backup existing file, replace with team workflow"
+    echo "    3) Review  — show current content, then choose"
+    echo "    4) Skip    — don't modify CLAUDE.md"
+    echo ""
+
+    choice=""
+    while [[ ! "$choice" =~ ^[1-4]$ ]]; do
+        printf "  Choose [1-4]: "
+        if [ ! -t 0 ] && [ -e /dev/tty ]; then
+            read -r choice </dev/tty || choice=4
+        elif [ -t 0 ]; then
+            read -r choice || choice=4
+        else
+            choice=4
+        fi
+    done
+
+    case "$choice" in
+        1)
+            append_managed_block "$CLAUDE_MD_SOURCE"
+            echo "  Appended managed block to existing file"
+            ;;
+        2)
+            replace_file_with_managed_block "$CLAUDE_MD_SOURCE"
+            echo "  Replaced (backup saved)"
+            ;;
+        3)
+            show_current_content
+            printf "  After review — Append(1), Replace(2), or Skip(4)? "
+            if [ ! -t 0 ] && [ -e /dev/tty ]; then
+                read -r choice2 </dev/tty || choice2=4
+            elif [ -t 0 ]; then
+                read -r choice2 || choice2=4
+            else
+                choice2=4
+            fi
+            case "$choice2" in
+                1) append_managed_block "$CLAUDE_MD_SOURCE"; echo "  Appended" ;;
+                2) replace_file_with_managed_block "$CLAUDE_MD_SOURCE"; echo "  Replaced (backup saved)" ;;
+                *) echo "  Skipped" ;;
+            esac
+            ;;
+        4)
+            echo "  Skipped"
+            ;;
+    esac
+fi
+fi
+
 # --- Auto-update hook (Claude Code) ---
 
 echo ""

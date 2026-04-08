@@ -107,6 +107,16 @@ if git fetch origin main --quiet 2>/dev/null; then
             if [ "$TOTAL" -gt 0 ]; then
                 log "Linked $TOTAL new files (commands:$CMD_LINKED skills:$SKILL_LINKED agents:$AGENT_LINKED)"
             fi
+
+            MERGE_SCRIPT="$HARNESS_DIR/scripts/merge-claude-md.sh"
+            CLAUDE_MD_SOURCE="$HARNESS_DIR/claude-md/CLAUDE.md"
+            if [ -f "$MERGE_SCRIPT" ] && [ -f "$CLAUDE_MD_SOURCE" ]; then
+                source "$MERGE_SCRIPT"
+                if has_managed_block; then
+                    replace_managed_block "$CLAUDE_MD_SOURCE"
+                    log "Updated CLAUDE.md managed block"
+                fi
+            fi
         else
             log "WARN: Pull failed"
         fi

@@ -19,6 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/
 | 항목            | 경로                      |
 | --------------- | ------------------------- |
 | 설치 위치       | `~/.config/sazo-ai-harness/` |
+| CLAUDE.md       | `~/.claude/CLAUDE.md` (managed block) |
 | Commands        | `~/.claude/commands/*.md` |
 | Skills          | `~/.claude/skills/*/`     |
 | Agents          | `~/.claude/agents/*.md`   |
@@ -38,6 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/
 
 - Claude 세션 시작 시 자동 체크
 - 새 파일 추가 시 자동으로 심볼릭 링크 생성
+- CLAUDE.md managed block 자동 교체 (유저 커스텀 내용 보존)
 - 1시간 이내 체크했으면 스킵
 - 로그: `~/.claude/logs/ai-harness-update.log`
 
@@ -264,5 +266,14 @@ find ~/.claude/agents -type l -lname '*sazo-ai-harness*' -delete 2>/dev/null
 if [ -f ~/.claude/settings.json ]; then
     TMP=$(mktemp)
     jq '.hooks.SessionStart = [.hooks.SessionStart[]? | select(any(.hooks[]?.command; contains("auto-update.sh")) | not)]' ~/.claude/settings.json > "$TMP" && mv "$TMP" ~/.claude/settings.json || rm -f "$TMP"
+fi
+
+# CLAUDE.md managed block 제거
+if [ -f ~/.claude/CLAUDE.md ] \
+  && grep -qF "BEGIN SAZO-AI-HARNESS MANAGED BLOCK" ~/.claude/CLAUDE.md \
+  && grep -qF "END SAZO-AI-HARNESS MANAGED BLOCK" ~/.claude/CLAUDE.md; then
+    TMP=$(mktemp)
+    awk '/^# BEGIN SAZO-AI-HARNESS MANAGED BLOCK/{skip=1;next} /^# END SAZO-AI-HARNESS MANAGED BLOCK/{skip=0;next} !skip' ~/.claude/CLAUDE.md > "$TMP" && mv "$TMP" ~/.claude/CLAUDE.md
+    echo "CLAUDE.md managed block removed (user content preserved)"
 fi
 ```
