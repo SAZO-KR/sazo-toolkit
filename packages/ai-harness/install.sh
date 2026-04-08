@@ -174,7 +174,10 @@ link_opencode_commands
 
 CLAUDE_MD_SOURCE="$HARNESS_DIR/claude-md/CLAUDE.md"
 MERGE_SCRIPT="$HARNESS_DIR/scripts/merge-claude-md.sh"
-chmod +x "$MERGE_SCRIPT"
+
+if [ ! -f "$MERGE_SCRIPT" ] || [ ! -f "$CLAUDE_MD_SOURCE" ]; then
+    echo "  CLAUDE.md setup skipped (files not found)"
+else
 source "$MERGE_SCRIPT"
 
 echo ""
@@ -237,6 +240,7 @@ else
             echo "  Skipped"
             ;;
     esac
+fi
 fi
 
 # --- Auto-update hook (Claude Code) ---

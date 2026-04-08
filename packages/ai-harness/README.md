@@ -267,4 +267,11 @@ if [ -f ~/.claude/settings.json ]; then
     TMP=$(mktemp)
     jq '.hooks.SessionStart = [.hooks.SessionStart[]? | select(any(.hooks[]?.command; contains("auto-update.sh")) | not)]' ~/.claude/settings.json > "$TMP" && mv "$TMP" ~/.claude/settings.json || rm -f "$TMP"
 fi
+
+# CLAUDE.md managed block 제거
+if [ -f ~/.claude/CLAUDE.md ] && grep -qF "BEGIN SAZO-AI-HARNESS MANAGED BLOCK" ~/.claude/CLAUDE.md; then
+    TMP=$(mktemp)
+    awk '/^# BEGIN SAZO-AI-HARNESS MANAGED BLOCK/{skip=1;next} /^# END SAZO-AI-HARNESS MANAGED BLOCK/{skip=0;next} !skip' ~/.claude/CLAUDE.md > "$TMP" && mv "$TMP" ~/.claude/CLAUDE.md
+    echo "CLAUDE.md managed block removed (user content preserved)"
+fi
 ```
