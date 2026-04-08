@@ -10,7 +10,7 @@ BLOCK_END="# END SAZO-AI-HARNESS MANAGED BLOCK"
 CLAUDE_MD_FILE="$HOME/.claude/CLAUDE.md"
 
 has_managed_block() {
-    [ -f "$CLAUDE_MD_FILE" ] && grep -qF "$BLOCK_BEGIN" "$CLAUDE_MD_FILE"
+    [ -f "$CLAUDE_MD_FILE" ] && grep -qF "$BLOCK_BEGIN" "$CLAUDE_MD_FILE" && grep -qF "$BLOCK_END" "$CLAUDE_MD_FILE"
 }
 
 replace_managed_block() {
