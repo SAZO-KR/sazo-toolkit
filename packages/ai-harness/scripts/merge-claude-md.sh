@@ -9,10 +9,13 @@ CLAUDE_MD_FILE="$HOME/.claude/CLAUDE.md"
 
 has_managed_block() {
     [ -f "$CLAUDE_MD_FILE" ] || return 1
-    local begin_line end_line
-    begin_line=$(grep -nF "$BLOCK_BEGIN" "$CLAUDE_MD_FILE" | head -1 | cut -d: -f1)
-    end_line=$(grep -nF "$BLOCK_END" "$CLAUDE_MD_FILE" | tail -1 | cut -d: -f1)
-    [ -n "$begin_line" ] && [ -n "$end_line" ] && [ "$begin_line" -lt "$end_line" ]
+    local begin_count end_count begin_line end_line
+    begin_count=$(grep -cF "$BLOCK_BEGIN" "$CLAUDE_MD_FILE" || true)
+    end_count=$(grep -cF "$BLOCK_END" "$CLAUDE_MD_FILE" || true)
+    [ "$begin_count" -eq 1 ] && [ "$end_count" -eq 1 ] || return 1
+    begin_line=$(grep -nF "$BLOCK_BEGIN" "$CLAUDE_MD_FILE" | cut -d: -f1)
+    end_line=$(grep -nF "$BLOCK_END" "$CLAUDE_MD_FILE" | cut -d: -f1)
+    [ "$begin_line" -lt "$end_line" ]
 }
 
 replace_managed_block() {
@@ -78,7 +81,7 @@ replace_file_with_managed_block() {
 }
 
 show_current_content() {
-    printf "\n--- Current ~/.claude/CLAUDE.md ---\n"
+    printf "\n%s\n" "--- Current ~/.claude/CLAUDE.md ---"
     cat "$CLAUDE_MD_FILE"
-    printf "--- End ---\n\n"
+    printf "%s\n\n" "--- End ---"
 }
