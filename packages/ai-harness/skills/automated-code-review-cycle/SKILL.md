@@ -1,7 +1,7 @@
 ---
 name: Automated-Code-Review-Cycle
 description: PR에 대해 Codex/Gemini 코드 리뷰를 자동으로 받고, 피드백 수정 → 재리뷰 사이클을 사용자 개입 없이 반복. 활성 리뷰어 전부 통과하면 완료. Gemini 미설정 repo는 Codex만으로 판단.
-version: 1.3.2
+version: 1.4.0
 when_to_use: PR 생성 후 코드 리뷰 사이클을 자동화하고 싶을 때
 ---
 
@@ -95,15 +95,18 @@ CYCLE_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 **현재 상태 파악:**
 
 ```bash
-# 1. 최신 Codex/Gemini 리뷰 찾기 (봇 이름 동적 감지)
-# CRITICAL: --paginate 필수! 기본 30건만 반환 → 리뷰 많은 PR에서 최신 리뷰 누락
-# Codex: login에 "codex"가 포함된 bot (codex-gh[bot], chatgpt-codex-connector[bot] 등)
-LATEST_CODEX_REVIEW=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews --paginate \
-  --jq '[.[] | select(.user.login | test("codex"))] | sort_by(.submitted_at) | last | .id')
+# 1. 모든 Codex/Gemini 리뷰 ID 수집 (봇 이름 동적 감지)
+# CRITICAL: --paginate 필수! 기본 30건만 반환 → 리뷰 많은 PR에서 누락
+# CRITICAL: 최신 리뷰만이 아니라 모든 리뷰를 수집해야 이전 리뷰의 미답변 코멘트를 놓치지 않음
+ALL_CODEX_REVIEW_IDS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews --paginate \
+  --jq '[.[] | select(.user.login | test("codex"))] | sort_by(.submitted_at) | [.[].id]')
 
-# Gemini: login에 "gemini"가 포함된 bot (gemini-code-assist[bot] 등)
-LATEST_GEMINI_REVIEW=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews --paginate \
-  --jq '[.[] | select(.user.login | test("gemini"))] | sort_by(.submitted_at) | last | .id')
+ALL_GEMINI_REVIEW_IDS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews --paginate \
+  --jq '[.[] | select(.user.login | test("gemini"))] | sort_by(.submitted_at) | [.[].id]')
+
+# 최신 리뷰 ID (통과 조건 확인용)
+LATEST_CODEX_REVIEW=$(echo "$ALL_CODEX_REVIEW_IDS" | jq 'last')
+LATEST_GEMINI_REVIEW=$(echo "$ALL_GEMINI_REVIEW_IDS" | jq 'last')
 
 # Gemini 활성 여부 판단 (한 번도 리뷰하지 않았으면 미설정으로 간주)
 GEMINI_ENABLED=false
@@ -111,18 +114,8 @@ if [ -n "$LATEST_GEMINI_REVIEW" ] && [ "$LATEST_GEMINI_REVIEW" != "null" ]; then
   GEMINI_ENABLED=true
 fi
 
-# 2. 최신 리뷰의 하위 코멘트 확인
-if [ -n "$LATEST_CODEX_REVIEW" ] && [ "$LATEST_CODEX_REVIEW" != "null" ]; then
-  CODEX_COMMENTS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews/$LATEST_CODEX_REVIEW/comments \
-    --jq 'length')
-fi
-
-if [ "$GEMINI_ENABLED" = true ]; then
-  GEMINI_COMMENTS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews/$LATEST_GEMINI_REVIEW/comments \
-    --jq 'length')
-fi
-
-# 3. 미답변 코멘트 수 확인 (전체 인라인 코멘트에서 답변 여부 체크)
+# 2. 전체 미답변 코멘트 수 확인 (모든 리뷰의 코멘트에서)
+# → Step 3에서 상세 조회
 ```
 
 **상태별 진입점:**
@@ -197,17 +190,27 @@ Quota 감지 시:
 
 **CRITICAL: 리뷰는 review → review comments 구조로 조회해야 한다.**
 
-### 3-1. 최신 리뷰의 피드백 조회
+### 3-1. 모든 리뷰의 피드백 조회
+
+**CRITICAL: 최신 리뷰만이 아니라 모든 리뷰의 코멘트를 수집해야 한다.** Codex/Gemini가 여러 리뷰를 제출한 경우, 이전 리뷰의 미답변 코멘트가 누락되는 버그를 방지.
 
 ```bash
-# Codex 최신 리뷰의 하위 코멘트
-CODEX_FEEDBACK=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews/$LATEST_CODEX_REVIEW/comments \
-  --jq '.[] | {id: .id, body: .body[0:500], path: .path, line: .line}')
+# 모든 Codex 리뷰의 코멘트를 하나의 배열로 수집
+CODEX_ALL_COMMENTS='[]'
+for REVIEW_ID in $(echo "$ALL_CODEX_REVIEW_IDS" | jq -r '.[]'); do
+  COMMENTS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews/$REVIEW_ID/comments \
+    --jq '[.[] | {id: .id, body: .body[0:500], path: .path, line: .line, review_id: '$REVIEW_ID'}]')
+  CODEX_ALL_COMMENTS=$(echo "$CODEX_ALL_COMMENTS" | jq --argjson c "$COMMENTS" '. + $c')
+done
 
-# Gemini 최신 리뷰의 하위 코멘트 (Gemini 활성 시에만)
+# Gemini도 동일 (활성 시에만)
 if [ "$GEMINI_ENABLED" = true ]; then
-  GEMINI_FEEDBACK=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews/$LATEST_GEMINI_REVIEW/comments \
-    --jq '.[] | {id: .id, body: .body[0:500], path: .path, line: .line}')
+  GEMINI_ALL_COMMENTS='[]'
+  for REVIEW_ID in $(echo "$ALL_GEMINI_REVIEW_IDS" | jq -r '.[]'); do
+    COMMENTS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews/$REVIEW_ID/comments \
+      --jq '[.[] | {id: .id, body: .body[0:500], path: .path, line: .line, review_id: '$REVIEW_ID'}]')
+    GEMINI_ALL_COMMENTS=$(echo "$GEMINI_ALL_COMMENTS" | jq --argjson c "$COMMENTS" '. + $c')
+  done
 fi
 ```
 
@@ -217,20 +220,18 @@ fi
 
 ```bash
 # CRITICAL: --paginate 필수! 기본 30건만 반환 → 코멘트 많은 PR에서 최신 답변 누락
-# 전체 인라인 코멘트에서 답변된 comment ID 수집
 REPLIED_IDS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/comments --paginate \
   --jq '[.[] | select(.in_reply_to_id != null) | .in_reply_to_id]')
 
-# 미답변 피드백만 필터: review comments의 id가 REPLIED_IDS에 없으면 미답변
-# jq --argjson로 REPLIED_IDS 배열을 전달하여 비교
-UNANSWERED_CODEX=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews/$LATEST_CODEX_REVIEW/comments \
+# 모든 리뷰의 코멘트에서 미답변만 필터
+UNANSWERED_CODEX=$(echo "$CODEX_ALL_COMMENTS" \
   | jq --argjson replied "$REPLIED_IDS" \
   '[.[] | select(.id as $cid | ($replied | index($cid)) | not)]')
 
 UNANSWERED_CODEX_COUNT=$(echo "$UNANSWERED_CODEX" | jq 'length')
 
 if [ "$GEMINI_ENABLED" = true ]; then
-  UNANSWERED_GEMINI=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews/$LATEST_GEMINI_REVIEW/comments \
+  UNANSWERED_GEMINI=$(echo "$GEMINI_ALL_COMMENTS" \
     | jq --argjson replied "$REPLIED_IDS" \
     '[.[] | select(.id as $cid | ($replied | index($cid)) | not)]')
   UNANSWERED_GEMINI_COUNT=$(echo "$UNANSWERED_GEMINI" | jq 'length')
@@ -405,6 +406,7 @@ PR이 머지 가능한 상태입니다. / 사용자 확인이 필요합니다.
 | Codex bot 이름 하드코딩 (`codex-gh[bot]`)                    | `test("codex")`로 동적 감지 (이름 변경 대응)                                |
 | Gemini 미설정 repo에서 Gemini 대기                           | `GEMINI_ENABLED` 플래그로 Gemini 관련 로직 분기                             |
 | polling 타임아웃 후 같은 리뷰 무한 재평가                    | `STALE_COUNT`로 무응답 감지, 2회 초과 시 fallback/알림                      |
+| 최신 리뷰만 확인하여 이전 리뷰 미답변 누락                   | `ALL_*_REVIEW_IDS`로 모든 리뷰의 코멘트를 스캔                              |
 
 ## Related Skills
 
