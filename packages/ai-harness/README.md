@@ -269,7 +269,9 @@ if [ -f ~/.claude/settings.json ]; then
 fi
 
 # CLAUDE.md managed block 제거
-if [ -f ~/.claude/CLAUDE.md ] && grep -qF "BEGIN SAZO-AI-HARNESS MANAGED BLOCK" ~/.claude/CLAUDE.md; then
+if [ -f ~/.claude/CLAUDE.md ] \
+  && grep -qF "BEGIN SAZO-AI-HARNESS MANAGED BLOCK" ~/.claude/CLAUDE.md \
+  && grep -qF "END SAZO-AI-HARNESS MANAGED BLOCK" ~/.claude/CLAUDE.md; then
     TMP=$(mktemp)
     awk '/^# BEGIN SAZO-AI-HARNESS MANAGED BLOCK/{skip=1;next} /^# END SAZO-AI-HARNESS MANAGED BLOCK/{skip=0;next} !skip' ~/.claude/CLAUDE.md > "$TMP" && mv "$TMP" ~/.claude/CLAUDE.md
     echo "CLAUDE.md managed block removed (user content preserved)"

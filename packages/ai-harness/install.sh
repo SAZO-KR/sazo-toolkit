@@ -203,9 +203,9 @@ else
     while [[ ! "$choice" =~ ^[1-4]$ ]]; do
         printf "  Choose [1-4]: "
         if [ ! -t 0 ] && [ -e /dev/tty ]; then
-            read -r choice </dev/tty
+            read -r choice </dev/tty || choice=4
         elif [ -t 0 ]; then
-            read -r choice
+            read -r choice || choice=4
         else
             choice=4
         fi
@@ -224,9 +224,9 @@ else
             show_current_content
             printf "  After review — Append(1), Replace(2), or Skip(4)? "
             if [ ! -t 0 ] && [ -e /dev/tty ]; then
-                read -r choice2 </dev/tty
+                read -r choice2 </dev/tty || choice2=4
             elif [ -t 0 ]; then
-                read -r choice2
+                read -r choice2 || choice2=4
             else
                 choice2=4
             fi
