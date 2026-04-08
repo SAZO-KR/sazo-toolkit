@@ -155,6 +155,21 @@ link_files "$HARNESS_DIR/skills" "$HOME/.claude/skills"
 echo "Agents:"
 link_files "$HARNESS_DIR/agents" "$HOME/.claude/agents"
 
+OPENCODE_COMMANDS_LINKED=0
+link_opencode_commands() {
+    if [ "$OPENCODE_COMMANDS_LINKED" -eq 1 ]; then return; fi
+    if [ -d "$HOME/.config/opencode" ]; then
+        local oc_cmd_dir="$HOME/.config/opencode/commands"
+        mkdir -p "$oc_cmd_dir"
+        echo ""
+        echo "OpenCode commands:"
+        link_files "$HARNESS_DIR/commands" "$oc_cmd_dir"
+        OPENCODE_COMMANDS_LINKED=1
+    fi
+}
+
+link_opencode_commands
+
 # --- Auto-update hook (Claude Code) ---
 
 echo ""
@@ -323,6 +338,8 @@ else
             fi
         fi
 
+        link_opencode_commands
+
         echo ""
         echo "OpenCode setup complete!"
     else
@@ -344,7 +361,7 @@ echo ""
 echo "Version: $VERSION"
 echo ""
 echo "Claude Code:"
-echo "  /generate-changelog     Generate weekly report"
+echo "  /weekly-report          주간 업무 보고서 생성 (코드+이슈+메일+슬랙+캘린더+문서)"
 echo ""
 if [ "$SKIP_OPENCODE" -eq 0 ]; then
 echo "OpenCode:"
