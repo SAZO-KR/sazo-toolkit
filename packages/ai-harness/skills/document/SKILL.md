@@ -1,6 +1,6 @@
 ---
-name: Updating Noridocs
-description: Use this when you have finished making code changes and you are ready to update the documentation based on those changes.
+name: document
+description: Use after code changes to update docs.md files throughout the codebase using the nori-change-documenter subagent.
 ---
 
 # Updating Noridocs
@@ -54,7 +54,7 @@ Task(subagent_type: nori-change-documenter)
   - If it does not exist, skip this step.
 - Ask the user if they want to sync all docs.md files to the remote server.
   - If the user declines, skip this step.
-- Read and follow the project's nori-sync-docs skill to sync all noridocs to the remote server.
+- Read and follow the nori-sync-docs skill to sync all noridocs to the remote server.
 
 ## Noridocs Format
 

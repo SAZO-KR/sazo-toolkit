@@ -1,6 +1,6 @@
 ---
-name: Using Git Worktrees
-description: Use this whenever you need to create an isolated workspace.
+name: isolate
+description: Use this whenever you need to create an isolated workspace using git worktrees.
 ---
 
 <required>

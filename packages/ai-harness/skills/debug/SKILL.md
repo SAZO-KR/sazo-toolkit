@@ -1,6 +1,6 @@
 ---
-name: creating-debug-tests-and-iterating
-description: Use this skill when faced with a difficult debugging task where you need to replicate some bug or behavior in order to see what is going wrong.
+name: debug
+description: Use when faced with a difficult debugging task where you need to replicate a bug or behavior through iterative test scripts.
 ---
 
 <required>

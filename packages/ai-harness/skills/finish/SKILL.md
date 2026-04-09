@@ -1,6 +1,6 @@
 ---
-name: Finishing a Development Branch
-description: Use this when you have completed some feature implementation and have written passing tests, and you are ready to create a PR.
+name: finish
+description: Use when implementation and tests are complete and you are ready to push, create a PR, and verify CI.
 ---
 
 <required>
