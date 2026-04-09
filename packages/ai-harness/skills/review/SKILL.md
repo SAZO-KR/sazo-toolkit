@@ -47,7 +47,7 @@ description: Use after CI passes and before PR creation — launches independent
 
 ## Review Agents
 
-Launch parallel agents, each reviewing from a different perspective. Each agent receives ONLY:
+Launch **5 parallel agents**, one per perspective below. Each agent receives ONLY:
 
 - The `git diff` of all changes
 - The list of changed files
@@ -94,10 +94,29 @@ Each agent does NOT receive:
 - Tests are deterministic?
 - Test type appropriate for what's being tested?
 
+## PASS / FAIL Criteria
+
+Each reviewer returns **PASS** or **FAIL**. The threshold:
+
+**FAIL** — any of these:
+- Bug that will be hit in production (logic error, race condition, data corruption)
+- Security vulnerability (injection, auth bypass, secret exposure)
+- Behavioral regression (existing functionality broken by the change)
+- Missing error handling on a path that will be reached in production
+- Test that tests mock behavior instead of real behavior
+- Violation of project CLAUDE.md / AGENTS.md rules
+
+**PASS** — all of these:
+- No issues found, OR
+- Only minor style/preference issues that don't affect correctness or security
+- Pre-existing issues unrelated to this change (note them, but PASS)
+
+**When uncertain:** FAIL. False negatives are worse than false positives.
+
 ## How to Launch Review Agents
 
 ```
-For each perspective, use Task tool:
+For each of the 5 perspectives, use Task tool:
   task(
     subagent_type="oracle",
     run_in_background=true,
@@ -108,7 +127,7 @@ For each perspective, use Task tool:
 CRITICAL:
   - Do NOT pass session_id — each review MUST be a fresh session
   - Do NOT include previous review results in the prompt
-  - Each agent returns: PASS or FAIL with specific issues
+  - Each agent returns: PASS or FAIL with specific issues cited by file and line
 ```
 
 ## Handling Review Results

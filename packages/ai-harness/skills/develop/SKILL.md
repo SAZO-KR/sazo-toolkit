@@ -72,21 +72,26 @@ test('retries failed operations 3 times', async () => {
 
 **For integration tests:**
 
+Test real system behavior through actual boundaries — API endpoints, database, service interactions.
+
 ```typescript
-test('creates order and updates inventory in single transaction', async () => {
-  const product = await seedProduct(dataSource, {stock: 10});
+// API endpoint test (framework-agnostic pattern)
+test('POST /orders returns 201 and persists order', async () => {
+  // Arrange: seed data through the real system
+  await seedProduct({id: 'prod-1', stock: 10});
 
-  const order = await orderManageService.createOrder({
-    productId: product.id,
-    quantity: 3,
-  });
+  // Act: call the real endpoint
+  const response = await request(app)
+    .post('/orders')
+    .send({productId: 'prod-1', quantity: 3});
 
-  const updatedProduct = await dataSource
-    .getRepository(ProductModel)
-    .findOneBy({id: product.id});
+  // Assert: check observable system behavior
+  expect(response.status).toBe(201);
+  expect(response.body.productId).toBe('prod-1');
 
-  expect(order.status).toBe(OrderStatus.CREATED);
-  expect(updatedProduct.stock).toBe(7);
+  // Assert: verify side effects in real DB
+  const product = await db.query('SELECT stock FROM products WHERE id = $1', ['prod-1']);
+  expect(product.rows[0].stock).toBe(7);
 });
 ```
 
@@ -135,6 +140,15 @@ Only after GREEN:
 - Extract helpers
 
 Keep tests green throughout. Do not add behavior.
+
+## Fixing a Defect
+
+When fixing a bug, do NOT jump to the fix. Follow this sequence:
+
+1. Write an API-level failing test that exposes the bug from the user's perspective
+2. Write the smallest possible test that isolates the root cause
+3. Get both tests to pass
+4. Verify the fix doesn't break other tests
 
 ## Then: Next Test
 
@@ -255,6 +269,11 @@ Mock the COMPLETE data structure as it exists in reality, not just fields your i
 **All of these mean: delete code, start over with one failing test.**
 
 ---
+
+# Scope Discipline
+
+- Do not touch code outside the task's scope. No "while I'm here" fixes.
+- If you spot something worth improving outside scope, propose it as a separate task.
 
 # Code Quality
 
