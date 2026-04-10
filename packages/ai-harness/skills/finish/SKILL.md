@@ -85,11 +85,21 @@ EOF
 )"
 ```
 
-9. Merge main and resolve conflicts if necessary.
+9. Merge main and resolve conflicts if necessary, then push the merge before checking CI.
 
 ```bash
-git fetch && git merge origin/main
+git fetch
+
+# Merge origin/main into the feature branch
+git merge origin/main
+
+# If the merge created a commit (merge commit or conflict resolution),
+# the remote PR HEAD is now stale. Push so that gh pr checks in step 10
+# reflects the actual state we want CI to verify.
+git push
 ```
+
+**Why push before CI check:** `gh pr checks` reads the remote PR HEAD. If you merge locally but don't push, step 10 will report CI status for the OLD PR HEAD (possibly passing) while your local branch has new unreviewed merge content — defeating the purpose of the post-merge CI verification.
 
 10. Make sure the PR branch CI succeeds.
 
