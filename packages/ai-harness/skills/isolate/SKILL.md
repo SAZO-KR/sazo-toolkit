@@ -24,8 +24,8 @@ grep -q "^\.worktrees/$" .gitignore || grep -q "^worktrees/$" .gitignore
 3. Create the worktree
 
 - Come up with a good branch name based on the request.
-- Create the worktree with the Bash tool: `git worktree add ".worktrees/$BRANCH_NAME" -b "$BRANCH_NAME"
-- cd into the newly created path with the Bash tool: `cd $path`
+- Create the worktree with the Bash tool: `git worktree add ".worktrees/$BRANCH_NAME" -b "$BRANCH_NAME"`
+- cd into the newly created path with the Bash tool: `cd .worktrees/$BRANCH_NAME`
 
 4. Auto-detect and run project setup.
 
@@ -119,7 +119,7 @@ Red Flags:
 | Situation                   | Action                     |
 | --------------------------- | -------------------------- |
 | `.worktrees/` exists        | Use it (verify .gitignore) |
-| `.worktree/s does not exist | Check CLAUDE.md → Ask user |
+| `.worktrees/` does not exist | Check CLAUDE.md → Ask user |
 | Directory not in .gitignore | Add it immediately         |
 | Tests fail during baseline  | Report failures + ask      |
 | No package.json/Cargo.toml  | Skip dependency install    |

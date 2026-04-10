@@ -60,7 +60,7 @@ golangci-lint run --fix
 
 5. Use the Task tool to run type checking and fix issues in a subagent.
 
-6. Use the nori-code-reviewer subagent to do a self review. You do *NOT* have to follow the subagent's suggestions. This is merely a way to get a fresh pair of eyes on the code.
+6. Self-review: use `/review-work` command for a multi-perspective review. If `/review-work` is unavailable, use the `review` skill (`~/.claude/skills/review/SKILL.md`) or consult an Oracle agent with the full `git diff`. You do *NOT* have to follow all suggestions — this is merely a fresh pair of eyes on the code.
 
 7. Confirm that you are not on the main branch. If you are, ask me before proceeding. NEVER push to main without permission.
 
@@ -88,7 +88,7 @@ EOF
 9. Merge main and resolve conflicts if necessary.
 
 ```bash
-git fetch && git merge main
+git fetch && git merge origin/main
 ```
 
 10. Make sure the PR branch CI succeeds.

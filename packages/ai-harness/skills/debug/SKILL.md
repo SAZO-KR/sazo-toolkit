@@ -16,9 +16,9 @@ description: Use when faced with a difficult debugging task where you need to re
   - Analyze the output: read logs, identify errors, do whatever you need to.
   - Update the debug script.
 <system-reminder>If you get stuck: did you add logs?</system-reminder>
-5. Identify and fix the issue at hand.
-6. Clean up all background jobs, and remove extraneous logs.
-7. Make sure other tests pass.
+4. Identify and fix the issue at hand.
+5. Clean up all background jobs, and remove extraneous logs.
+6. Make sure other tests pass.
 </required>
 
 # Debug Testing

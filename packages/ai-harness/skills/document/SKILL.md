@@ -1,6 +1,6 @@
 ---
 name: document
-description: Use after code changes to update docs.md files throughout the codebase using the nori-change-documenter subagent.
+description: Use after code changes to update docs.md files throughout the codebase.
 ---
 
 # Updating Noridocs
@@ -24,15 +24,19 @@ Noridocs are docs.md files throughout the codebase that document each folder's p
 - [ ] Which folders/files were modified?
 - [ ] Any architectural changes or new patterns?
 
-### Step 2: Dispatch nori-change-documenter Subagent
+### Step 2: Update docs.md Files
 
-**Use Task tool with nori-change-documenter type:**
+**Option A — nori-change-documenter subagent (if available):**
 
 ```bash
 Task(subagent_type: nori-change-documenter)
 ```
 
-**In the prompt, provide:**
+**Option B — manual update (fallback):**
+
+If `nori-change-documenter` is not installed, update the relevant `docs.md` files directly using the Noridocs Format below. Focus on architectural/system-level changes, not line-by-line diffs.
+
+**In either case, provide/apply:**
 
 - Clear description of what changed and why
 - File paths that were modified
