@@ -54,10 +54,15 @@ exec('./path/to/cli.sh', (error, stdout, stderr) => {
 
 **API:**
 
-Start the server:
+Start the server and save PIDs for clean shutdown:
 ```bash
-cd backend && python server.py&
-cd frontend && npm run dev&
+# Save PIDs so step 6 cleanup can kill exactly these processes
+cd backend && python server.py & echo $! > /tmp/backend.pid
+cd frontend && npm run dev & echo $! > /tmp/frontend.pid
+
+# Cleanup (in step 6):
+# kill $(cat /tmp/backend.pid) $(cat /tmp/frontend.pid) 2>/dev/null
+# rm -f /tmp/backend.pid /tmp/frontend.pid
 ```
 
 Call to the server using scripting language of choice.

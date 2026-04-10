@@ -100,7 +100,8 @@ test('POST /orders returns 201 and persists order', async () => {
 **MANDATORY. Never skip.**
 
 ```bash
-npm test path/to/test.spec.ts
+# Use the project's test command: npm test, pytest, cargo test, go test, etc.
+<project-test-cmd> path/to/test
 ```
 
 - Test must **fail** (not error)
@@ -123,7 +124,8 @@ Write the simplest code to make the test pass. No more.
 **MANDATORY.**
 
 ```bash
-npm test path/to/test.spec.ts
+# Use the project's test command: npm test, pytest, cargo test, go test, etc.
+<project-test-cmd> path/to/test
 ```
 
 - Test must pass

@@ -24,7 +24,18 @@ grep -q "^\.worktrees/$" .gitignore || grep -q "^worktrees/$" .gitignore
 3. Create the worktree
 
 - Come up with a good branch name based on the request.
-- Create the worktree with the Bash tool: `git worktree add ".worktrees/$BRANCH_NAME" -b "$BRANCH_NAME"`
+- Check if the branch already exists, then create the worktree accordingly:
+
+```bash
+if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
+  # Branch exists — attach worktree to it (no -b)
+  git worktree add ".worktrees/$BRANCH_NAME" "$BRANCH_NAME"
+else
+  # Branch does not exist — create it
+  git worktree add ".worktrees/$BRANCH_NAME" -b "$BRANCH_NAME"
+fi
+```
+
 - cd into the newly created path with the Bash tool: `cd .worktrees/$BRANCH_NAME`
 
 4. Auto-detect and run project setup.

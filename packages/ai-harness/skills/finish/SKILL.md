@@ -85,13 +85,16 @@ EOF
 )"
 ```
 
-9. Merge main and resolve conflicts if necessary, then push the merge before checking CI.
+9. Merge the remote default branch and resolve conflicts if necessary, then push the merge before checking CI.
 
 ```bash
-git fetch
+# Detect the remote default branch (handles main, master, develop, etc.)
+DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
 
-# Merge origin/main into the feature branch
-git merge origin/main
+git fetch origin "$DEFAULT_BRANCH"
+
+# Merge the fetched remote default branch into the feature branch
+git merge "origin/$DEFAULT_BRANCH"
 
 # If the merge created a commit (merge commit or conflict resolution),
 # the remote PR HEAD is now stale. Push so that gh pr checks in step 10

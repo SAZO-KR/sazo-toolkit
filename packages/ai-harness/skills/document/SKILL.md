@@ -7,9 +7,9 @@ description: Use after code changes to update docs.md files throughout the codeb
 
 ## Overview
 
-Noridocs are docs.md files throughout the codebase that document each folder's purpose, architecture, and implementation. Update them after code changes using the nori-change-documenter subagent.
+Noridocs are docs.md files throughout the codebase that document each folder's purpose, architecture, and implementation. Update them after code changes — preferably via the `nori-change-documenter` subagent when available, or manually when it isn't.
 
-**Core principle:** Provide context → Dispatch subagent → Verify updates.
+**Core principle:** Provide context → Update docs (subagent or manual) → Verify updates.
 
 **Announce at start:** "I'm using the Updating Noridocs skill to update documentation."
 
@@ -117,12 +117,13 @@ are brittle documentation patterns that will break very quickly.
 
 **Never:**
 
-- Skip providing context to the subagent
+- Skip providing context (to the subagent or your own manual updates)
 - Assume docs were updated without verifying
-- Update docs manually instead of using the subagent
+- Update docs.md files without understanding what changed in the code
 
 **Always:**
 
 - Provide detailed context about what changed and why
-- Verify the subagent updated appropriate docs.md files
+- Prefer the `nori-change-documenter` subagent when available; fall back to manual updates when it isn't
+- Verify the final docs.md files are accurate (regardless of update method)
 - Focus on architectural/system-level changes
