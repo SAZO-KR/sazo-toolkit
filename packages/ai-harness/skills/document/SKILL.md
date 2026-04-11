@@ -17,7 +17,7 @@ Noridocs are docs.md files throughout the codebase that document each folder's p
 
 ### Step 1: Gather Context
 
-**Prepare information for the subagent:**
+**Prepare the following context — this applies to both paths in Step 2 (whether you delegate to the `nori-change-documenter` subagent or update docs.md manually):**
 
 - [ ] What changed? (feature added, bug fixed, refactor, etc.)
 - [ ] Why was it changed? (motivation, problem being solved)
