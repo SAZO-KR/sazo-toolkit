@@ -60,7 +60,13 @@ golangci-lint run --fix
 
 5. Use the Task tool to run type checking and fix issues in a subagent.
 
-6. Self-review: use `/review-work` command for a multi-perspective review. If `/review-work` is unavailable, use the `review` skill (`~/.claude/skills/review/SKILL.md`) or consult an Oracle agent with the full `git diff`. You do *NOT* have to follow all suggestions — this is merely a fresh pair of eyes on the code.
+6. Self-review — run a multi-perspective code review and **treat its verdict as a gating check, not a casual "fresh pair of eyes"**:
+
+   - **Preferred:** use the `/review-work` command. ALL reviewers must PASS to proceed.
+   - **Fallback 1:** follow the `review` skill (`~/.claude/skills/review/SKILL.md`), which launches 5 independent agents (correctness / architecture / security / performance / test quality) under the same PASS/FAIL gate.
+   - **Fallback 2 (last resort):** consult an Oracle agent with the full `git diff`, then apply the same PASS/FAIL criteria manually.
+
+   **Do NOT proceed to push/PR creation while any reviewer reports a correctness, security, or behavioral-regression FAIL.** Minor style/preference suggestions may be deferred at your discretion, but known bugs, security issues, behavioral regressions, or CLAUDE.md / AGENTS.md rule violations MUST be fixed (or explicitly escalated to the user) before Step 7.
 
 7. Confirm that you are not on the main branch. If you are, ask me before proceeding. NEVER push to main without permission.
 

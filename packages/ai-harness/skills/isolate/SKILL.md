@@ -9,11 +9,19 @@ description: Use this whenever you need to create an isolated workspace using gi
 1. Find the worktrees directory. Follow the priority **existing > CLAUDE.md/AGENTS.md > ask**:
 
 - First, check for an existing directory using the Bash tool: `ls -d .worktrees 2>/dev/null`. If it exists, use it.
-- If not found, check the project's `CLAUDE.md` and `AGENTS.md` (repo root and nearest ancestors) for a project-specific worktree location before creating anything:
+- If not found, check the project's `CLAUDE.md` and `AGENTS.md` for a project-specific worktree location before creating anything. **Walk from the current directory up to the git repo root** so the check works even when the skill is invoked from a subdirectory:
   ```bash
-  grep -iE 'worktree' CLAUDE.md AGENTS.md 2>/dev/null
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  DIR=$(pwd)
+  while :; do
+    [ -f "$DIR/CLAUDE.md" ] && grep -iHE 'worktree' "$DIR/CLAUDE.md" 2>/dev/null
+    [ -f "$DIR/AGENTS.md" ] && grep -iHE 'worktree' "$DIR/AGENTS.md" 2>/dev/null
+    [ "$DIR" = "$REPO_ROOT" ] && break
+    [ "$DIR" = "/" ] && break
+    DIR=$(dirname "$DIR")
+  done
   ```
-  If the project defines a different convention, follow it instead of `.worktrees`.
+  If any ancestor `CLAUDE.md` / `AGENTS.md` defines a worktree convention, follow it instead of `.worktrees`.
 - Only if none of the above applies, ask me for permission to create a `.worktrees` directory, and create it if given permission.
 
 2. Verify .gitignore before creating a worktree using the Bash tool:
@@ -142,13 +150,13 @@ Red Flags:
 
 # Quick Reference
 
-| Situation                   | Action                     |
-| --------------------------- | -------------------------- |
-| `.worktrees/` exists        | Use it (verify .gitignore) |
-| `.worktrees/` does not exist | Check CLAUDE.md → Ask user |
-| Directory not in .gitignore | Add it immediately         |
-| Tests fail during baseline  | Report failures + ask      |
-| No package.json/Cargo.toml  | Skip dependency install    |
+| Situation                         | Action                                                                       |
+| --------------------------------- | ---------------------------------------------------------------------------- |
+| Project worktree dir exists       | Use it (verify .gitignore)                                                   |
+| Project worktree dir missing      | Check `CLAUDE.md` / `AGENTS.md` (current dir up to repo root) → else ask user |
+| Directory not in .gitignore       | Add it immediately                                                           |
+| Tests fail during baseline        | Report failures + ask                                                        |
+| No package.json/Cargo.toml        | Skip dependency install                                                      |
 
 # Common Mistakes
 
@@ -160,7 +168,7 @@ Red Flags:
 **Assuming directory location**
 
 - **Problem:** Creates inconsistency, violates project conventions
-- **Fix:** Follow priority: existing > CLAUDE.md > ask
+- **Fix:** Follow priority: existing > `CLAUDE.md` / `AGENTS.md` (including ancestors) > ask
 
 **Missing project installation**
 
@@ -201,11 +209,11 @@ Ready to implement auth feature
 - Skip baseline test verification
 - Proceed with failing tests without asking
 - Assume directory location when ambiguous
-- Skip CLAUDE.md check
+- Skip `CLAUDE.md` / `AGENTS.md` check (including ancestor directories up to the repo root)
 
 **Always:**
 
-- Follow directory priority: existing > CLAUDE.md > ask
+- Follow directory priority: existing > `CLAUDE.md` / `AGENTS.md` (including ancestors) > ask
 - Verify .gitignore for project-local
 - Auto-detect and run project setup
 - Verify clean test baseline

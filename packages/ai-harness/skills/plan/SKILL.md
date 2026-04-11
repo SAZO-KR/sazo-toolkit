@@ -72,7 +72,7 @@ I will add a unit test that ensures baz behaves like qux...
 You should end EVERY testing plan section by writing:
 
 ```markdown
-NOTE: I will write *all* tests before I add any implementation behavior.
+NOTE: The list above enumerates every test I expect to write so the reader can judge coverage up-front. During implementation I will follow the `develop` skill's Kent Beck TDD loop — writing these tests **incrementally, one at a time**, RED → GREEN → REFACTOR — rather than batch-writing all of them before any implementation.
 ```
 
 <system-reminder>Your tests should NOT contain tests for datastructures or
