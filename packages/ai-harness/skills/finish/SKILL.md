@@ -109,10 +109,9 @@ git push
 ```bash
 # Check if the PR CI succeeded
 gh pr checks
-
-# If it is still running, sleep and check again
-sleep 60 && gh pr checks
 ```
+
+If CI is still running, do **NOT** block the bash tool with `sleep` — long blocking sleeps waste the agent's wall-clock and can hit infrastructure timeouts. Instead, continue with other work (or pause and resume the session) and re-run `gh pr checks` after a short interval until CI reports a final result.
 
 If CI did not pass, examine why and fix the issue.
 

@@ -6,35 +6,50 @@ description: Use this whenever you need to create an isolated workspace using gi
 <required>
 *CRITICAL* Add the following steps to your Todo list using TodoWrite:
 
-1. Find the worktrees directory.
+1. Find the worktrees directory. Follow the priority **existing > CLAUDE.md/AGENTS.md > ask**:
 
-- Check existing directories using the Bash tool: `ls -d .worktrees 2>/dev/null`
-- If not found, ask me for permission to create a .worktrees directory
-- If given permission, create `.worktrees`.
+- First, check for an existing directory using the Bash tool: `ls -d .worktrees 2>/dev/null`. If it exists, use it.
+- If not found, check the project's `CLAUDE.md` and `AGENTS.md` (repo root and nearest ancestors) for a project-specific worktree location before creating anything:
+  ```bash
+  grep -iE 'worktree' CLAUDE.md AGENTS.md 2>/dev/null
+  ```
+  If the project defines a different convention, follow it instead of `.worktrees`.
+- Only if none of the above applies, ask me for permission to create a `.worktrees` directory, and create it if given permission.
 
 2. Verify .gitignore before creating a worktree using the Bash tool:
 
 ```bash
-# Check if directory pattern in .gitignore
-grep -q "^\.worktrees/$" .gitignore || grep -q "^worktrees/$" .gitignore
+# Check if directory pattern in .gitignore.
+# Accept all equivalent forms: .worktrees, .worktrees/, /.worktrees, /.worktrees/,
+# and the same without the leading dot.
+grep -qE "^/?\.?worktrees/?$" .gitignore
 ```
 
 - If not found, add the appropriate line to the .gitignore immediately.
 
 3. Create the worktree
 
-- Come up with a good branch name based on the request.
-- Check if the branch already exists, then create the worktree accordingly:
+- Come up with a good branch name based on the request and assign it to `$BRANCH_NAME`.
+- Check for the branch in three locations (local → remote → neither) and create the worktree accordingly:
 
 ```bash
+# Assign the branch name you picked above
+BRANCH_NAME="feature/your-branch-name"
+
 if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
-  # Branch exists — attach worktree to it (no -b)
+  # Local branch exists — attach worktree to it (no -b)
   git worktree add ".worktrees/$BRANCH_NAME" "$BRANCH_NAME"
+elif git ls-remote --exit-code --heads origin "$BRANCH_NAME" >/dev/null 2>&1; then
+  # Remote branch exists but no local — fetch and track origin to preserve history
+  git fetch origin "$BRANCH_NAME"
+  git worktree add ".worktrees/$BRANCH_NAME" -b "$BRANCH_NAME" "origin/$BRANCH_NAME"
 else
-  # Branch does not exist — create it
+  # Branch does not exist anywhere — create new from current HEAD
   git worktree add ".worktrees/$BRANCH_NAME" -b "$BRANCH_NAME"
 fi
 ```
+
+**Why check remote:** If `$BRANCH_NAME` only exists on `origin` (e.g., resuming a teammate's work or an earlier session), creating with just `-b` branches from current HEAD and diverges from the real history — later `git push` fails as non-fast-forward.
 
 - cd into the newly created path with the Bash tool: `cd .worktrees/$BRANCH_NAME`
 
