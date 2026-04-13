@@ -23,6 +23,7 @@ description: Use this whenever you need to create an isolated workspace using gi
   ```
   If any ancestor `CLAUDE.md` / `AGENTS.md` defines a worktree convention, follow it instead of `.worktrees`.
 - Only if none of the above applies, ask me for permission to create a `.worktrees` directory, and create it if given permission.
+- **Remember the chosen directory as `$WORKTREE_DIR`** (e.g., `.worktrees`, `_worktrees`, or whatever the project uses). Steps 2 and 3 reference this variable.
 
 2. Verify .gitignore before creating a worktree using the Bash tool:
 
@@ -38,28 +39,40 @@ grep -qE "^/?\.?worktrees/?$" .gitignore
 3. Create the worktree
 
 - Come up with a good branch name based on the request and assign it to `$BRANCH_NAME`.
-- Check for the branch in three locations (local → remote → neither) and create the worktree accordingly:
+- Handle four scenarios (existing worktree → local branch → remote branch → new branch):
 
 ```bash
 # Assign the branch name you picked above
 BRANCH_NAME="feature/your-branch-name"
+# Use the directory determined in Step 1 (default: .worktrees)
+WORKTREE_DIR=".worktrees"
 
-if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
-  # Local branch exists — attach worktree to it (no -b)
-  git worktree add ".worktrees/$BRANCH_NAME" "$BRANCH_NAME"
+# 1. Check if a worktree for this branch already exists
+EXISTING_WT=$(git worktree list --porcelain \
+  | grep -B2 "branch refs/heads/$BRANCH_NAME$" \
+  | grep "^worktree " | sed 's/^worktree //')
+
+if [ -n "$EXISTING_WT" ]; then
+  # Worktree already exists for this branch — reuse it
+  echo "Reusing existing worktree at: $EXISTING_WT"
+elif git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
+  # Local branch exists, no worktree — attach
+  git worktree add "$WORKTREE_DIR/$BRANCH_NAME" "$BRANCH_NAME"
 elif git ls-remote --exit-code --heads origin "$BRANCH_NAME" >/dev/null 2>&1; then
   # Remote branch exists but no local — fetch and track origin to preserve history
   git fetch origin "$BRANCH_NAME"
-  git worktree add ".worktrees/$BRANCH_NAME" -b "$BRANCH_NAME" "origin/$BRANCH_NAME"
+  git worktree add "$WORKTREE_DIR/$BRANCH_NAME" -b "$BRANCH_NAME" "origin/$BRANCH_NAME"
 else
   # Branch does not exist anywhere — create new from current HEAD
-  git worktree add ".worktrees/$BRANCH_NAME" -b "$BRANCH_NAME"
+  git worktree add "$WORKTREE_DIR/$BRANCH_NAME" -b "$BRANCH_NAME"
 fi
 ```
 
+**Why check existing worktree first:** If the branch is already checked out in another worktree, `git worktree add` will error. Detecting and reusing the existing path lets agents resume prior work without manual cleanup.
+
 **Why check remote:** If `$BRANCH_NAME` only exists on `origin` (e.g., resuming a teammate's work or an earlier session), creating with just `-b` branches from current HEAD and diverges from the real history — later `git push` fails as non-fast-forward.
 
-- cd into the newly created path with the Bash tool: `cd .worktrees/$BRANCH_NAME`
+- cd into the worktree path: `cd $EXISTING_WT` (reuse case) or `cd $WORKTREE_DIR/$BRANCH_NAME` (new worktree case)
 
 4. Auto-detect and run project setup.
 

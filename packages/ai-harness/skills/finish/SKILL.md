@@ -110,6 +110,8 @@ git push
 
 **Why push before CI check:** `gh pr checks` reads the remote PR HEAD. If you merge locally but don't push, step 10 will report CI status for the OLD PR HEAD (possibly passing) while your local branch has new unreviewed merge content — defeating the purpose of the post-merge CI verification.
 
+**If conflict resolution required substantive code changes** (logic changes, API adjustments, new conditional branches — anything beyond trivial import reordering or whitespace), **re-run Step 6 (self-review)** before proceeding to Step 10. The review gate only covered the pre-merge state; conflict-resolution edits that introduce new logic can harbor regressions or security issues that CI alone may not catch. Trivial mechanical merges (no logic changes) do not require re-review.
+
 10. Make sure the PR branch CI succeeds.
 
 ```bash
