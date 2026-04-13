@@ -8,7 +8,12 @@ description: Use this whenever you need to create an isolated workspace using gi
 
 1. Find the worktrees directory. Follow the priority **existing > CLAUDE.md/AGENTS.md > ask**:
 
-- First, check for an existing directory using the Bash tool: `ls -d .worktrees 2>/dev/null`. If it exists, use it.
+- First, check for an existing worktree directory **from the repo root** (the skill may be invoked from a subdirectory):
+  ```bash
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  ls -d "$REPO_ROOT/.worktrees" 2>/dev/null
+  ```
+  If it exists, use it.
 - If not found, check the project's `CLAUDE.md` and `AGENTS.md` for a project-specific worktree location before creating anything. **Walk from the current directory up to the git repo root** so the check works even when the skill is invoked from a subdirectory:
   ```bash
   REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -25,16 +30,17 @@ description: Use this whenever you need to create an isolated workspace using gi
 - Only if none of the above applies, ask me for permission to create a `.worktrees` directory, and create it if given permission.
 - **Remember the chosen directory as `$WORKTREE_DIR`** (e.g., `.worktrees`, `_worktrees`, or whatever the project uses). Steps 2 and 3 reference this variable.
 
-2. Verify .gitignore before creating a worktree using the Bash tool:
+2. Verify .gitignore before creating a worktree using the Bash tool. **Use the `$WORKTREE_DIR` basename from Step 1** — do not hardcode `.worktrees` since the project may use a different name:
 
 ```bash
-# Check if directory pattern in .gitignore.
-# Accept all equivalent forms: .worktrees, .worktrees/, /.worktrees, /.worktrees/,
-# and the same without the leading dot.
-grep -qE "^/?\.?worktrees/?$" .gitignore
+# Derive the directory name to check (e.g., .worktrees, _worktrees, etc.)
+WORKTREE_BASE=$(basename "$WORKTREE_DIR")
+
+# Check if the directory (with or without leading dot/slash) is already ignored
+grep -qE "^/?\.?${WORKTREE_BASE}/?$" "$REPO_ROOT/.gitignore"
 ```
 
-- If not found, add the appropriate line to the .gitignore immediately.
+- If not found, add the appropriate line to `$REPO_ROOT/.gitignore` immediately.
 
 3. Create the worktree
 
