@@ -8,12 +8,25 @@ description: Use this whenever you need to create an isolated workspace using gi
 
 1. Find the worktrees directory. Follow the priority **existing > CLAUDE.md/AGENTS.md > ask**:
 
-- First, check for an existing worktree directory **from the repo root** (the skill may be invoked from a subdirectory):
+- First, check for an existing worktree directory. Do **not** hardcode a single name — the project may use `.worktrees`, `_worktrees`, or anything else:
   ```bash
   REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-  ls -d "$REPO_ROOT/.worktrees" 2>/dev/null
+
+  # 1. If worktrees already exist, derive the parent directory from git itself
+  EXISTING_WT_PARENT=$(git worktree list --porcelain \
+    | grep "^worktree " | sed 's/^worktree //' \
+    | grep -v "^${REPO_ROOT}$" | head -1 | xargs dirname 2>/dev/null)
+
+  if [ -n "$EXISTING_WT_PARENT" ] && [ "$EXISTING_WT_PARENT" != "$REPO_ROOT" ]; then
+    echo "Found existing worktree directory: $EXISTING_WT_PARENT"
+  else
+    # 2. No active worktrees — check common directory names at repo root
+    for d in .worktrees _worktrees worktrees; do
+      [ -d "$REPO_ROOT/$d" ] && echo "Found: $REPO_ROOT/$d" && break
+    done
+  fi
   ```
-  If it exists, use it.
+  If a directory is found, use it.
 - If not found, check the project's `CLAUDE.md` and `AGENTS.md` for a project-specific worktree location before creating anything. **Walk from the current directory up to the git repo root** so the check works even when the skill is invoked from a subdirectory:
   ```bash
   REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -33,11 +46,12 @@ description: Use this whenever you need to create an isolated workspace using gi
 2. Verify .gitignore before creating a worktree using the Bash tool. **Use the `$WORKTREE_DIR` basename from Step 1** — do not hardcode `.worktrees` since the project may use a different name:
 
 ```bash
-# Derive the directory name to check (e.g., .worktrees, _worktrees, etc.)
+# Derive the directory name and escape regex metacharacters (e.g., the "." in .worktrees)
 WORKTREE_BASE=$(basename "$WORKTREE_DIR")
+WORKTREE_BASE_ESC=$(printf '%s' "$WORKTREE_BASE" | sed 's/[.[\*^$()+?{|\\]/\\&/g')
 
-# Check if the directory (with or without leading dot/slash) is already ignored
-grep -qE "^/?\.?${WORKTREE_BASE}/?$" "$REPO_ROOT/.gitignore"
+# Check if the directory (with or without leading slash / trailing slash) is already ignored
+grep -qE "^/?${WORKTREE_BASE_ESC}/?$" "$REPO_ROOT/.gitignore"
 ```
 
 - If not found, add the appropriate line to `$REPO_ROOT/.gitignore` immediately.
