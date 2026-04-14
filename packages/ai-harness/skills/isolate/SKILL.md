@@ -36,16 +36,22 @@ description: Use this whenever you need to create an isolated workspace using gi
     }
   ')
 
+  WORKTREE_DIR=""  # set below; required by Steps 2 and 3
   if [ -n "$EXISTING_WT_PARENT" ]; then
-    echo "Found existing worktree directory: $EXISTING_WT_PARENT"
+    WORKTREE_DIR="$EXISTING_WT_PARENT"
+    echo "Found existing worktree directory: $WORKTREE_DIR"
   else
     # 2. No active worktrees — check common directory names at repo root
     for d in .worktrees _worktrees worktrees; do
-      [ -d "$REPO_ROOT/$d" ] && echo "Found: $REPO_ROOT/$d" && break
+      if [ -d "$REPO_ROOT/$d" ]; then
+        WORKTREE_DIR="$REPO_ROOT/$d"
+        echo "Found: $WORKTREE_DIR"
+        break
+      fi
     done
   fi
   ```
-  If a directory is found, use it.
+  If a directory is found, `$WORKTREE_DIR` is now assigned and Steps 2–3 will use it.
 - If not found, check the project's `CLAUDE.md` and `AGENTS.md` for a project-specific worktree location before creating anything. **Walk from the current directory up to the git repo root** so the check works even when the skill is invoked from a subdirectory:
   ```bash
   REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -58,9 +64,9 @@ description: Use this whenever you need to create an isolated workspace using gi
     DIR=$(dirname "$DIR")
   done
   ```
-  If any ancestor `CLAUDE.md` / `AGENTS.md` defines a worktree convention, follow it instead of `.worktrees`.
-- Only if none of the above applies, ask me for permission to create a `.worktrees` directory, and create it if given permission.
-- **Remember the chosen directory as `$WORKTREE_DIR`** (e.g., `.worktrees`, `_worktrees`, or whatever the project uses). Steps 2 and 3 reference this variable.
+  If any ancestor `CLAUDE.md` / `AGENTS.md` defines a worktree convention, assign that path (resolved against the repo root) to `$WORKTREE_DIR` — e.g., `WORKTREE_DIR="$REPO_ROOT/custom-worktrees"`.
+- Only if none of the above applies, ask me for permission to create a `.worktrees` directory, and if given permission: `WORKTREE_DIR="$REPO_ROOT/.worktrees"; mkdir -p "$WORKTREE_DIR"`.
+- **At the end of Step 1, `$WORKTREE_DIR` MUST be a non-empty path** — Steps 2 and 3 consume it. If you reached this point without a value, stop and ask the user.
 
 2. Verify .gitignore before creating a worktree using the Bash tool. **Only applies when `$WORKTREE_DIR` is inside the repo** — worktrees that live outside the repo do not need (and should not get) an entry in repo `.gitignore`, since adding the basename could accidentally ignore an unrelated in-repo directory with the same name:
 
