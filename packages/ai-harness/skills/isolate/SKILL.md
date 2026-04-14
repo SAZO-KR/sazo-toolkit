@@ -59,9 +59,17 @@ description: Use this whenever you need to create an isolated workspace using gi
 2. Verify .gitignore before creating a worktree using the Bash tool. **Only applies when `$WORKTREE_DIR` is inside the repo** — worktrees that live outside the repo do not need (and should not get) an entry in repo `.gitignore`, since adding the basename could accidentally ignore an unrelated in-repo directory with the same name:
 
 ```bash
-# Resolve $WORKTREE_DIR to an absolute path so we can compare with $REPO_ROOT
+# Resolve $WORKTREE_DIR to an absolute path so we can compare with $REPO_ROOT.
+# Directory may not exist yet — handle both "exists but relative" and "doesn't
+# exist" cases by resolving relative paths against $REPO_ROOT rather than
+# leaving them as raw strings (which would be misclassified as outside-repo).
 WT_ABS=$(cd "$WORKTREE_DIR" 2>/dev/null && pwd)
-WT_ABS=${WT_ABS:-$WORKTREE_DIR}  # fallback: path may not exist yet
+if [ -z "$WT_ABS" ]; then
+  case "$WORKTREE_DIR" in
+    /*) WT_ABS="$WORKTREE_DIR" ;;                # already absolute
+    *)  WT_ABS="$REPO_ROOT/$WORKTREE_DIR" ;;     # relative → resolve against repo root
+  esac
+fi
 
 # Only validate .gitignore when the worktree dir is inside the repo
 case "$WT_ABS/" in
@@ -89,8 +97,10 @@ esac
 ```bash
 # Assign the branch name you picked above
 BRANCH_NAME="feature/your-branch-name"
-# Use the directory determined in Step 1 (default: .worktrees)
-WORKTREE_DIR=".worktrees"
+# $WORKTREE_DIR was already determined in Step 1 (may be .worktrees,
+# _worktrees, or a project-specific path). Only set a fallback if unset —
+# do NOT overwrite the value Step 1 derived.
+: "${WORKTREE_DIR:=.worktrees}"
 
 # 1. Check if a worktree for this branch already exists.
 #    Use awk with a literal string compare so branch names containing regex
