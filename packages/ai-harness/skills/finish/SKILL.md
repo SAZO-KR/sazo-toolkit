@@ -12,8 +12,19 @@ description: Use when implementation and tests are complete and you are ready to
 # Detect EVERY stack present in the repo and run each matching test suite.
 # Must be additive (not if/elif) — polyglot repos with both package.json and
 # go.mod would otherwise silently skip one language's tests before PR gating.
+#
+# For Node, only run `npm test` when a "test" script is actually defined —
+# otherwise `npm test` exits 1 in tooling-only packages (scripts.test missing)
+# and would falsely fail the PR gate.
 RAN=0
-if [ -f package.json ];                        then npm test;          RAN=1; fi
+if [ -f package.json ]; then
+  HAS_TEST=$(
+    command -v jq >/dev/null 2>&1 \
+      && jq -r '.scripts.test // empty' package.json \
+      || node -e "console.log((require('./package.json').scripts||{}).test||'')" 2>/dev/null
+  )
+  if [ -n "$HAS_TEST" ]; then npm test; RAN=1; fi
+fi
 if [ -f Cargo.toml ];                          then cargo test;        RAN=1; fi
 if [ -f pyproject.toml ] || [ -f pytest.ini ] \
   || [ -f setup.py ]     || [ -f tox.ini ];    then pytest;            RAN=1; fi

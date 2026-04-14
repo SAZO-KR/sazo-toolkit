@@ -187,7 +187,14 @@ if [ -f package.json ]; then
   elif [ -f bun.lockb ] || [ -f bun.lock ];       then bun install
   elif [ -f package-lock.json ];                  then npm install
   else
-    PM=$(jq -r '.packageManager // empty' package.json 2>/dev/null | cut -d@ -f1)
+    # Read packageManager via jq with node fallback (environments without jq
+    # but with a `packageManager` field would otherwise misinstall with npm).
+    PM=$(
+      command -v jq >/dev/null 2>&1 \
+        && jq -r '.packageManager // empty' package.json 2>/dev/null \
+        || node -e "console.log(require('./package.json').packageManager||'')" 2>/dev/null
+    )
+    PM=$(echo "$PM" | cut -d@ -f1)
     case "$PM" in
       pnpm) pnpm install ;;
       yarn) yarn install ;;
