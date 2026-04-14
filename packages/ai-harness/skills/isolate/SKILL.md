@@ -74,12 +74,17 @@ fi
 # Only validate .gitignore when the worktree dir is inside the repo
 case "$WT_ABS/" in
   "$REPO_ROOT"/*)
-    # Derive the directory name and escape regex metacharacters (e.g., the "." in .worktrees)
-    WORKTREE_BASE=$(basename "$WORKTREE_DIR")
-    WORKTREE_BASE_ESC=$(printf '%s' "$WORKTREE_BASE" | sed 's/[.[\*^$()+?{|\\]/\\&/g')
+    # Use the REPO-RELATIVE path, not basename. Gitignore semantics:
+    # a bare `worktrees/` pattern matches ANY directory named `worktrees`
+    # at any depth, which can accidentally ignore unrelated paths. A path
+    # anchored from the repo root (e.g., `tools/worktrees/`) matches only
+    # that specific location.
+    WT_REL="${WT_ABS#$REPO_ROOT/}"
+    WT_REL_ESC=$(printf '%s' "$WT_REL" | sed 's/[.[\*^$()+?{|\\]/\\&/g')
 
-    # Check if the directory (with or without leading slash / trailing slash) is already ignored
-    grep -qE "^/?${WORKTREE_BASE_ESC}/?$" "$REPO_ROOT/.gitignore"
+    # Check if the exact repo-relative path (with or without leading slash /
+    # trailing slash) is already ignored
+    grep -qE "^/?${WT_REL_ESC}/?$" "$REPO_ROOT/.gitignore"
     ;;
   *)
     echo "Worktree dir is outside the repo — skipping .gitignore check"
@@ -87,7 +92,7 @@ case "$WT_ABS/" in
 esac
 ```
 
-- If the worktree dir is inside the repo and the pattern is not found, add the appropriate line to `$REPO_ROOT/.gitignore` immediately.
+- If the worktree dir is inside the repo and the pattern is not found, add a repo-relative entry (e.g., `/tools/worktrees/` or `/.worktrees/`) to `$REPO_ROOT/.gitignore` immediately. Do not use the basename alone.
 
 3. Create the worktree
 
@@ -101,6 +106,17 @@ BRANCH_NAME="feature/your-branch-name"
 # _worktrees, or a project-specific path). Only set a fallback if unset —
 # do NOT overwrite the value Step 1 derived.
 : "${WORKTREE_DIR:=.worktrees}"
+
+# Normalize to an absolute path anchored at $REPO_ROOT so that the
+# `git worktree add` commands below work correctly regardless of the
+# current working directory. A bare relative $WORKTREE_DIR would be
+# resolved against $PWD, which breaks when the skill is invoked from
+# a subdirectory (e.g., `src/foo/.worktrees/...` instead of the
+# discovered project worktree directory).
+case "$WORKTREE_DIR" in
+  /*) WT_PATH="$WORKTREE_DIR" ;;
+  *)  WT_PATH="$REPO_ROOT/$WORKTREE_DIR" ;;
+esac
 
 # 1. Check if a worktree for this branch already exists.
 #    Use awk with a literal string compare so branch names containing regex
@@ -116,14 +132,14 @@ if [ -n "$EXISTING_WT" ]; then
   echo "Reusing existing worktree at: $EXISTING_WT"
 elif git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
   # Local branch exists, no worktree — attach
-  git worktree add "$WORKTREE_DIR/$BRANCH_NAME" "$BRANCH_NAME"
+  git worktree add "$WT_PATH/$BRANCH_NAME" "$BRANCH_NAME"
 elif git ls-remote --exit-code --heads origin "$BRANCH_NAME" >/dev/null 2>&1; then
   # Remote branch exists but no local — fetch and track origin to preserve history
   git fetch origin "$BRANCH_NAME"
-  git worktree add "$WORKTREE_DIR/$BRANCH_NAME" -b "$BRANCH_NAME" "origin/$BRANCH_NAME"
+  git worktree add "$WT_PATH/$BRANCH_NAME" -b "$BRANCH_NAME" "origin/$BRANCH_NAME"
 else
   # Branch does not exist anywhere — create new from current HEAD
-  git worktree add "$WORKTREE_DIR/$BRANCH_NAME" -b "$BRANCH_NAME"
+  git worktree add "$WT_PATH/$BRANCH_NAME" -b "$BRANCH_NAME"
 fi
 ```
 
@@ -131,7 +147,7 @@ fi
 
 **Why check remote:** If `$BRANCH_NAME` only exists on `origin` (e.g., resuming a teammate's work or an earlier session), creating with just `-b` branches from current HEAD and diverges from the real history — later `git push` fails as non-fast-forward.
 
-- cd into the worktree path: `cd $EXISTING_WT` (reuse case) or `cd $WORKTREE_DIR/$BRANCH_NAME` (new worktree case)
+- cd into the worktree path: `cd "$EXISTING_WT"` (reuse case) or `cd "$WT_PATH/$BRANCH_NAME"` (new worktree case)
 
 4. Auto-detect and run project setup.
 
