@@ -28,9 +28,16 @@ Noridocs are docs.md files throughout the codebase that document each folder's p
 
 **Option A — nori-change-documenter subagent (if available):**
 
-```bash
-Task(subagent_type: nori-change-documenter)
+Launch via the Task tool (same invocation style as `skills/review/SKILL.md`):
+
 ```
+Task(
+  subagent_type="nori-change-documenter",
+  prompt="[what changed + why + which files — see Step 1 context]"
+)
+```
+
+Note: this is a Task tool call, NOT a shell command. Do not wrap it in a `bash` block or run it through `sh`.
 
 **Option B — manual update (fallback):**
 
