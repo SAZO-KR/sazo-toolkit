@@ -129,6 +129,15 @@ cp skills/_TEMPLATE/permissions.json skills/my-skill/permissions.json
 - 기본 allow에 이미 있는 명령(`gh api:*`, `git:*`, `jq:*` 등)은 선언 불필요
 - 추가가 필요한 명령이 없으면 `permissions.json` 파일 자체를 두지 않아도 됨
 
+**DO / DON'T:**
+
+| ✅ DO | ❌ DON'T | 이유 |
+| --- | --- | --- |
+| `"date:*"` | `"Bash(date:*)"` | `Bash(...)`는 자동으로 wrap되므로 이중 wrap 방지 |
+| `"sleep:*"` | `"sleep"` | prefix 매칭에 `:*` 필수 (뒤 인자 허용) |
+| `"echo:*"` | `"for:*"`, `"while:*"`, `"if:*"` | bash keyword는 권한 매칭 대상이 아님 (실행되는 외부 명령만 선언) |
+| 실제 실행되는 유틸만 (date/sleep/echo/seq 등) | 보호 위해 과도하게 선언 | dead entry 양산. 스킬 SKILL.md에서 실제 호출하는 명령만 나열 |
+
 #### Agent 추가
 
 ```bash

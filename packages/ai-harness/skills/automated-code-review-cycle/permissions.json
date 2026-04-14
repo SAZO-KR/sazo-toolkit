@@ -3,9 +3,6 @@
     "date:*",
     "sleep:*",
     "echo:*",
-    "seq:*",
-    "for:*",
-    "while:*",
-    "if:*"
+    "seq:*"
   ]
 }
