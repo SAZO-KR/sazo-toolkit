@@ -116,7 +116,11 @@ case "$WT_ABS/" in
 esac
 ```
 
-- If the worktree dir is inside the repo and the pattern is not found, add a repo-relative entry (e.g., `/tools/worktrees/` or `/.worktrees/`) to `$REPO_ROOT/.gitignore` immediately. Do not use the basename alone.
+- If the worktree dir is inside the repo and the pattern is not found, add a repo-relative entry to `$REPO_ROOT/.gitignore` immediately — run:
+  ```bash
+  echo "/$WT_REL/" >> "$REPO_ROOT/.gitignore"
+  ```
+  This writes a root-anchored entry like `/tools/worktrees/` or `/.worktrees/`. Do not use the basename alone.
 
 3. Create the worktree
 

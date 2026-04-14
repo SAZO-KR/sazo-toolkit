@@ -29,7 +29,11 @@ Cannot proceed until tests pass.
 
 ```bash
 # Node.js/JavaScript/TypeScript
-ls package.json 2>/dev/null && jq -r '.scripts | keys[]' package.json | grep -E 'format|lint'
+ls package.json 2>/dev/null && \
+  { command -v jq >/dev/null 2>&1 \
+      && jq -r '.scripts | keys[]' package.json \
+      || node -e "console.log(Object.keys(require('./package.json').scripts||{}).join('\n'))"; } \
+  | grep -E 'format|lint'
 
 # Rust
 ls rustfmt.toml .rustfmt.toml 2>/dev/null
@@ -76,8 +80,10 @@ golangci-lint run --fix
 # Push branch
 git push -u origin <feature-branch>
 
-# Create PR
-gh pr create --title "<title>" --body "$(cat <<'EOF'
+# Create PR — use --body-file with a temp file (safer than inline --body for
+# bodies containing quotes, backticks, or other shell metachars).
+PR_BODY_FILE=$(mktemp)
+cat <<'EOF' > "$PR_BODY_FILE"
 ## Summary
 🤖 Generated with [Nori](https://www.npmjs.com/package/nori-ai)
 
@@ -88,7 +94,9 @@ gh pr create --title "<title>" --body "$(cat <<'EOF'
 
 Share Nori with your team: https://www.npmjs.com/package/nori-ai
 EOF
-)"
+
+gh pr create --title "<title>" --body-file "$PR_BODY_FILE"
+rm -f "$PR_BODY_FILE"
 ```
 
 9. Merge the remote default branch and resolve conflicts if necessary, then push the merge before checking CI.
