@@ -67,10 +67,14 @@ BRANCH_NAME="feature/your-branch-name"
 # Use the directory determined in Step 1 (default: .worktrees)
 WORKTREE_DIR=".worktrees"
 
-# 1. Check if a worktree for this branch already exists
+# 1. Check if a worktree for this branch already exists.
+#    Use awk with a literal string compare so branch names containing regex
+#    metacharacters (e.g., `release/1.0`) aren't matched against siblings.
 EXISTING_WT=$(git worktree list --porcelain \
-  | grep -B2 "branch refs/heads/$BRANCH_NAME$" \
-  | grep "^worktree " | sed 's/^worktree //')
+  | awk -v b="refs/heads/$BRANCH_NAME" '
+      /^worktree / { wt = substr($0, 10) }
+      $0 == "branch " b { print wt; exit }
+    ')
 
 if [ -n "$EXISTING_WT" ]; then
   # Worktree already exists for this branch — reuse it

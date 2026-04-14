@@ -117,7 +117,7 @@ Each reviewer returns **PASS** or **FAIL**. The threshold:
 
 ```
 For each of the 5 perspectives, use Task tool:
-  task(
+  Task(
     subagent_type="oracle",
     run_in_background=true,
     load_skills=[],
