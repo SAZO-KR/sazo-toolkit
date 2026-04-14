@@ -26,7 +26,7 @@ merge_skill_permissions() {
         return 0
     fi
 
-    if [ ! -f "$settings_file" ]; then
+    if [ ! -f "$settings_file" ] || [ ! -s "$settings_file" ] || ! jq -e 'type == "object"' "$settings_file" >/dev/null 2>&1; then
         mkdir -p "$(dirname "$settings_file")"
         echo '{}' > "$settings_file"
     fi
