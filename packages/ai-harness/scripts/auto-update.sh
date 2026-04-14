@@ -120,11 +120,15 @@ if git fetch origin main --quiet 2>/dev/null; then
 
             PERMISSIONS_MERGE_SCRIPT="$HARNESS_DIR/scripts/merge-permissions.sh"
             if [ -f "$PERMISSIONS_MERGE_SCRIPT" ]; then
-                # shellcheck disable=SC1090
-                source "$PERMISSIONS_MERGE_SCRIPT"
-                PERM_ADDED=$(merge_skill_permissions "$HARNESS_DIR/skills" "$HOME/.claude/settings.json")
-                if [ "${PERM_ADDED:-0}" -gt 0 ] 2>/dev/null; then
-                    log "Merged $PERM_ADDED new skill permissions into settings.allow"
+                if ! command -v jq >/dev/null 2>&1; then
+                    log "SKIP: jq not found — skill permissions merge skipped"
+                else
+                    # shellcheck disable=SC1090
+                    source "$PERMISSIONS_MERGE_SCRIPT"
+                    PERM_ADDED=$(merge_skill_permissions "$HARNESS_DIR/skills" "$HOME/.claude/settings.json" 2>>"$LOG_FILE")
+                    if [ "${PERM_ADDED:-0}" -gt 0 ] 2>/dev/null; then
+                        log "Merged $PERM_ADDED new skill permissions into settings.allow"
+                    fi
                 fi
             fi
         else

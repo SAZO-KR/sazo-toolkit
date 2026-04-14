@@ -45,8 +45,20 @@ merge_skill_permissions() {
         esac
 
         local bash_perms=""
-        bash_perms=$(jq -c '.bash // [] | map("Bash(" + . + ")")' "$perm_file" 2>/dev/null) || continue
-        [ -z "$bash_perms" ] && continue
+        bash_perms=$(jq -c '
+            if (.bash | type) == "array"
+            then [.bash[] | select(type == "string") | "Bash(" + . + ")"]
+            else []
+            end
+        ' "$perm_file" 2>/dev/null)
+
+        if [ -z "$bash_perms" ] || [ "$bash_perms" = "null" ]; then
+            echo "  WARN: $perm_file — invalid or empty .bash array, skipped" >&2
+            continue
+        fi
+        if [ "$bash_perms" = "[]" ]; then
+            continue
+        fi
 
         all_bash=$(echo "$all_bash" | jq -c --argjson new "$bash_perms" '. + $new')
         skill_count=$((skill_count + 1))
