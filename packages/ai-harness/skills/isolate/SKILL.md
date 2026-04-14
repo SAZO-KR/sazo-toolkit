@@ -12,11 +12,13 @@ description: Use this whenever you need to create an isolated workspace using gi
   ```bash
   REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 
-  # 1. If worktrees already exist, derive the shared root by stripping the
-  #    FULL branch path (which may contain "/") from each worktree path.
-  #    A naive single `dirname` would break for branch names like
-  #    `feature/auth` — /repo/.worktrees/feature/auth → /repo/.worktrees/feature
-  #    (wrong). The awk below strips the exact "/<branch>" suffix.
+  # 1. If worktrees already exist, derive the shared root.
+  #    Primary path: strip the FULL branch path (may contain "/") from the
+  #    worktree path. A naive single `dirname` would break for `feature/auth`
+  #    branches — /repo/.worktrees/feature/auth → /repo/.worktrees/feature (wrong).
+  #    Fallback: if the worktree path doesn't follow the "<parent>/<branch>"
+  #    convention (e.g., `git worktree add /tmp/wt-auth feature/auth`), fall
+  #    back to plain dirname so the existing location is still discovered.
   EXISTING_WT_PARENT=$(git worktree list --porcelain | awk -v root="$REPO_ROOT" '
     /^worktree / { wt = substr($0, 10); next }
     /^branch refs\/heads\// {
@@ -25,8 +27,12 @@ description: Use this whenever you need to create an isolated workspace using gi
       if (length(wt) > length(suffix) && \
           substr(wt, length(wt) - length(suffix) + 1) == suffix) {
         parent = substr(wt, 1, length(wt) - length(suffix))
-        if (parent != root) { print parent; exit }
+      } else {
+        # Non-standard layout — use dirname as best-effort parent
+        parent = wt
+        sub("/[^/]*$", "", parent)
       }
+      if (parent != root && parent != "") { print parent; exit }
     }
   ')
 
@@ -59,15 +65,27 @@ description: Use this whenever you need to create an isolated workspace using gi
 2. Verify .gitignore before creating a worktree using the Bash tool. **Only applies when `$WORKTREE_DIR` is inside the repo** — worktrees that live outside the repo do not need (and should not get) an entry in repo `.gitignore`, since adding the basename could accidentally ignore an unrelated in-repo directory with the same name:
 
 ```bash
-# Resolve $WORKTREE_DIR to an absolute path so we can compare with $REPO_ROOT.
-# Directory may not exist yet — handle both "exists but relative" and "doesn't
-# exist" cases by resolving relative paths against $REPO_ROOT rather than
-# leaving them as raw strings (which would be misclassified as outside-repo).
-WT_ABS=$(cd "$WORKTREE_DIR" 2>/dev/null && pwd)
+# Canonicalize $WORKTREE_DIR to an absolute path WITH ".." segments collapsed,
+# resolved against $REPO_ROOT (not $PWD). This matters because:
+#   1. A config like "../worktrees" would textually match `"$REPO_ROOT"/*`
+#      while actually resolving outside the repo → wrong .gitignore edits.
+#   2. Relative paths must be interpreted relative to the repo, not to
+#      wherever the skill happens to be invoked from.
+if command -v python3 >/dev/null 2>&1; then
+  WT_ABS=$(python3 -c \
+    'import os,sys; print(os.path.normpath(os.path.join(sys.argv[1], sys.argv[2])))' \
+    "$REPO_ROOT" "$WORKTREE_DIR")
+elif command -v realpath >/dev/null 2>&1; then
+  # realpath -m doesn't take a base dir; cd to $REPO_ROOT first so the
+  # relative path is resolved against it, not $PWD.
+  WT_ABS=$(cd "$REPO_ROOT" && (realpath -m "$WORKTREE_DIR" 2>/dev/null \
+                             || realpath "$WORKTREE_DIR" 2>/dev/null))
+fi
+# Hard fallback (no canonicalizer — won't collapse ".." but keeps skill runnable)
 if [ -z "$WT_ABS" ]; then
   case "$WORKTREE_DIR" in
-    /*) WT_ABS="$WORKTREE_DIR" ;;                # already absolute
-    *)  WT_ABS="$REPO_ROOT/$WORKTREE_DIR" ;;     # relative → resolve against repo root
+    /*) WT_ABS="$WORKTREE_DIR" ;;
+    *)  WT_ABS="$REPO_ROOT/$WORKTREE_DIR" ;;
   esac
 fi
 
