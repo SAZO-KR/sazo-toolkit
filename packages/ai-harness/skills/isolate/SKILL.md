@@ -218,14 +218,18 @@ if [ -f go.mod ]; then go mod download; fi
 
 - If there is no obvious project setup, you _MUST_ ask me.
 
-5. Run tests to ensure the worktree is clean.
+5. Run tests to ensure the worktree is clean. Detect EVERY stack present and run each matching suite — polyglot repos would otherwise silently skip one language.
 
 ```bash
-# Examples - use project-appropriate command
-npm test
-cargo test
-pytest
-go test ./...
+RAN=0
+if [ -f package.json ];                        then npm test;          RAN=1; fi
+if [ -f Cargo.toml ];                          then cargo test;        RAN=1; fi
+if [ -f pyproject.toml ] || [ -f pytest.ini ] \
+  || [ -f setup.py ]     || [ -f tox.ini ];    then pytest;            RAN=1; fi
+if [ -f go.mod ];                              then go test ./...;     RAN=1; fi
+if [ "$RAN" = "0" ]; then
+  echo "No recognized test suite — ask the user which command to run"
+fi
 ```
 
 **If tests fail:** Report failures, ask whether to proceed or investigate.
