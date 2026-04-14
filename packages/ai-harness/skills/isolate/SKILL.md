@@ -12,12 +12,25 @@ description: Use this whenever you need to create an isolated workspace using gi
   ```bash
   REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 
-  # 1. If worktrees already exist, derive the parent directory from git itself
-  EXISTING_WT_PARENT=$(git worktree list --porcelain \
-    | grep "^worktree " | sed 's/^worktree //' \
-    | grep -v "^${REPO_ROOT}$" | head -1 | xargs dirname 2>/dev/null)
+  # 1. If worktrees already exist, derive the shared root by stripping the
+  #    FULL branch path (which may contain "/") from each worktree path.
+  #    A naive single `dirname` would break for branch names like
+  #    `feature/auth` — /repo/.worktrees/feature/auth → /repo/.worktrees/feature
+  #    (wrong). The awk below strips the exact "/<branch>" suffix.
+  EXISTING_WT_PARENT=$(git worktree list --porcelain | awk -v root="$REPO_ROOT" '
+    /^worktree / { wt = substr($0, 10); next }
+    /^branch refs\/heads\// {
+      branch = substr($0, 19)
+      suffix = "/" branch
+      if (length(wt) > length(suffix) && \
+          substr(wt, length(wt) - length(suffix) + 1) == suffix) {
+        parent = substr(wt, 1, length(wt) - length(suffix))
+        if (parent != root) { print parent; exit }
+      }
+    }
+  ')
 
-  if [ -n "$EXISTING_WT_PARENT" ] && [ "$EXISTING_WT_PARENT" != "$REPO_ROOT" ]; then
+  if [ -n "$EXISTING_WT_PARENT" ]; then
     echo "Found existing worktree directory: $EXISTING_WT_PARENT"
   else
     # 2. No active worktrees — check common directory names at repo root
@@ -43,18 +56,30 @@ description: Use this whenever you need to create an isolated workspace using gi
 - Only if none of the above applies, ask me for permission to create a `.worktrees` directory, and create it if given permission.
 - **Remember the chosen directory as `$WORKTREE_DIR`** (e.g., `.worktrees`, `_worktrees`, or whatever the project uses). Steps 2 and 3 reference this variable.
 
-2. Verify .gitignore before creating a worktree using the Bash tool. **Use the `$WORKTREE_DIR` basename from Step 1** — do not hardcode `.worktrees` since the project may use a different name:
+2. Verify .gitignore before creating a worktree using the Bash tool. **Only applies when `$WORKTREE_DIR` is inside the repo** — worktrees that live outside the repo do not need (and should not get) an entry in repo `.gitignore`, since adding the basename could accidentally ignore an unrelated in-repo directory with the same name:
 
 ```bash
-# Derive the directory name and escape regex metacharacters (e.g., the "." in .worktrees)
-WORKTREE_BASE=$(basename "$WORKTREE_DIR")
-WORKTREE_BASE_ESC=$(printf '%s' "$WORKTREE_BASE" | sed 's/[.[\*^$()+?{|\\]/\\&/g')
+# Resolve $WORKTREE_DIR to an absolute path so we can compare with $REPO_ROOT
+WT_ABS=$(cd "$WORKTREE_DIR" 2>/dev/null && pwd)
+WT_ABS=${WT_ABS:-$WORKTREE_DIR}  # fallback: path may not exist yet
 
-# Check if the directory (with or without leading slash / trailing slash) is already ignored
-grep -qE "^/?${WORKTREE_BASE_ESC}/?$" "$REPO_ROOT/.gitignore"
+# Only validate .gitignore when the worktree dir is inside the repo
+case "$WT_ABS/" in
+  "$REPO_ROOT"/*)
+    # Derive the directory name and escape regex metacharacters (e.g., the "." in .worktrees)
+    WORKTREE_BASE=$(basename "$WORKTREE_DIR")
+    WORKTREE_BASE_ESC=$(printf '%s' "$WORKTREE_BASE" | sed 's/[.[\*^$()+?{|\\]/\\&/g')
+
+    # Check if the directory (with or without leading slash / trailing slash) is already ignored
+    grep -qE "^/?${WORKTREE_BASE_ESC}/?$" "$REPO_ROOT/.gitignore"
+    ;;
+  *)
+    echo "Worktree dir is outside the repo — skipping .gitignore check"
+    ;;
+esac
 ```
 
-- If not found, add the appropriate line to `$REPO_ROOT/.gitignore` immediately.
+- If the worktree dir is inside the repo and the pattern is not found, add the appropriate line to `$REPO_ROOT/.gitignore` immediately.
 
 3. Create the worktree
 
