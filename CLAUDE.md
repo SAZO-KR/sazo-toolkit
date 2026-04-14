@@ -31,6 +31,7 @@ packages/
 - `_TEMPLATE*` 파일은 link 대상에서 제외됨
 - `install.sh` 수정 시 → 반드시 새 환경에서 테스트 (기존 설치 깨뜨리지 않는지)
 - `scripts/auto-update.sh` → SessionStart 훅으로 실행됨. 비대화형이어야 함.
+- **스킬 권한 선언 필수**: 스킬이 기본 allow 리스트에 없는 bash 명령(`date`, `sleep`, `echo`, `seq` 등)을 사용하면, 해당 스킬 디렉토리에 `permissions.json`을 두어 declare한다. `install.sh`와 `auto-update.sh`가 자동으로 `~/.claude/settings.json`의 `permissions.allow`에 union한다. 상세는 `packages/ai-harness/README.md` 참조.
 
 ### Go 패키지 (Slack 봇)
 

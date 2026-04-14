@@ -108,6 +108,27 @@ description: 언제 사용하는지 설명
 
 **핵심 패턴:** `<required>` 블록으로 TodoWrite 체크리스트 정의
 
+**스킬이 요구하는 bash 권한 선언 (필수):**
+
+스킬이 `~/.claude/settings.json` 기본 `permissions.allow`에 없는 bash 명령(예: `date`, `sleep`, `echo`, `seq` 등)을 사용한다면, **반드시** 해당 스킬 디렉토리에 `permissions.json`을 두어야 한다. 그렇지 않으면 사용자가 스킬 실행 중 반복적으로 권한 승인을 요구받게 된다.
+
+```bash
+cp skills/_TEMPLATE/permissions.json skills/my-skill/permissions.json
+```
+
+포맷:
+
+```json
+{
+  "bash": ["date:*", "sleep:*", "echo:*", "seq:*"]
+}
+```
+
+- 값은 `Bash(...)` 권한 표기의 괄호 **안쪽** 패턴 — `date:*`는 `Bash(date:*)`로 wrap되어 `~/.claude/settings.json`의 `permissions.allow`에 union됨
+- `install.sh` 설치 시점과 `auto-update.sh` 세션 시작 시점에 자동 merge (중복·커스텀 엔트리 보존)
+- 기본 allow에 이미 있는 명령(`gh api:*`, `git:*`, `jq:*` 등)은 선언 불필요
+- 추가가 필요한 명령이 없으면 `permissions.json` 파일 자체를 두지 않아도 됨
+
 #### Agent 추가
 
 ```bash

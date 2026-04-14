@@ -1,0 +1,4 @@
+{
+  "_comment": "이 스킬이 실행 시 호출하는 bash 명령 중 기본 allow 리스트에 없는 것들을 선언한다. 값은 Claude Code 권한 표기 'Bash(...)' 안에 들어갈 패턴. 예: 'date:*' → 'Bash(date:*)'. 이 파일을 통해 설치/업데이트 시점에 ~/.claude/settings.json 의 permissions.allow 에 자동 union 된다. 필요 없으면 이 파일을 삭제해도 된다.",
+  "bash": []
+}
