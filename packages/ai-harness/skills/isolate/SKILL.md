@@ -229,7 +229,17 @@ if [ -f go.mod ]; then go mod download; fi
 
 ```bash
 RAN=0
-if [ -f package.json ];                        then npm test;          RAN=1; fi
+if [ -f package.json ]; then
+  # Only run if a "test" script is actually defined — tooling-only or
+  # polyglot repos commonly have package.json without scripts.test, and
+  # `npm test` would exit 1 with "Missing script" as a false baseline failure.
+  HAS_TEST=$(
+    command -v jq >/dev/null 2>&1 \
+      && jq -r '.scripts.test // empty' package.json \
+      || node -e "console.log((require('./package.json').scripts||{}).test||'')" 2>/dev/null
+  )
+  if [ -n "$HAS_TEST" ]; then npm test; RAN=1; fi
+fi
 if [ -f Cargo.toml ];                          then cargo test;        RAN=1; fi
 if [ -f pyproject.toml ] || [ -f pytest.ini ] \
   || [ -f setup.py ]     || [ -f tox.ini ];    then pytest;            RAN=1; fi
