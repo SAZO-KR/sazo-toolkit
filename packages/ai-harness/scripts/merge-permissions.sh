@@ -26,9 +26,19 @@ merge_skill_permissions() {
         return 0
     fi
 
-    if [ ! -f "$settings_file" ] || [ ! -s "$settings_file" ] || ! jq -e 'type == "object"' "$settings_file" >/dev/null 2>&1; then
+    if [ ! -f "$settings_file" ]; then
+        # Fresh install — create an empty object to merge into.
         mkdir -p "$(dirname "$settings_file")"
         echo '{}' > "$settings_file"
+    elif [ ! -s "$settings_file" ] || ! jq -e 'type == "object"' "$settings_file" >/dev/null 2>&1; then
+        # File exists but is empty or not a JSON object — possibly a transient
+        # write issue or a manual edit mistake. Do NOT reset (would wipe
+        # user's hooks/custom settings). Back up and abort this merge.
+        local backup="${settings_file}.broken-$(date +%s)"
+        cp "$settings_file" "$backup"
+        echo "  WARN: $settings_file is empty or not a JSON object — skill permissions merge aborted (backup: $backup)" >&2
+        echo "0"
+        return 0
     fi
 
     local all_bash='[]'

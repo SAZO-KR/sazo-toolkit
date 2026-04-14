@@ -20,8 +20,19 @@ description: Use this whenever you need to create an isolated workspace using gi
   #    convention (e.g., `git worktree add /tmp/wt-auth feature/auth`), fall
   #    back to plain dirname so the existing location is still discovered.
   EXISTING_WT_PARENT=$(git worktree list --porcelain | awk -v root="$REPO_ROOT" '
-    /^worktree / { wt = substr($0, 10); next }
+    # Record the first worktree entry as the primary worktree (git guarantees
+    # "main worktree is listed first" per git-worktree docs). We skip it when
+    # inferring the shared worktree dir, since the primary lives AT REPO_ROOT
+    # and its dirname is REPO_ROOTs parent (e.g., /workspace) — not a valid
+    # worktree directory.
+    /^worktree / {
+      wt = substr($0, 10)
+      if (primary == "") primary = wt
+      next
+    }
     /^branch refs\/heads\// {
+      if (wt == primary) next
+
       branch = substr($0, 19)
       suffix = "/" branch
       if (length(wt) > length(suffix) && \
