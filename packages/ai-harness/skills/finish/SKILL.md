@@ -9,8 +9,18 @@ description: Use when implementation and tests are complete and you are ready to
 1. Use the Task tool to verify tests by using the project's test suite.
 
 ```bash
-# Run project's test suite
-npm test / cargo test / pytest / go test ./...
+# Detect the project's stack and run the matching test suite.
+# (The previous "npm test / cargo test / ..." shorthand was NOT an
+# executable command — shell parses it as one command.)
+if   [ -f package.json ];                         then npm test
+elif [ -f Cargo.toml ];                           then cargo test
+elif [ -f pyproject.toml ] || [ -f pytest.ini ] \
+  || [ -f setup.py ]       || [ -f tox.ini ];     then pytest
+elif [ -f go.mod ];                               then go test ./...
+else
+  echo "No recognized test suite — ask the user which command to run"
+  exit 1
+fi
 ```
 
 **If tests fail:**
