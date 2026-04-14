@@ -152,15 +152,37 @@ fi
 4. Auto-detect and run project setup.
 
 ```bash
-# Node.js
-if [ -f package.json ]; then npm install; fi
+# Node.js — detect actual package manager (lockfile > packageManager field > npm)
+if [ -f package.json ]; then
+  if   [ -f pnpm-lock.yaml ];                     then pnpm install
+  elif [ -f yarn.lock ];                          then yarn install
+  elif [ -f bun.lockb ] || [ -f bun.lock ];       then bun install
+  elif [ -f package-lock.json ];                  then npm install
+  else
+    PM=$(jq -r '.packageManager // empty' package.json 2>/dev/null | cut -d@ -f1)
+    case "$PM" in
+      pnpm) pnpm install ;;
+      yarn) yarn install ;;
+      bun)  bun install  ;;
+      *)    npm install  ;;   # no lockfile, no packageManager → npm default
+    esac
+  fi
+fi
 
 # Rust
 if [ -f Cargo.toml ]; then cargo build; fi
 
-# Python
-if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-if [ -f pyproject.toml ]; then poetry install; fi
+# Python — pyproject.toml can be Poetry OR uv/pdm/hatch/setuptools.
+# Do NOT blindly run `poetry install`; detect the actual build tool.
+if [ -f pyproject.toml ]; then
+  if   grep -q '^\[tool\.poetry\]' pyproject.toml; then poetry install
+  elif grep -q '^\[tool\.uv\]'     pyproject.toml || [ -f uv.lock ];  then uv sync
+  elif grep -q '^\[tool\.pdm\]'    pyproject.toml || [ -f pdm.lock ]; then pdm install
+  elif grep -q '^\[tool\.hatch\]'  pyproject.toml; then hatch env create
+  else pip install -e .   # PEP 621 generic fallback
+  fi
+elif [ -f requirements.txt ]; then pip install -r requirements.txt
+fi
 
 # Go
 if [ -f go.mod ]; then go mod download; fi
