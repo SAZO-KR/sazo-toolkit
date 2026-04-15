@@ -54,6 +54,16 @@ merge_skill_permissions() {
             _*) continue ;;
         esac
 
+        # Validate JSON structure FIRST so parse failures (unreadable /
+        # malformed file) surface as an explicit warning. Otherwise jq's
+        # error path leaves $bash_type empty, indistinguishable from an
+        # intentionally missing `.bash` key, and required permissions
+        # disappear without diagnostics.
+        if ! jq -e . "$perm_file" >/dev/null 2>&1; then
+            echo "  WARN: $perm_file — failed to parse as JSON (check syntax). Skipped." >&2
+            continue
+        fi
+
         # Inspect `.bash` type explicitly so malformed declarations
         # (e.g., `"bash": "date:*"` as a plain string) surface as a
         # warning instead of being silently coerced to [] and dropped.
@@ -62,9 +72,9 @@ merge_skill_permissions() {
 
         case "$bash_type" in
             array) ;;                       # good
-            "null"|"")
-                # Missing or unreadable — skip silently (file may only
-                # declare other permission kinds in the future).
+            "null")
+                # `.bash` intentionally omitted — the file may declare
+                # other permission kinds in the future. Silent skip.
                 continue
                 ;;
             *)

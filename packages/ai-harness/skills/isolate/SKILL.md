@@ -30,16 +30,25 @@ description: Use this whenever you need to create an isolated workspace using gi
       if (primary == "") primary = wt
       next
     }
-    /^branch refs\/heads\// {
+    # Handle branched worktrees: `branch refs/heads/<name>` emits a branch name
+    # we can strip as a suffix to recover the parent. Handle detached
+    # worktrees: `detached` has no branch info, so fall back to dirname.
+    /^(branch refs\/heads\/|detached$)/ {
       if (wt == primary) next
 
-      branch = substr($0, 19)
-      suffix = "/" branch
-      if (length(wt) > length(suffix) && \
-          substr(wt, length(wt) - length(suffix) + 1) == suffix) {
-        parent = substr(wt, 1, length(wt) - length(suffix))
+      if ($0 ~ /^branch /) {
+        branch = substr($0, 19)
+        suffix = "/" branch
+        if (length(wt) > length(suffix) && \
+            substr(wt, length(wt) - length(suffix) + 1) == suffix) {
+          parent = substr(wt, 1, length(wt) - length(suffix))
+        } else {
+          # Non-standard layout — use dirname as best-effort parent
+          parent = wt
+          sub("/[^/]*$", "", parent)
+        }
       } else {
-        # Non-standard layout — use dirname as best-effort parent
+        # Detached — no branch name to strip, use dirname
         parent = wt
         sub("/[^/]*$", "", parent)
       }
@@ -282,8 +291,13 @@ if [ -f pyproject.toml ] || [ -f pytest.ini ] \
     && command -v hatch  >/dev/null 2>&1;                                                      then hatch run test     || FAILED=1; RAN=1
   elif command -v pytest >/dev/null 2>&1;                                                      then pytest             || FAILED=1; RAN=1
   else
+    # Markers present but no runnable tool — this IS a baseline failure.
+    # Mark FAILED so polyglot repos (Python + Go, etc.) don't get a false
+    # "clean baseline" from a later-passing suite. RAN=1 ensures the
+    # message is surfaced instead of being swallowed by the "No recognized
+    # test suite" guard below.
     echo "Python test runner not available — configured tool(s) missing and pytest not on PATH. Ask the user."
-    # intentionally leave RAN unchanged so the final guard reports
+    FAILED=1; RAN=1
   fi
 fi
 

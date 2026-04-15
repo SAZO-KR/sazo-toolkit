@@ -28,24 +28,6 @@ if [ -f "$LOG_FILE" ] && [ "$(get_file_size "$LOG_FILE")" -gt 102400 ]; then
     tail -n 100 "$LOG_FILE" > "$TMP_LOG" && mv "$TMP_LOG" "$LOG_FILE"
 fi
 
-if [ ! -d "$INSTALL_DIR/.git" ]; then
-    log "SKIP: Not installed at $INSTALL_DIR"
-    exit 0
-fi
-
-cd "$INSTALL_DIR" || { log "ERROR: Cannot cd to $INSTALL_DIR"; exit 0; }
-
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
-if [ "$CURRENT_BRANCH" != "main" ]; then
-    log "SKIP: Not on main branch (current: $CURRENT_BRANCH)"
-    exit 0
-fi
-
-if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
-    log "SKIP: Local changes detected"
-    exit 0
-fi
-
 HARNESS_DIR="$INSTALL_DIR/packages/ai-harness"
 # Fallback for old path
 if [ ! -d "$HARNESS_DIR" ]; then
@@ -57,6 +39,10 @@ fi
 # between updates, and without this re-sync, required permissions.allow
 # entries aren't restored until the next repo update — causing repeated
 # runtime approval prompts despite the hook firing.
+#
+# Defined BEFORE the early-exit guards so every exit path (missing install,
+# non-main branch, local changes, rate-limit, fetch failure, normal exit)
+# runs the sync before returning.
 sync_skill_permissions() {
     local merge_script="$HARNESS_DIR/scripts/merge-permissions.sh"
     [ -f "$merge_script" ] || return 0
@@ -69,6 +55,27 @@ sync_skill_permissions() {
         log "Merged $perm_added new skill permissions into settings.allow"
     fi
 }
+
+if [ ! -d "$INSTALL_DIR/.git" ]; then
+    log "SKIP: Not installed at $INSTALL_DIR"
+    sync_skill_permissions
+    exit 0
+fi
+
+cd "$INSTALL_DIR" || { log "ERROR: Cannot cd to $INSTALL_DIR"; sync_skill_permissions; exit 0; }
+
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+if [ "$CURRENT_BRANCH" != "main" ]; then
+    log "SKIP: Not on main branch (current: $CURRENT_BRANCH)"
+    sync_skill_permissions
+    exit 0
+fi
+
+if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+    log "SKIP: Local changes detected"
+    sync_skill_permissions
+    exit 0
+fi
 
 LAST_FETCH_FILE="$INSTALL_DIR/.git/FETCH_HEAD"
 if [ -f "$LAST_FETCH_FILE" ]; then
