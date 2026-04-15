@@ -13,19 +13,21 @@ description: Use when implementation and tests are complete and you are ready to
 # Must be additive (not if/elif) — polyglot repos with both package.json and
 # go.mod would otherwise silently skip one language's tests before PR gating.
 #
-# For Node, only run `npm test` when a "test" script is actually defined —
-# otherwise `npm test` exits 1 in tooling-only packages (scripts.test missing)
-# and would falsely fail the PR gate.
+# Preserve exit codes across suites: a failing `npm test` must NOT be masked
+# by a later-passing `cargo test`. We aggregate into $FAILED and check at the
+# end, and we mark $RAN=1 ONLY after a real test command runs (not when
+# detection fails) so the "No recognized test suite" guard stays meaningful.
 RAN=0
+FAILED=0
 if [ -f package.json ]; then
   HAS_TEST=$(
     command -v jq >/dev/null 2>&1 \
       && jq -r '.scripts.test // empty' package.json \
       || node -e "console.log((require('./package.json').scripts||{}).test||'')" 2>/dev/null
   )
-  if [ -n "$HAS_TEST" ]; then npm test; RAN=1; fi
+  if [ -n "$HAS_TEST" ]; then npm test || FAILED=1; RAN=1; fi
 fi
-if [ -f Cargo.toml ];                          then cargo test;        RAN=1; fi
+if [ -f Cargo.toml ]; then cargo test || FAILED=1; RAN=1; fi
 
 # Python — detect the managed runner (same pattern as the Step 4 install
 # detection in `isolate`). Plain `pytest` fails on repos that scope their
@@ -33,22 +35,26 @@ if [ -f Cargo.toml ];                          then cargo test;        RAN=1; fi
 # test command succeeds.
 if [ -f pyproject.toml ] || [ -f pytest.ini ] \
   || [ -f setup.py ]     || [ -f tox.ini ]; then
-  if   [ -f tox.ini ];                                                                        then tox
-  elif [ -f pyproject.toml ] && grep -q '^\[tool\.poetry\]'  pyproject.toml;                  then poetry run pytest
-  elif [ -f pyproject.toml ] && { grep -q '^\[tool\.uv\]'   pyproject.toml || [ -f uv.lock ]; }; then uv run pytest
-  elif [ -f pyproject.toml ] && { grep -q '^\[tool\.pdm\]'  pyproject.toml || [ -f pdm.lock ]; }; then pdm run pytest
-  elif [ -f pyproject.toml ] && grep -q '^\[tool\.hatch\]' pyproject.toml;                    then hatch run test
-  elif command -v pytest >/dev/null 2>&1;                                                      then pytest
+  if   [ -f tox.ini ];                                                                        then tox                || FAILED=1; RAN=1
+  elif [ -f pyproject.toml ] && grep -q '^\[tool\.poetry\]'  pyproject.toml;                  then poetry run pytest  || FAILED=1; RAN=1
+  elif [ -f pyproject.toml ] && { grep -q '^\[tool\.uv\]'   pyproject.toml || [ -f uv.lock ]; }; then uv run pytest     || FAILED=1; RAN=1
+  elif [ -f pyproject.toml ] && { grep -q '^\[tool\.pdm\]'  pyproject.toml || [ -f pdm.lock ]; }; then pdm run pytest    || FAILED=1; RAN=1
+  elif [ -f pyproject.toml ] && grep -q '^\[tool\.hatch\]' pyproject.toml;                    then hatch run test     || FAILED=1; RAN=1
+  elif command -v pytest >/dev/null 2>&1;                                                      then pytest             || FAILED=1; RAN=1
   else
     echo "Python test runner not detected — ask the user which command to run"
     exit 1
   fi
-  RAN=1
 fi
 
-if [ -f go.mod ];                              then go test ./...;     RAN=1; fi
+if [ -f go.mod ]; then go test ./... || FAILED=1; RAN=1; fi
+
 if [ "$RAN" = "0" ]; then
   echo "No recognized test suite — ask the user which command to run"
+  exit 1
+fi
+if [ "$FAILED" = "1" ]; then
+  echo "One or more test suites failed — cannot proceed to PR creation"
   exit 1
 fi
 ```
