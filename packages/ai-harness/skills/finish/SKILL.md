@@ -35,14 +35,22 @@ if [ -f Cargo.toml ]; then cargo test || FAILED=1; RAN=1; fi
 # test command succeeds.
 if [ -f pyproject.toml ] || [ -f pytest.ini ] \
   || [ -f setup.py ]     || [ -f tox.ini ]; then
-  if   [ -f tox.ini ];                                                                        then tox                || FAILED=1; RAN=1
-  elif [ -f pyproject.toml ] && grep -q '^\[tool\.poetry\]'  pyproject.toml;                  then poetry run pytest  || FAILED=1; RAN=1
-  elif [ -f pyproject.toml ] && { grep -q '^\[tool\.uv\]'   pyproject.toml || [ -f uv.lock ]; }; then uv run pytest     || FAILED=1; RAN=1
-  elif [ -f pyproject.toml ] && { grep -q '^\[tool\.pdm\]'  pyproject.toml || [ -f pdm.lock ]; }; then pdm run pytest    || FAILED=1; RAN=1
-  elif [ -f pyproject.toml ] && grep -q '^\[tool\.hatch\]' pyproject.toml;                    then hatch run test     || FAILED=1; RAN=1
+  # Each managed-runner branch requires BOTH (a) the marker/config and
+  # (b) the tool binary present in PATH. Otherwise fall through to the
+  # next candidate — CI-only metadata (e.g., tox.ini) shouldn't block PRs
+  # on machines that rely on a different runner that IS installed.
+  if   [ -f tox.ini ] && command -v tox >/dev/null 2>&1;                                       then tox                || FAILED=1; RAN=1
+  elif [ -f pyproject.toml ] && grep -q '^\[tool\.poetry\]' pyproject.toml \
+    && command -v poetry >/dev/null 2>&1;                                                      then poetry run pytest  || FAILED=1; RAN=1
+  elif [ -f pyproject.toml ] && { grep -q '^\[tool\.uv\]'  pyproject.toml || [ -f uv.lock ]; } \
+    && command -v uv     >/dev/null 2>&1;                                                      then uv run pytest      || FAILED=1; RAN=1
+  elif [ -f pyproject.toml ] && { grep -q '^\[tool\.pdm\]' pyproject.toml || [ -f pdm.lock ]; } \
+    && command -v pdm    >/dev/null 2>&1;                                                      then pdm run pytest     || FAILED=1; RAN=1
+  elif [ -f pyproject.toml ] && grep -q '^\[tool\.hatch\]' pyproject.toml \
+    && command -v hatch  >/dev/null 2>&1;                                                      then hatch run test     || FAILED=1; RAN=1
   elif command -v pytest >/dev/null 2>&1;                                                      then pytest             || FAILED=1; RAN=1
   else
-    echo "Python test runner not detected — ask the user which command to run"
+    echo "Python test runner not available — configured tool(s) missing and pytest not on PATH. Ask the user."
     exit 1
   fi
 fi
