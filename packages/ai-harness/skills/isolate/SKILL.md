@@ -295,12 +295,27 @@ if [ -f package.json ]; then
   )
   if [ -n "$HAS_TEST" ]; then
     # Detect the declared package manager (mirrors Step 4 install detection).
-    # Hardcoding `npm test` fails on bun/yarn/pnpm repos.
+    # Hardcoding `npm test` fails on bun/yarn/pnpm repos, and falling back
+    # to a different tool when a lockfile exists would produce misleading
+    # baseline results and mutate lockfiles.
     PM_CMD=""
-    if   [ -f pnpm-lock.yaml ] && command -v pnpm >/dev/null 2>&1; then PM_CMD="pnpm"
-    elif [ -f yarn.lock ]      && command -v yarn >/dev/null 2>&1; then PM_CMD="yarn"
-    elif { [ -f bun.lockb ] || [ -f bun.lock ]; } && command -v bun >/dev/null 2>&1; then PM_CMD="bun"
-    elif [ -f package-lock.json ] && command -v npm >/dev/null 2>&1; then PM_CMD="npm"
+    PM_ERR=""
+    if   [ -f pnpm-lock.yaml ]; then
+      if command -v pnpm >/dev/null 2>&1; then PM_CMD="pnpm"
+      else PM_ERR="pnpm-lock.yaml found but pnpm is not installed"
+      fi
+    elif [ -f yarn.lock ]; then
+      if command -v yarn >/dev/null 2>&1; then PM_CMD="yarn"
+      else PM_ERR="yarn.lock found but yarn is not installed"
+      fi
+    elif [ -f bun.lockb ] || [ -f bun.lock ]; then
+      if command -v bun >/dev/null 2>&1; then PM_CMD="bun"
+      else PM_ERR="bun lockfile found but bun is not installed"
+      fi
+    elif [ -f package-lock.json ]; then
+      if command -v npm >/dev/null 2>&1; then PM_CMD="npm"
+      else PM_ERR="package-lock.json found but npm is not installed"
+      fi
     else
       PM=$(
         command -v jq >/dev/null 2>&1 \
@@ -308,15 +323,19 @@ if [ -f package.json ]; then
           || node -e "console.log(require('./package.json').packageManager||'')" 2>/dev/null
       )
       PM=$(echo "$PM" | cut -d@ -f1)
-      if [ -n "$PM" ] && command -v "$PM" >/dev/null 2>&1; then PM_CMD="$PM"
-      elif [ -z "$PM" ] && command -v npm >/dev/null 2>&1; then PM_CMD="npm"
+      if [ -n "$PM" ]; then
+        if command -v "$PM" >/dev/null 2>&1; then PM_CMD="$PM"
+        else PM_ERR="packageManager=$PM declared but $PM is not installed"
+        fi
+      elif command -v npm >/dev/null 2>&1; then
+        PM_CMD="npm"
       fi
     fi
     if [ -n "$PM_CMD" ]; then
       "$PM_CMD" test || FAILED=1
       RAN=1
     else
-      echo "Node test runner not available — declared package manager missing and no safe default on PATH. Ask the user." >&2
+      echo "Node test runner not available — ${PM_ERR:-no manager on PATH}. Ask the user." >&2
       FAILED=1; RAN=1
     fi
   fi

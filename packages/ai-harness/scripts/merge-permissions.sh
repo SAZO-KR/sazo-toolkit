@@ -83,6 +83,9 @@ merge_skill_permissions() {
                 ;;
         esac
 
+        local bash_original_len=""
+        bash_original_len=$(jq -r '.bash | length' "$perm_file" 2>/dev/null)
+
         local bash_perms=""
         bash_perms=$(jq -c '
             [.bash[] | select(type == "string") | "Bash(" + . + ")"]
@@ -93,6 +96,12 @@ merge_skill_permissions() {
             continue
         fi
         if [ "$bash_perms" = "[]" ]; then
+            # Empty result — distinguish "intentionally empty []" from
+            # "had entries but none were strings" (e.g., [123, true]).
+            # The latter is almost certainly a bug the maintainer should see.
+            if [ "${bash_original_len:-0}" -gt 0 ] 2>/dev/null; then
+                echo "  WARN: $perm_file — .bash has $bash_original_len entries but none are strings. Skipped." >&2
+            fi
             continue
         fi
 
