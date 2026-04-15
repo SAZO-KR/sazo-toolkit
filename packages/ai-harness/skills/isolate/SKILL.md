@@ -201,26 +201,44 @@ fi
 
 ```bash
 # Node.js — detect actual package manager (lockfile > packageManager field > npm)
+# and REQUIRE the chosen tool be on PATH. Falling back to `npm install` when
+# the lockfile's tool is missing would produce the wrong lockfile format and
+# break reproducibility, so we escalate to the user instead.
 if [ -f package.json ]; then
-  if   [ -f pnpm-lock.yaml ];                     then pnpm install
-  elif [ -f yarn.lock ];                          then yarn install
-  elif [ -f bun.lockb ] || [ -f bun.lock ];       then bun install
-  elif [ -f package-lock.json ];                  then npm install
+  if   [ -f pnpm-lock.yaml ]; then
+    if command -v pnpm >/dev/null 2>&1; then pnpm install
+    else echo "pnpm-lock.yaml found but pnpm is not installed — install pnpm or ask the user." >&2
+    fi
+  elif [ -f yarn.lock ]; then
+    if command -v yarn >/dev/null 2>&1; then yarn install
+    else echo "yarn.lock found but yarn is not installed — install yarn or ask the user." >&2
+    fi
+  elif [ -f bun.lockb ] || [ -f bun.lock ]; then
+    if command -v bun >/dev/null 2>&1; then bun install
+    else echo "bun lockfile found but bun is not installed — install bun or ask the user." >&2
+    fi
+  elif [ -f package-lock.json ]; then
+    if command -v npm >/dev/null 2>&1; then npm install
+    else echo "package-lock.json found but npm is not installed — install Node.js/npm or ask the user." >&2
+    fi
   else
-    # Read packageManager via jq with node fallback (environments without jq
-    # but with a `packageManager` field would otherwise misinstall with npm).
+    # No lockfile — consult the packageManager field (jq primary, node fallback)
     PM=$(
       command -v jq >/dev/null 2>&1 \
         && jq -r '.packageManager // empty' package.json 2>/dev/null \
         || node -e "console.log(require('./package.json').packageManager||'')" 2>/dev/null
     )
     PM=$(echo "$PM" | cut -d@ -f1)
-    case "$PM" in
-      pnpm) pnpm install ;;
-      yarn) yarn install ;;
-      bun)  bun install  ;;
-      *)    npm install  ;;   # no lockfile, no packageManager → npm default
-    esac
+    PM=${PM:-npm}   # no packageManager field → default to npm
+    if command -v "$PM" >/dev/null 2>&1; then
+      "$PM" install
+    elif command -v npm >/dev/null 2>&1; then
+      # packageManager requested unavailable tool but we have npm — last-resort
+      echo "packageManager=$PM not installed; falling back to npm install" >&2
+      npm install
+    else
+      echo "No Node package manager available on PATH — ask the user." >&2
+    fi
   fi
 fi
 

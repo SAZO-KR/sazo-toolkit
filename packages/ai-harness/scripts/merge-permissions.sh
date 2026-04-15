@@ -105,6 +105,21 @@ merge_skill_permissions() {
         return 0
     fi
 
+    # Guard: `.permissions.allow` must be null or array. If a user (or a
+    # broken tool) set it to a scalar/object, the array concat below fails
+    # and we'd silently return 0 — required skill permissions would go
+    # missing with no diagnostic signal. Surface it, then abort this merge.
+    local allow_type
+    allow_type=$(jq -r '.permissions.allow | type' "$settings_file" 2>/dev/null)
+    case "$allow_type" in
+        array|"null") ;;    # good
+        *)
+            echo "  WARN: $settings_file has non-array .permissions.allow (type=$allow_type) — skill permissions merge aborted. Please fix manually." >&2
+            echo "0"
+            return 0
+            ;;
+    esac
+
     local before_count
     before_count=$(jq '(.permissions.allow // []) | length' "$settings_file" 2>/dev/null || echo "0")
 
