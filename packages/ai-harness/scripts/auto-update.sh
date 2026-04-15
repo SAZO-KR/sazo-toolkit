@@ -46,12 +46,38 @@ if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; th
     exit 0
 fi
 
+HARNESS_DIR="$INSTALL_DIR/packages/ai-harness"
+# Fallback for old path
+if [ ! -d "$HARNESS_DIR" ]; then
+    HARNESS_DIR="$INSTALL_DIR/packages/ai-prompts"
+fi
+
+# Permission merge must run on EVERY session start, not just after a pull.
+# Users may reset ~/.claude/settings.json or add local skill permissions
+# between updates, and without this re-sync, required permissions.allow
+# entries aren't restored until the next repo update — causing repeated
+# runtime approval prompts despite the hook firing.
+sync_skill_permissions() {
+    local merge_script="$HARNESS_DIR/scripts/merge-permissions.sh"
+    [ -f "$merge_script" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    # shellcheck disable=SC1090
+    source "$merge_script"
+    local perm_added
+    perm_added=$(merge_skill_permissions "$HARNESS_DIR/skills" "$HOME/.claude/settings.json" 2>>"$LOG_FILE")
+    if [ "${perm_added:-0}" -gt 0 ] 2>/dev/null; then
+        log "Merged $perm_added new skill permissions into settings.allow"
+    fi
+}
+
 LAST_FETCH_FILE="$INSTALL_DIR/.git/FETCH_HEAD"
 if [ -f "$LAST_FETCH_FILE" ]; then
     LAST_FETCH=$(get_mtime "$LAST_FETCH_FILE")
     NOW=$(date +%s)
     DIFF=$((NOW - LAST_FETCH))
     if [ "$DIFF" -lt 3600 ]; then
+        # Rate-limited from fetching, but permission merge still runs.
+        sync_skill_permissions
         exit 0
     fi
 fi
@@ -93,16 +119,11 @@ if git fetch origin main --quiet 2>/dev/null; then
         log "Updating from $LOCAL_SHORT to $REMOTE_SHORT"
         if git pull --ff-only --quiet 2>/dev/null; then
             log "SUCCESS: Updated"
-            
-            HARNESS_DIR="$INSTALL_DIR/packages/ai-harness"
-            # Fallback for old path
-            if [ ! -d "$HARNESS_DIR" ]; then
-                HARNESS_DIR="$INSTALL_DIR/packages/ai-prompts"
-            fi
+
             CMD_LINKED=$(link_new_files "$HARNESS_DIR/commands" "$HOME/.claude/commands")
             SKILL_LINKED=$(link_new_files "$HARNESS_DIR/skills" "$HOME/.claude/skills")
             AGENT_LINKED=$(link_new_files "$HARNESS_DIR/agents" "$HOME/.claude/agents")
-            
+
             TOTAL=$((CMD_LINKED + SKILL_LINKED + AGENT_LINKED))
             if [ "$TOTAL" -gt 0 ]; then
                 log "Linked $TOTAL new files (commands:$CMD_LINKED skills:$SKILL_LINKED agents:$AGENT_LINKED)"
@@ -117,20 +138,6 @@ if git fetch origin main --quiet 2>/dev/null; then
                     log "Updated CLAUDE.md managed block"
                 fi
             fi
-
-            PERMISSIONS_MERGE_SCRIPT="$HARNESS_DIR/scripts/merge-permissions.sh"
-            if [ -f "$PERMISSIONS_MERGE_SCRIPT" ]; then
-                if ! command -v jq >/dev/null 2>&1; then
-                    log "SKIP: jq not found — skill permissions merge skipped"
-                else
-                    # shellcheck disable=SC1090
-                    source "$PERMISSIONS_MERGE_SCRIPT"
-                    PERM_ADDED=$(merge_skill_permissions "$HARNESS_DIR/skills" "$HOME/.claude/settings.json" 2>>"$LOG_FILE")
-                    if [ "${PERM_ADDED:-0}" -gt 0 ] 2>/dev/null; then
-                        log "Merged $PERM_ADDED new skill permissions into settings.allow"
-                    fi
-                fi
-            fi
         else
             log "WARN: Pull failed"
         fi
@@ -138,5 +145,10 @@ if git fetch origin main --quiet 2>/dev/null; then
 else
     log "WARN: Fetch failed (network or auth issue)"
 fi
+
+# Always sync skill permissions at the end — whether or not a pull happened,
+# whether or not the fetch succeeded. This keeps settings.allow in sync on
+# sessions with no upstream changes.
+sync_skill_permissions
 
 exit 0

@@ -219,15 +219,19 @@ fi
 if [ -f Cargo.toml ]; then cargo build; fi
 
 # Python — pyproject.toml can be Poetry OR uv/pdm/hatch/setuptools.
-# Do NOT blindly run `poetry install`; detect the actual build tool.
+# Do NOT blindly run `poetry install`; detect the actual build tool AND
+# verify the tool is installed locally (CI-only metadata like `uv.lock`
+# shouldn't abort setup when the lockfile's tool isn't on PATH).
 if [ -f pyproject.toml ]; then
-  if   grep -q '^\[tool\.poetry\]' pyproject.toml; then poetry install
-  elif grep -q '^\[tool\.uv\]'     pyproject.toml || [ -f uv.lock ];  then uv sync
-  elif grep -q '^\[tool\.pdm\]'    pyproject.toml || [ -f pdm.lock ]; then pdm install
-  elif grep -q '^\[tool\.hatch\]'  pyproject.toml; then hatch env create
-  else pip install -e .   # PEP 621 generic fallback
+  if   grep -q '^\[tool\.poetry\]' pyproject.toml && command -v poetry >/dev/null 2>&1;                                     then poetry install
+  elif { grep -q '^\[tool\.uv\]'   pyproject.toml || [ -f uv.lock ];  } && command -v uv     >/dev/null 2>&1;               then uv sync
+  elif { grep -q '^\[tool\.pdm\]'  pyproject.toml || [ -f pdm.lock ]; } && command -v pdm    >/dev/null 2>&1;               then pdm install
+  elif grep -q '^\[tool\.hatch\]'  pyproject.toml && command -v hatch  >/dev/null 2>&1;                                     then hatch env create
+  elif command -v pip >/dev/null 2>&1;                                                                                       then pip install -e .   # PEP 621 generic fallback
+  else
+    echo "Python install tool not available — configured tool(s) missing and pip not on PATH. Ask the user."
   fi
-elif [ -f requirements.txt ]; then pip install -r requirements.txt
+elif [ -f requirements.txt ] && command -v pip >/dev/null 2>&1; then pip install -r requirements.txt
 fi
 
 # Go

@@ -54,16 +54,32 @@ merge_skill_permissions() {
             _*) continue ;;
         esac
 
+        # Inspect `.bash` type explicitly so malformed declarations
+        # (e.g., `"bash": "date:*"` as a plain string) surface as a
+        # warning instead of being silently coerced to [] and dropped.
+        local bash_type=""
+        bash_type=$(jq -r '.bash | type' "$perm_file" 2>/dev/null)
+
+        case "$bash_type" in
+            array) ;;                       # good
+            "null"|"")
+                # Missing or unreadable — skip silently (file may only
+                # declare other permission kinds in the future).
+                continue
+                ;;
+            *)
+                echo "  WARN: $perm_file — .bash must be an array of strings, got '$bash_type'. Skipped." >&2
+                continue
+                ;;
+        esac
+
         local bash_perms=""
         bash_perms=$(jq -c '
-            if (.bash | type) == "array"
-            then [.bash[] | select(type == "string") | "Bash(" + . + ")"]
-            else []
-            end
+            [.bash[] | select(type == "string") | "Bash(" + . + ")"]
         ' "$perm_file" 2>/dev/null)
 
         if [ -z "$bash_perms" ] || [ "$bash_perms" = "null" ]; then
-            echo "  WARN: $perm_file — invalid or empty .bash array, skipped" >&2
+            echo "  WARN: $perm_file — failed to extract .bash entries, skipped" >&2
             continue
         fi
         if [ "$bash_perms" = "[]" ]; then
