@@ -148,8 +148,40 @@ ls .golangci.yml .golangci.yaml 2>/dev/null
 4. Use the Task tool to run any linters and fix issues in a subagent.
 
 ```bash
-# Node.js - check package.json scripts
-npm run lint  # or: npm run lint:fix, npm run eslint
+# Node.js - detect the declared package manager (mirrors Step 1 test detection)
+# before invoking the lint script. Hardcoding `npm run lint` fails on
+# bun/yarn/pnpm-managed repos where npm is unavailable.
+if [ -f package.json ]; then
+  PM_CMD=""
+  PM_ERR=""
+  if   [ -f pnpm-lock.yaml ]; then
+    command -v pnpm >/dev/null 2>&1 && PM_CMD="pnpm" || PM_ERR="pnpm-lock.yaml found but pnpm is not installed"
+  elif [ -f yarn.lock ]; then
+    command -v yarn >/dev/null 2>&1 && PM_CMD="yarn" || PM_ERR="yarn.lock found but yarn is not installed"
+  elif [ -f bun.lockb ] || [ -f bun.lock ]; then
+    command -v bun  >/dev/null 2>&1 && PM_CMD="bun"  || PM_ERR="bun lockfile found but bun is not installed"
+  elif [ -f package-lock.json ]; then
+    command -v npm  >/dev/null 2>&1 && PM_CMD="npm"  || PM_ERR="package-lock.json found but npm is not installed"
+  else
+    PM=$(
+      command -v jq >/dev/null 2>&1 \
+        && jq -r '.packageManager // empty' package.json 2>/dev/null \
+        || node -e "console.log(require('./package.json').packageManager||'')" 2>/dev/null
+    )
+    PM=$(echo "$PM" | cut -d@ -f1)
+    if [ -n "$PM" ]; then
+      command -v "$PM" >/dev/null 2>&1 && PM_CMD="$PM" || PM_ERR="packageManager=$PM declared but $PM is not installed"
+    elif command -v npm >/dev/null 2>&1; then
+      PM_CMD="npm"
+    fi
+  fi
+
+  if [ -n "$PM_CMD" ]; then
+    "$PM_CMD" run lint   # or run lint:fix / eslint / biome, whichever the repo defines
+  else
+    echo "Node lint runner not available — ${PM_ERR:-no manager on PATH}. Ask the user." >&2
+  fi
+fi
 
 # Rust
 cargo clippy --fix --allow-dirty --allow-staged
