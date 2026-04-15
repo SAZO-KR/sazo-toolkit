@@ -293,7 +293,33 @@ if [ -f package.json ]; then
       && jq -r '.scripts.test // empty' package.json \
       || node -e "console.log((require('./package.json').scripts||{}).test||'')" 2>/dev/null
   )
-  if [ -n "$HAS_TEST" ]; then npm test || FAILED=1; RAN=1; fi
+  if [ -n "$HAS_TEST" ]; then
+    # Detect the declared package manager (mirrors Step 4 install detection).
+    # Hardcoding `npm test` fails on bun/yarn/pnpm repos.
+    PM_CMD=""
+    if   [ -f pnpm-lock.yaml ] && command -v pnpm >/dev/null 2>&1; then PM_CMD="pnpm"
+    elif [ -f yarn.lock ]      && command -v yarn >/dev/null 2>&1; then PM_CMD="yarn"
+    elif { [ -f bun.lockb ] || [ -f bun.lock ]; } && command -v bun >/dev/null 2>&1; then PM_CMD="bun"
+    elif [ -f package-lock.json ] && command -v npm >/dev/null 2>&1; then PM_CMD="npm"
+    else
+      PM=$(
+        command -v jq >/dev/null 2>&1 \
+          && jq -r '.packageManager // empty' package.json 2>/dev/null \
+          || node -e "console.log(require('./package.json').packageManager||'')" 2>/dev/null
+      )
+      PM=$(echo "$PM" | cut -d@ -f1)
+      if [ -n "$PM" ] && command -v "$PM" >/dev/null 2>&1; then PM_CMD="$PM"
+      elif [ -z "$PM" ] && command -v npm >/dev/null 2>&1; then PM_CMD="npm"
+      fi
+    fi
+    if [ -n "$PM_CMD" ]; then
+      "$PM_CMD" test || FAILED=1
+      RAN=1
+    else
+      echo "Node test runner not available — declared package manager missing and no safe default on PATH. Ask the user." >&2
+      FAILED=1; RAN=1
+    fi
+  fi
 fi
 if [ -f Cargo.toml ]; then cargo test || FAILED=1; RAN=1; fi
 
