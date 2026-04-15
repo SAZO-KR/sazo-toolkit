@@ -229,15 +229,23 @@ if [ -f package.json ]; then
         || node -e "console.log(require('./package.json').packageManager||'')" 2>/dev/null
     )
     PM=$(echo "$PM" | cut -d@ -f1)
-    PM=${PM:-npm}   # no packageManager field → default to npm
-    if command -v "$PM" >/dev/null 2>&1; then
-      "$PM" install
-    elif command -v npm >/dev/null 2>&1; then
-      # packageManager requested unavailable tool but we have npm — last-resort
-      echo "packageManager=$PM not installed; falling back to npm install" >&2
-      npm install
+    if [ -n "$PM" ]; then
+      # packageManager is an EXPLICIT project directive — honor it strictly.
+      # Never fall back to npm when the declared tool is missing: a different
+      # resolver would generate an unintended lockfile and a mismatched
+      # dependency graph (a dirty worktree before baseline tests).
+      if command -v "$PM" >/dev/null 2>&1; then
+        "$PM" install
+      else
+        echo "packageManager=$PM declared in package.json but $PM is not installed on PATH. Install it (or ask the user); refusing to fall back to npm because it would use the wrong resolver." >&2
+      fi
     else
-      echo "No Node package manager available on PATH — ask the user." >&2
+      # No packageManager declared and no lockfile — npm default is safe.
+      if command -v npm >/dev/null 2>&1; then
+        npm install
+      else
+        echo "No Node package manager available on PATH — ask the user." >&2
+      fi
     fi
   fi
 fi
