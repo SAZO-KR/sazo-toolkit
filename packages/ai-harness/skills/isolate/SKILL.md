@@ -181,19 +181,41 @@ if [ -n "$EXISTING_WT" ]; then
 elif git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
   # Local branch exists, no worktree — attach
   git worktree add "$WT_PATH/$BRANCH_NAME" "$BRANCH_NAME"
-elif git ls-remote --exit-code --heads origin "$BRANCH_NAME" >/dev/null 2>&1; then
-  # Remote branch exists but no local — fetch and track origin to preserve history
-  git fetch origin "$BRANCH_NAME"
+elif git show-ref --verify --quiet "refs/remotes/origin/$BRANCH_NAME"; then
+  # Cached remote-tracking ref — use it without an extra network round trip,
+  # which also dodges ls-remote transport/auth failure modes.
   git worktree add "$WT_PATH/$BRANCH_NAME" -b "$BRANCH_NAME" "origin/$BRANCH_NAME"
 else
-  # Branch does not exist anywhere — create new from current HEAD
-  git worktree add "$WT_PATH/$BRANCH_NAME" -b "$BRANCH_NAME"
+  # No local or cached remote ref — ask the remote. Distinguish:
+  #   exit 0  → branch exists on origin           (fetch + track)
+  #   exit 2  → branch confirmed missing          (safe to create new)
+  #   other   → network/auth/transport failure    (do NOT silently create;
+  #             that would diverge from the real remote history and cause
+  #             non-fast-forward push failures later)
+  git ls-remote --exit-code --heads origin "$BRANCH_NAME" >/dev/null 2>&1
+  ls_remote_rc=$?
+  case "$ls_remote_rc" in
+    0)
+      git fetch origin "$BRANCH_NAME"
+      git worktree add "$WT_PATH/$BRANCH_NAME" -b "$BRANCH_NAME" "origin/$BRANCH_NAME"
+      ;;
+    2)
+      # Remote confirmed the branch does not exist — create new from HEAD
+      git worktree add "$WT_PATH/$BRANCH_NAME" -b "$BRANCH_NAME"
+      ;;
+    *)
+      echo "Error: git ls-remote failed (exit $ls_remote_rc) — cannot determine whether '$BRANCH_NAME' exists on origin. Check network/credentials and retry, or create the worktree manually." >&2
+      exit 1
+      ;;
+  esac
 fi
 ```
 
 **Why check existing worktree first:** If the branch is already checked out in another worktree, `git worktree add` will error. Detecting and reusing the existing path lets agents resume prior work without manual cleanup.
 
-**Why check remote:** If `$BRANCH_NAME` only exists on `origin` (e.g., resuming a teammate's work or an earlier session), creating with just `-b` branches from current HEAD and diverges from the real history — later `git push` fails as non-fast-forward.
+**Why check remote:** If `$BRANCH_NAME` only exists on `origin` (e.g., resuming a teammate's work or an earlier session), creating with just `-b` branches from current HEAD and diverges from the real history — later `git push` fails as non-fast-forward. We prefer `refs/remotes/origin/…` (cached locally) first to avoid unnecessary network round trips, and only fall back to `git ls-remote` when the cache is cold.
+
+**Why handle `ls-remote` exit codes specifically:** `git ls-remote --exit-code` returns `0` for "found", `2` for "not found", and other non-zero values for transport/auth failures. Treating every non-zero as "not found" — the common bug — would silently create a fresh branch on network outages and later break pushes. The case block above escalates unknown failures instead.
 
 - cd into the worktree path: `cd "$EXISTING_WT"` (reuse case) or `cd "$WT_PATH/$BRANCH_NAME"` (new worktree case)
 
