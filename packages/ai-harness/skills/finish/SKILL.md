@@ -148,50 +148,89 @@ ls .golangci.yml .golangci.yaml 2>/dev/null
 4. Use the Task tool to run any linters and fix issues in a subagent.
 
 ```bash
-# Node.js - detect the declared package manager (mirrors Step 1 test detection)
-# before invoking the lint script. Hardcoding `npm run lint` fails on
-# bun/yarn/pnpm-managed repos where npm is unavailable.
-if [ -f package.json ]; then
-  PM_CMD=""
-  PM_ERR=""
-  if   [ -f pnpm-lock.yaml ]; then
-    command -v pnpm >/dev/null 2>&1 && PM_CMD="pnpm" || PM_ERR="pnpm-lock.yaml found but pnpm is not installed"
-  elif [ -f yarn.lock ]; then
-    command -v yarn >/dev/null 2>&1 && PM_CMD="yarn" || PM_ERR="yarn.lock found but yarn is not installed"
-  elif [ -f bun.lockb ] || [ -f bun.lock ]; then
-    command -v bun  >/dev/null 2>&1 && PM_CMD="bun"  || PM_ERR="bun lockfile found but bun is not installed"
-  elif [ -f package-lock.json ]; then
-    command -v npm  >/dev/null 2>&1 && PM_CMD="npm"  || PM_ERR="package-lock.json found but npm is not installed"
-  else
-    PM=$(
-      command -v jq >/dev/null 2>&1 \
-        && jq -r '.packageManager // empty' package.json 2>/dev/null \
-        || node -e "console.log(require('./package.json').packageManager||'')" 2>/dev/null
-    )
-    PM=$(echo "$PM" | cut -d@ -f1)
-    if [ -n "$PM" ]; then
-      command -v "$PM" >/dev/null 2>&1 && PM_CMD="$PM" || PM_ERR="packageManager=$PM declared but $PM is not installed"
-    elif command -v npm >/dev/null 2>&1; then
-      PM_CMD="npm"
-    fi
-  fi
+# Gate each language's lint command on (a) project-marker presence and
+# (b) tool availability. Single-stack repos must not run `cargo clippy`
+# when no `Cargo.toml` exists, and a missing Node runner must be a hard
+# stop — not a soft warning — or PRs can bypass the linter gate entirely.
 
-  if [ -n "$PM_CMD" ]; then
-    "$PM_CMD" run lint   # or run lint:fix / eslint / biome, whichever the repo defines
-  else
-    echo "Node lint runner not available — ${PM_ERR:-no manager on PATH}. Ask the user." >&2
+# Node.js — detect the declared package manager (mirrors Step 1 test detection).
+# Hardcoding `npm run lint` fails on bun/yarn/pnpm-managed repos where npm
+# is unavailable.
+if [ -f package.json ]; then
+  # Only run lint if a `lint` script is actually defined — don't fail
+  # repos that use a different script name (e.g., `check`).
+  HAS_LINT=$(
+    command -v jq >/dev/null 2>&1 \
+      && jq -r '.scripts.lint // empty' package.json \
+      || node -e "console.log((require('./package.json').scripts||{}).lint||'')" 2>/dev/null
+  )
+  if [ -n "$HAS_LINT" ]; then
+    PM_CMD=""
+    PM_ERR=""
+    if   [ -f pnpm-lock.yaml ]; then
+      command -v pnpm >/dev/null 2>&1 && PM_CMD="pnpm" || PM_ERR="pnpm-lock.yaml found but pnpm is not installed"
+    elif [ -f yarn.lock ]; then
+      command -v yarn >/dev/null 2>&1 && PM_CMD="yarn" || PM_ERR="yarn.lock found but yarn is not installed"
+    elif [ -f bun.lockb ] || [ -f bun.lock ]; then
+      command -v bun  >/dev/null 2>&1 && PM_CMD="bun"  || PM_ERR="bun lockfile found but bun is not installed"
+    elif [ -f package-lock.json ]; then
+      command -v npm  >/dev/null 2>&1 && PM_CMD="npm"  || PM_ERR="package-lock.json found but npm is not installed"
+    else
+      PM=$(
+        command -v jq >/dev/null 2>&1 \
+          && jq -r '.packageManager // empty' package.json 2>/dev/null \
+          || node -e "console.log(require('./package.json').packageManager||'')" 2>/dev/null
+      )
+      PM=$(echo "$PM" | cut -d@ -f1)
+      if [ -n "$PM" ]; then
+        command -v "$PM" >/dev/null 2>&1 && PM_CMD="$PM" || PM_ERR="packageManager=$PM declared but $PM is not installed"
+      elif command -v npm >/dev/null 2>&1; then
+        PM_CMD="npm"
+      fi
+    fi
+
+    if [ -n "$PM_CMD" ]; then
+      "$PM_CMD" run lint   # or run lint:fix / eslint / biome, whichever the repo defines
+    else
+      # HARD STOP — a missing linter must not silently bypass the gate.
+      echo "Node lint gate cannot run — ${PM_ERR:-no manager on PATH}. Install the declared package manager or ask the user." >&2
+      exit 1
+    fi
   fi
 fi
 
-# Rust
-cargo clippy --fix --allow-dirty --allow-staged
+# Rust — gate by Cargo.toml presence AND clippy availability.
+if [ -f Cargo.toml ]; then
+  if command -v cargo >/dev/null 2>&1; then
+    cargo clippy --fix --allow-dirty --allow-staged
+  else
+    echo "Cargo.toml found but cargo is not installed — ask the user." >&2
+    exit 1
+  fi
+fi
 
-# Python
-ruff check --fix .
-# or: flake8 ., pylint .
+# Python — gate by project markers AND tool availability. Pick whichever
+# linter the project declares or has on PATH; do not hardcode ruff.
+if [ -f pyproject.toml ] || [ -f setup.py ] || [ -f setup.cfg ] \
+  || [ -f .flake8 ]     || [ -f ruff.toml ]; then
+  if   command -v ruff   >/dev/null 2>&1; then ruff check --fix .
+  elif command -v flake8 >/dev/null 2>&1; then flake8 .
+  elif command -v pylint >/dev/null 2>&1; then pylint .
+  else
+    echo "Python project detected but no linter (ruff/flake8/pylint) on PATH — ask the user." >&2
+    exit 1
+  fi
+fi
 
-# Go
-golangci-lint run --fix
+# Go — gate by go.mod presence AND golangci-lint availability.
+if [ -f go.mod ]; then
+  if command -v golangci-lint >/dev/null 2>&1; then
+    golangci-lint run --fix
+  else
+    echo "go.mod found but golangci-lint is not installed — ask the user." >&2
+    exit 1
+  fi
+fi
 ```
 
 5. Use the Task tool to run type checking and fix issues in a subagent.
