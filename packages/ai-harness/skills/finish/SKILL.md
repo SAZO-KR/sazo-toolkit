@@ -26,8 +26,26 @@ if [ -f package.json ]; then
   if [ -n "$HAS_TEST" ]; then npm test; RAN=1; fi
 fi
 if [ -f Cargo.toml ];                          then cargo test;        RAN=1; fi
+
+# Python — detect the managed runner (same pattern as the Step 4 install
+# detection in `isolate`). Plain `pytest` fails on repos that scope their
+# environment through poetry/uv/pdm/hatch or run tox, even when the real
+# test command succeeds.
 if [ -f pyproject.toml ] || [ -f pytest.ini ] \
-  || [ -f setup.py ]     || [ -f tox.ini ];    then pytest;            RAN=1; fi
+  || [ -f setup.py ]     || [ -f tox.ini ]; then
+  if   [ -f tox.ini ];                                                                        then tox
+  elif [ -f pyproject.toml ] && grep -q '^\[tool\.poetry\]'  pyproject.toml;                  then poetry run pytest
+  elif [ -f pyproject.toml ] && { grep -q '^\[tool\.uv\]'   pyproject.toml || [ -f uv.lock ]; }; then uv run pytest
+  elif [ -f pyproject.toml ] && { grep -q '^\[tool\.pdm\]'  pyproject.toml || [ -f pdm.lock ]; }; then pdm run pytest
+  elif [ -f pyproject.toml ] && grep -q '^\[tool\.hatch\]' pyproject.toml;                    then hatch run test
+  elif command -v pytest >/dev/null 2>&1;                                                      then pytest
+  else
+    echo "Python test runner not detected — ask the user which command to run"
+    exit 1
+  fi
+  RAN=1
+fi
+
 if [ -f go.mod ];                              then go test ./...;     RAN=1; fi
 if [ "$RAN" = "0" ]; then
   echo "No recognized test suite — ask the user which command to run"
