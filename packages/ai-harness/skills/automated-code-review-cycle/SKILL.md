@@ -1,7 +1,7 @@
 ---
 name: Automated-Code-Review-Cycle
 description: PR에 대해 Codex/Gemini 코드 리뷰를 자동으로 받고, 피드백 수정 → 재리뷰 사이클을 사용자 개입 없이 반복. 활성 리뷰어 전부 통과하면 완료. Gemini 미설정 repo는 Codex만으로 판단.
-version: 1.4.0
+version: 1.5.0
 when_to_use: PR 생성 후 코드 리뷰 사이클을 자동화하고 싶을 때
 ---
 
@@ -196,10 +196,11 @@ Quota 감지 시:
 
 ```bash
 # 모든 Codex 리뷰의 코멘트를 하나의 배열로 수집
+# CRITICAL: reviewer_login 필드 포함 — Step 4에서 decline 답변 시 @멘션에 사용
 CODEX_ALL_COMMENTS='[]'
 for REVIEW_ID in $(echo "$ALL_CODEX_REVIEW_IDS" | jq -r '.[]'); do
   COMMENTS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews/$REVIEW_ID/comments \
-    --jq '[.[] | {id: .id, body: .body[0:500], path: .path, line: .line, review_id: '$REVIEW_ID'}]')
+    --jq '[.[] | {id: .id, body: .body[0:500], path: .path, line: .line, reviewer_login: .user.login, review_id: '$REVIEW_ID'}]')
   CODEX_ALL_COMMENTS=$(echo "$CODEX_ALL_COMMENTS" | jq --argjson c "$COMMENTS" '. + $c')
 done
 
@@ -208,7 +209,7 @@ if [ "$GEMINI_ENABLED" = true ]; then
   GEMINI_ALL_COMMENTS='[]'
   for REVIEW_ID in $(echo "$ALL_GEMINI_REVIEW_IDS" | jq -r '.[]'); do
     COMMENTS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews/$REVIEW_ID/comments \
-      --jq '[.[] | {id: .id, body: .body[0:500], path: .path, line: .line, review_id: '$REVIEW_ID'}]')
+      --jq '[.[] | {id: .id, body: .body[0:500], path: .path, line: .line, reviewer_login: .user.login, review_id: '$REVIEW_ID'}]')
     GEMINI_ALL_COMMENTS=$(echo "$GEMINI_ALL_COMMENTS" | jq --argjson c "$COMMENTS" '. + $c')
   done
 fi
@@ -287,16 +288,30 @@ Code-Review-Reception 스킬의 프로세스를 따르되, 자동화:
 3. **수정**: blocking → simple → complex 순서로 구현
 4. **테스트**: 프로젝트 테스트/린트/빌드 명령 실행
 5. **커밋**: 수정 내용을 요약한 커밋 메시지
-6. **답변**: 각 코멘트에 gh api로 답변 게시
+6. **답변**: 각 코멘트에 gh api로 답변 게시 — **동의/반대에 따라 멘션 분기**
+
+### 답변 멘션 규칙 (CRITICAL)
+
+| 답변 유형               | 멘션 여부              | 이유                                              |
+| ----------------------- | ---------------------- | ------------------------------------------------- |
+| ✅ 동의 (수정 완료)     | **멘션 없음**          | 리뷰어 재트리거 불필요, 토큰 낭비 방지            |
+| 📝 반대 (decline)       | **리뷰어 멘션 필수**   | 리뷰어가 재검토하도록 명시적 트리거               |
+
+- 멘션 형식: `@<reviewer_login>` — bot 계정은 `[bot]` 접미사 제외하고 로그인명만 사용
+  - 예: `chatgpt-codex-connector[bot]` → `@chatgpt-codex-connector`
+  - 예: `gemini-code-assist[bot]` → `@gemini-code-assist`
+- `reviewer_login`은 Step 3-1에서 수집한 코멘트 객체에 포함됨 (`.user.login`).
 
 ```bash
-# 답변 (review comment에 reply)
+# 동의 (수정 완료) — 멘션 없이
 gh api repos/$OWNER/$REPO/pulls/$PR_NUM/comments/$COMMENT_ID/replies \
   -f body="✅ **수정 완료**: <설명>"
 
-# decline
+# decline (반대) — 리뷰어 멘션 포함
+# reviewer_login은 해당 코멘트 객체의 .reviewer_login 필드에서 가져옴
+REVIEWER_HANDLE=$(echo "$REVIEWER_LOGIN" | sed 's/\[bot\]$//')
 gh api repos/$OWNER/$REPO/pulls/$PR_NUM/comments/$COMMENT_ID/replies \
-  -f body="📝 <기술적 이유>"
+  -f body="@${REVIEWER_HANDLE} 📝 <기술적 이유>"
 ```
 
 ## Step 5: Trigger Re-review
@@ -407,6 +422,8 @@ PR이 머지 가능한 상태입니다. / 사용자 확인이 필요합니다.
 | Gemini 미설정 repo에서 Gemini 대기                           | `GEMINI_ENABLED` 플래그로 Gemini 관련 로직 분기                             |
 | polling 타임아웃 후 같은 리뷰 무한 재평가                    | `STALE_COUNT`로 무응답 감지, 2회 초과 시 fallback/알림                      |
 | 최신 리뷰만 확인하여 이전 리뷰 미답변 누락                   | `ALL_*_REVIEW_IDS`로 모든 리뷰의 코멘트를 스캔                              |
+| 동의 답변에 리뷰어 멘션 포함                                 | 동의 시 멘션 생략 (재트리거 불필요, 토큰 낭비)                              |
+| 반대(decline) 답변에 리뷰어 멘션 누락                        | `@<reviewer_login>` 멘션으로 재검토 트리거                                  |
 
 ## Related Skills
 
