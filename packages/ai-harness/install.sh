@@ -270,18 +270,39 @@ fi
 HOOK_SCRIPT="$HARNESS_DIR/scripts/auto-update.sh"
 chmod +x "$HOOK_SCRIPT"
 
-if grep -q "auto-update.sh" "$SETTINGS_FILE" 2>/dev/null; then
-    echo "  Claude Code: already registered"
+DESIRED_MATCHER="startup|clear|resume"
+
+EXISTING_COUNT=$(jq --arg cmd "$HOOK_SCRIPT" '
+  (.hooks.SessionStart // []) | map(select(.hooks // [] | any(.command == $cmd))) | length
+' "$SETTINGS_FILE")
+
+if [ "$EXISTING_COUNT" -gt 0 ]; then
+    CURRENT_MATCHER=$(jq -r --arg cmd "$HOOK_SCRIPT" '
+      (.hooks.SessionStart // []) | map(select(.hooks // [] | any(.command == $cmd))) | .[0].matcher // ""
+    ' "$SETTINGS_FILE")
+
+    if [ "$CURRENT_MATCHER" = "$DESIRED_MATCHER" ]; then
+        echo "  Claude Code: already registered (matcher up to date)"
+    else
+        TMP_FILE=$(mktemp)
+        jq --arg cmd "$HOOK_SCRIPT" --arg m "$DESIRED_MATCHER" '
+          .hooks.SessionStart = ((.hooks.SessionStart // []) | map(
+            if (.hooks // [] | any(.command == $cmd)) then .matcher = $m else . end
+          ))
+        ' "$SETTINGS_FILE" > "$TMP_FILE"
+        mv "$TMP_FILE" "$SETTINGS_FILE"
+        echo "  Claude Code: migrated matcher '$CURRENT_MATCHER' → '$DESIRED_MATCHER'"
+    fi
 else
-    NEW_HOOK=$(jq -n --arg cmd "$HOOK_SCRIPT" '{
-        "matcher": "startup",
+    NEW_HOOK=$(jq -n --arg cmd "$HOOK_SCRIPT" --arg m "$DESIRED_MATCHER" '{
+        "matcher": $m,
         "hooks": [{"type": "command", "command": $cmd}]
     }')
 
     TMP_FILE=$(mktemp)
     jq --argjson entry "$NEW_HOOK" '.hooks.SessionStart = (.hooks.SessionStart // []) + [$entry]' "$SETTINGS_FILE" > "$TMP_FILE"
     mv "$TMP_FILE" "$SETTINGS_FILE"
-    echo "  Claude Code: registered SessionStart hook"
+    echo "  Claude Code: registered SessionStart hook (matcher: $DESIRED_MATCHER)"
 fi
 
 # --- OpenCode agent config ---
