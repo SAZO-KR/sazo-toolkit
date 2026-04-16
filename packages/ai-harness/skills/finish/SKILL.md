@@ -234,23 +234,25 @@ if [ -f pyproject.toml ] || [ -f setup.py ] || [ -f setup.cfg ] \
   #    not on exit code — a genuine ruff lint violation must NOT be masked by
   #    trying flake8 next.
   if [ "$PY_LINT_RAN" = false ] && [ -f pyproject.toml ]; then
+    # Accept the runner as separate words via "$@" — NEVER quote it as a
+    # single "poetry run" string, or the shell looks for a literal binary
+    # named "poetry run" and the lint detection silently always fails.
     run_managed_lint() {
-      local runner="$1"
-      if "$runner" ruff --version >/dev/null 2>&1; then
-        "$runner" ruff check --fix . || LINT_FAILED=1
-      elif "$runner" flake8 --version >/dev/null 2>&1; then
-        "$runner" flake8 . || LINT_FAILED=1
+      if "$@" ruff --version >/dev/null 2>&1; then
+        "$@" ruff check --fix . || LINT_FAILED=1
+      elif "$@" flake8 --version >/dev/null 2>&1; then
+        "$@" flake8 . || LINT_FAILED=1
       else
         return 1  # neither linter available in this env
       fi
       return 0
     }
     if   grep -q '^\[tool\.poetry\]' pyproject.toml && command -v poetry >/dev/null 2>&1; then
-      run_managed_lint "poetry run" && PY_LINT_RAN=true
+      run_managed_lint poetry run && PY_LINT_RAN=true
     elif { grep -q '^\[tool\.uv\]'  pyproject.toml || [ -f uv.lock ]; } && command -v uv >/dev/null 2>&1; then
-      run_managed_lint "uv run" && PY_LINT_RAN=true
+      run_managed_lint uv run && PY_LINT_RAN=true
     elif { grep -q '^\[tool\.pdm\]' pyproject.toml || [ -f pdm.lock ]; } && command -v pdm >/dev/null 2>&1; then
-      run_managed_lint "pdm run" && PY_LINT_RAN=true
+      run_managed_lint pdm run && PY_LINT_RAN=true
     elif grep -q '^\[tool\.hatch\]' pyproject.toml && command -v hatch >/dev/null 2>&1; then
       hatch run lint 2>/dev/null || LINT_FAILED=1; PY_LINT_RAN=true
     fi
