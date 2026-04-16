@@ -48,7 +48,13 @@ description: Use this whenever you need to create an isolated workspace using gi
           sub("/[^/]*$", "", parent)
         }
       } else {
-        # Detached — no branch name to strip, use dirname
+        # Detached — no branch name to strip, use dirname as best-effort.
+        # KNOWN LIMITATION: if the worktree path encodes a multi-segment
+        # name (e.g., /repo/.worktrees/feature/auth created detached),
+        # single dirname yields /repo/.worktrees/feature (wrong). There is
+        # no reliable fix because detached worktrees carry no branch info
+        # to determine stripping depth. The common-names fallback below
+        # covers this case in practice.
         parent = wt
         sub("/[^/]*$", "", parent)
       }
