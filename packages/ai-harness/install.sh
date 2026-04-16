@@ -253,6 +253,20 @@ if [ ! -f "$SETTINGS_FILE" ]; then
     echo '{}' > "$SETTINGS_FILE"
 fi
 
+# --- Skill-declared permissions ---
+
+PERMISSIONS_MERGE_SCRIPT="$HARNESS_DIR/scripts/merge-permissions.sh"
+
+if [ -f "$PERMISSIONS_MERGE_SCRIPT" ]; then
+    # shellcheck disable=SC1090
+    source "$PERMISSIONS_MERGE_SCRIPT"
+
+    ADDED=$(merge_skill_permissions "$HARNESS_DIR/skills" "$SETTINGS_FILE")
+    if [ "${ADDED:-0}" -gt 0 ] 2>/dev/null; then
+        echo "  Skill permissions: added $ADDED new entries to permissions.allow"
+    fi
+fi
+
 HOOK_SCRIPT="$HARNESS_DIR/scripts/auto-update.sh"
 chmod +x "$HOOK_SCRIPT"
 

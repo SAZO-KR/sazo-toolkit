@@ -1,0 +1,575 @@
+---
+name: isolate
+description: Use this whenever you need to create an isolated workspace using git worktrees.
+---
+
+<required>
+*CRITICAL* Add the following steps to your Todo list using TodoWrite:
+
+1. Find the worktrees directory. Follow the priority **existing > CLAUDE.md/AGENTS.md > ask**:
+
+- First, check for an existing worktree directory. Do **not** hardcode a single name — the project may use `.worktrees`, `_worktrees`, or anything else:
+  ```bash
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+  # 1. If worktrees already exist, derive the shared root.
+  #    Primary path: strip the FULL branch path (may contain "/") from the
+  #    worktree path. A naive single `dirname` would break for `feature/auth`
+  #    branches — /repo/.worktrees/feature/auth → /repo/.worktrees/feature (wrong).
+  #    Fallback: if the worktree path doesn't follow the "<parent>/<branch>"
+  #    convention (e.g., `git worktree add /tmp/wt-auth feature/auth`), fall
+  #    back to plain dirname so the existing location is still discovered.
+  EXISTING_WT_PARENT=$(git worktree list --porcelain | awk -v root="$REPO_ROOT" '
+    # Record the first worktree entry as the primary worktree (git guarantees
+    # "main worktree is listed first" per git-worktree docs). We skip it when
+    # inferring the shared worktree dir, since the primary lives AT REPO_ROOT
+    # and its dirname is REPO_ROOTs parent (e.g., /workspace) — not a valid
+    # worktree directory.
+    /^worktree / {
+      wt = substr($0, 10)
+      if (primary == "") primary = wt
+      next
+    }
+    # Handle branched worktrees: `branch refs/heads/<name>` emits a branch name
+    # we can strip as a suffix to recover the parent. Handle detached
+    # worktrees: `detached` has no branch info, so fall back to dirname.
+    /^(branch refs\/heads\/|detached$)/ {
+      if (wt == primary) next
+
+      if ($0 ~ /^branch /) {
+        branch = substr($0, 19)
+        suffix = "/" branch
+        if (length(wt) > length(suffix) && \
+            substr(wt, length(wt) - length(suffix) + 1) == suffix) {
+          parent = substr(wt, 1, length(wt) - length(suffix))
+        } else {
+          # Non-standard layout — use dirname as best-effort parent
+          parent = wt
+          sub("/[^/]*$", "", parent)
+        }
+      } else {
+        # Detached — no branch name to strip, use dirname as best-effort.
+        # KNOWN LIMITATION: if the worktree path encodes a multi-segment
+        # name (e.g., /repo/.worktrees/feature/auth created detached),
+        # single dirname yields /repo/.worktrees/feature (wrong). There is
+        # no reliable fix because detached worktrees carry no branch info
+        # to determine stripping depth. The common-names fallback below
+        # covers this case in practice.
+        parent = wt
+        sub("/[^/]*$", "", parent)
+      }
+      if (parent != root && parent != "") { print parent; exit }
+    }
+  ')
+
+  WORKTREE_DIR=""  # set below; required by Steps 2 and 3
+  if [ -n "$EXISTING_WT_PARENT" ]; then
+    WORKTREE_DIR="$EXISTING_WT_PARENT"
+    echo "Found existing worktree directory: $WORKTREE_DIR"
+  else
+    # 2. No active worktrees — check common directory names at repo root
+    for d in .worktrees _worktrees worktrees; do
+      if [ -d "$REPO_ROOT/$d" ]; then
+        WORKTREE_DIR="$REPO_ROOT/$d"
+        echo "Found: $WORKTREE_DIR"
+        break
+      fi
+    done
+  fi
+  ```
+  If a directory is found, `$WORKTREE_DIR` is now assigned and Steps 2–3 will use it.
+- If not found, check the project's `CLAUDE.md` and `AGENTS.md` for a project-specific worktree location before creating anything. **Walk from the current directory up to the git repo root** so the check works even when the skill is invoked from a subdirectory:
+  ```bash
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  DIR=$(pwd)
+  while :; do
+    [ -f "$DIR/CLAUDE.md" ] && grep -iHE 'worktree' "$DIR/CLAUDE.md" 2>/dev/null
+    [ -f "$DIR/AGENTS.md" ] && grep -iHE 'worktree' "$DIR/AGENTS.md" 2>/dev/null
+    [ "$DIR" = "$REPO_ROOT" ] && break
+    [ "$DIR" = "/" ] && break
+    DIR=$(dirname "$DIR")
+  done
+  ```
+  If any ancestor `CLAUDE.md` / `AGENTS.md` defines a worktree convention, assign that path (resolved against the repo root) to `$WORKTREE_DIR` — e.g., `WORKTREE_DIR="$REPO_ROOT/custom-worktrees"`.
+- Only if none of the above applies, ask me for permission to create a `.worktrees` directory, and if given permission: `WORKTREE_DIR="$REPO_ROOT/.worktrees"; mkdir -p "$WORKTREE_DIR"`.
+- **At the end of Step 1, `$WORKTREE_DIR` MUST be a non-empty path** — Steps 2 and 3 consume it. If you reached this point without a value, stop and ask the user.
+
+2. Verify .gitignore before creating a worktree using the Bash tool. **Only applies when `$WORKTREE_DIR` is inside the repo** — worktrees that live outside the repo do not need (and should not get) an entry in repo `.gitignore`, since adding the basename could accidentally ignore an unrelated in-repo directory with the same name:
+
+```bash
+# Canonicalize $WORKTREE_DIR to an absolute path WITH ".." segments collapsed,
+# resolved against $REPO_ROOT (not $PWD). This matters because:
+#   1. A config like "../worktrees" would textually match `"$REPO_ROOT"/*`
+#      while actually resolving outside the repo → wrong .gitignore edits.
+#   2. Relative paths must be interpreted relative to the repo, not to
+#      wherever the skill happens to be invoked from.
+if command -v python3 >/dev/null 2>&1; then
+  WT_ABS=$(python3 -c \
+    'import os,sys; print(os.path.normpath(os.path.join(sys.argv[1], sys.argv[2])))' \
+    "$REPO_ROOT" "$WORKTREE_DIR")
+elif command -v realpath >/dev/null 2>&1; then
+  # realpath -m doesn't take a base dir; cd to $REPO_ROOT first so the
+  # relative path is resolved against it, not $PWD.
+  WT_ABS=$(cd "$REPO_ROOT" && (realpath -m "$WORKTREE_DIR" 2>/dev/null \
+                             || realpath "$WORKTREE_DIR" 2>/dev/null))
+fi
+# Hard fallback (no canonicalizer — won't collapse ".." but keeps skill runnable)
+if [ -z "$WT_ABS" ]; then
+  case "$WORKTREE_DIR" in
+    /*) WT_ABS="$WORKTREE_DIR" ;;
+    *)  WT_ABS="$REPO_ROOT/$WORKTREE_DIR" ;;
+  esac
+fi
+
+# Only validate .gitignore when the worktree dir is inside the repo
+case "$WT_ABS/" in
+  "$REPO_ROOT"/*)
+    # Use the REPO-RELATIVE path, not basename. Gitignore semantics:
+    # a bare `worktrees/` pattern matches ANY directory named `worktrees`
+    # at any depth, which can accidentally ignore unrelated paths. A path
+    # anchored from the repo root (e.g., `tools/worktrees/`) matches only
+    # that specific location.
+    WT_REL="${WT_ABS#$REPO_ROOT/}"
+    WT_REL_ESC=$(printf '%s' "$WT_REL" | sed 's/[.[\*^$()+?{|\\]/\\&/g')
+
+    # Check if the exact repo-relative path (with or without leading slash /
+    # trailing slash) is already ignored
+    grep -qE "^/?${WT_REL_ESC}/?$" "$REPO_ROOT/.gitignore"
+    ;;
+  *)
+    echo "Worktree dir is outside the repo — skipping .gitignore check"
+    ;;
+esac
+```
+
+- If the worktree dir is inside the repo and the pattern is not found, add a repo-relative entry to `$REPO_ROOT/.gitignore` immediately — run:
+  ```bash
+  # Ensure trailing newline before appending (prevents concatenation with
+  # the last existing line if .gitignore doesn't end with a newline).
+  [ -s "$REPO_ROOT/.gitignore" ] && [ "$(tail -c1 "$REPO_ROOT/.gitignore")" != "" ] && echo "" >> "$REPO_ROOT/.gitignore"
+  echo "/$WT_REL/" >> "$REPO_ROOT/.gitignore"
+  ```
+  This writes a root-anchored entry like `/tools/worktrees/` or `/.worktrees/`. Do not use the basename alone.
+
+3. Create the worktree
+
+- Come up with a good branch name based on the request and assign it to `$BRANCH_NAME`.
+- Handle four scenarios (existing worktree → local branch → remote branch → new branch):
+
+```bash
+# Assign the branch name you picked above
+BRANCH_NAME="feature/your-branch-name"
+# $WORKTREE_DIR was already determined in Step 1 (may be .worktrees,
+# _worktrees, or a project-specific path). Only set a fallback if unset —
+# do NOT overwrite the value Step 1 derived.
+: "${WORKTREE_DIR:=.worktrees}"
+
+# Normalize to an absolute path anchored at $REPO_ROOT so that the
+# `git worktree add` commands below work correctly regardless of the
+# current working directory. A bare relative $WORKTREE_DIR would be
+# resolved against $PWD, which breaks when the skill is invoked from
+# a subdirectory (e.g., `src/foo/.worktrees/...` instead of the
+# discovered project worktree directory).
+case "$WORKTREE_DIR" in
+  /*) WT_PATH="$WORKTREE_DIR" ;;
+  *)  WT_PATH="$REPO_ROOT/$WORKTREE_DIR" ;;
+esac
+
+# 1. Check if a worktree for this branch already exists.
+#    Use awk with a literal string compare so branch names containing regex
+#    metacharacters (e.g., `release/1.0`) aren't matched against siblings.
+EXISTING_WT=$(git worktree list --porcelain \
+  | awk -v b="refs/heads/$BRANCH_NAME" '
+      /^worktree / { wt = substr($0, 10) }
+      $0 == "branch " b { print wt; exit }
+    ')
+
+if [ -n "$EXISTING_WT" ]; then
+  # Worktree already exists for this branch — reuse it
+  echo "Reusing existing worktree at: $EXISTING_WT"
+elif git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
+  # Local branch exists, no worktree — attach
+  git worktree add "$WT_PATH/$BRANCH_NAME" "$BRANCH_NAME"
+elif git show-ref --verify --quiet "refs/remotes/origin/$BRANCH_NAME"; then
+  # Cached remote-tracking ref — use it without an extra network round trip,
+  # which also dodges ls-remote transport/auth failure modes.
+  git worktree add "$WT_PATH/$BRANCH_NAME" -b "$BRANCH_NAME" "origin/$BRANCH_NAME"
+else
+  # No local or cached remote ref — ask the remote. Distinguish:
+  #   exit 0  → branch exists on origin           (fetch + track)
+  #   exit 2  → branch confirmed missing          (safe to create new)
+  #   other   → network/auth/transport failure    (do NOT silently create;
+  #             that would diverge from the real remote history and cause
+  #             non-fast-forward push failures later)
+  git ls-remote --exit-code --heads origin "$BRANCH_NAME" >/dev/null 2>&1
+  ls_remote_rc=$?
+  case "$ls_remote_rc" in
+    0)
+      git fetch origin "$BRANCH_NAME"
+      git worktree add "$WT_PATH/$BRANCH_NAME" -b "$BRANCH_NAME" "origin/$BRANCH_NAME"
+      ;;
+    2)
+      # Remote confirmed the branch does not exist — create new from HEAD
+      git worktree add "$WT_PATH/$BRANCH_NAME" -b "$BRANCH_NAME"
+      ;;
+    *)
+      echo "Error: git ls-remote failed (exit $ls_remote_rc) — cannot determine whether '$BRANCH_NAME' exists on origin. Check network/credentials and retry, or create the worktree manually." >&2
+      exit 1
+      ;;
+  esac
+fi
+```
+
+**Why check existing worktree first:** If the branch is already checked out in another worktree, `git worktree add` will error. Detecting and reusing the existing path lets agents resume prior work without manual cleanup.
+
+**Why check remote:** If `$BRANCH_NAME` only exists on `origin` (e.g., resuming a teammate's work or an earlier session), creating with just `-b` branches from current HEAD and diverges from the real history — later `git push` fails as non-fast-forward. We prefer `refs/remotes/origin/…` (cached locally) first to avoid unnecessary network round trips, and only fall back to `git ls-remote` when the cache is cold.
+
+**Why handle `ls-remote` exit codes specifically:** `git ls-remote --exit-code` returns `0` for "found", `2` for "not found", and other non-zero values for transport/auth failures. Treating every non-zero as "not found" — the common bug — would silently create a fresh branch on network outages and later break pushes. The case block above escalates unknown failures instead.
+
+- cd into the worktree path: `cd "$EXISTING_WT"` (reuse case) or `cd "$WT_PATH/$BRANCH_NAME"` (new worktree case)
+
+4. Auto-detect and run project setup.
+
+```bash
+# Node.js — detect actual package manager (lockfile > packageManager field > npm)
+# and REQUIRE the chosen tool be on PATH. Falling back to `npm install` when
+# the lockfile's tool is missing would produce the wrong lockfile format and
+# break reproducibility, so we escalate to the user instead.
+if [ -f package.json ]; then
+  if   [ -f pnpm-lock.yaml ]; then
+    if command -v pnpm >/dev/null 2>&1; then pnpm install
+    else echo "pnpm-lock.yaml found but pnpm is not installed — install pnpm or ask the user." >&2
+    fi
+  elif [ -f yarn.lock ]; then
+    if command -v yarn >/dev/null 2>&1; then yarn install
+    else echo "yarn.lock found but yarn is not installed — install yarn or ask the user." >&2
+    fi
+  elif [ -f bun.lockb ] || [ -f bun.lock ]; then
+    if command -v bun >/dev/null 2>&1; then bun install
+    else echo "bun lockfile found but bun is not installed — install bun or ask the user." >&2
+    fi
+  elif [ -f package-lock.json ]; then
+    if command -v npm >/dev/null 2>&1; then npm install
+    else echo "package-lock.json found but npm is not installed — install Node.js/npm or ask the user." >&2
+    fi
+  else
+    # No lockfile — consult the packageManager field (jq primary, node fallback)
+    PM=$(
+      command -v jq >/dev/null 2>&1 \
+        && jq -r '.packageManager // empty' package.json 2>/dev/null \
+        || node -e "console.log(require('./package.json').packageManager||'')" 2>/dev/null
+    )
+    PM=$(echo "$PM" | cut -d@ -f1)
+    if [ -n "$PM" ]; then
+      # packageManager is an EXPLICIT project directive — honor it strictly.
+      # Never fall back to npm when the declared tool is missing: a different
+      # resolver would generate an unintended lockfile and a mismatched
+      # dependency graph (a dirty worktree before baseline tests).
+      if command -v "$PM" >/dev/null 2>&1; then
+        "$PM" install
+      else
+        echo "packageManager=$PM declared in package.json but $PM is not installed on PATH. Install it (or ask the user); refusing to fall back to npm because it would use the wrong resolver." >&2
+      fi
+    else
+      # No packageManager declared and no lockfile — npm default is safe.
+      if command -v npm >/dev/null 2>&1; then
+        npm install
+      else
+        echo "No Node package manager available on PATH — ask the user." >&2
+      fi
+    fi
+  fi
+fi
+
+# Rust
+if [ -f Cargo.toml ]; then cargo build; fi
+
+# Python — pyproject.toml can be Poetry OR uv/pdm/hatch/setuptools.
+# Do NOT blindly run `poetry install`; detect the actual build tool AND
+# verify the tool is installed locally (CI-only metadata like `uv.lock`
+# shouldn't abort setup when the lockfile's tool isn't on PATH).
+if [ -f pyproject.toml ]; then
+  if   grep -q '^\[tool\.poetry\]' pyproject.toml && command -v poetry >/dev/null 2>&1;                                     then poetry install
+  elif { grep -q '^\[tool\.uv\]'   pyproject.toml || [ -f uv.lock ];  } && command -v uv     >/dev/null 2>&1;               then uv sync
+  elif { grep -q '^\[tool\.pdm\]'  pyproject.toml || [ -f pdm.lock ]; } && command -v pdm    >/dev/null 2>&1;               then pdm install
+  elif grep -q '^\[tool\.hatch\]'  pyproject.toml && command -v hatch  >/dev/null 2>&1;                                     then hatch env create
+  else
+    # If ANY explicit manager marker was detected above but its tool is
+    # unavailable, do NOT fall through to pip — pip uses a different resolver
+    # and ignores lock/workflow semantics, producing a mismatched env.
+    # Only use pip when NO managed-tool marker was found (plain PEP 621).
+    HAS_MANAGED_MARKER=false
+    grep -qE '^\[tool\.(poetry|uv|pdm|hatch)\]' pyproject.toml 2>/dev/null && HAS_MANAGED_MARKER=true
+    { [ -f uv.lock ] || [ -f pdm.lock ]; } && HAS_MANAGED_MARKER=true
+
+    if [ "$HAS_MANAGED_MARKER" = true ]; then
+      echo "Python install: managed tool declared in pyproject.toml but not installed — ask the user. Refusing pip fallback (resolver mismatch)." >&2
+    elif command -v pip >/dev/null 2>&1; then
+      pip install -e .   # PEP 621 generic, no managed tool declared
+    else
+      echo "Python install tool not available — no managed tool and pip not on PATH. Ask the user." >&2
+    fi
+  fi
+elif [ -f requirements.txt ] && command -v pip >/dev/null 2>&1; then pip install -r requirements.txt
+fi
+
+# Go
+if [ -f go.mod ]; then go mod download; fi
+```
+
+- If there is no obvious project setup, you _MUST_ ask me.
+
+5. Run tests to ensure the worktree is clean. Detect EVERY stack present and run each matching suite — polyglot repos would otherwise silently skip one language.
+
+```bash
+# Preserve exit codes across suites (FAILED aggregator) and mark RAN=1 ONLY
+# after a real test command executes — detection-failure branches must NOT
+# flip RAN, or the "No recognized test suite" guard loses meaning and a
+# detection-failure baseline would be treated as clean.
+RAN=0
+FAILED=0
+if [ -f package.json ]; then
+  # Only run if a "test" script is actually defined — tooling-only or
+  # polyglot repos commonly have package.json without scripts.test, and
+  # `npm test` would exit 1 with "Missing script" as a false baseline failure.
+  # Require the parser to SUCCEED (not merely exist) — a malformed
+  # package.json with jq installed would otherwise produce empty HAS_TEST
+  # and silently skip the baseline, letting polyglot repos pass as clean.
+  HAS_TEST=""
+  PARSE_FAIL=""
+  if command -v jq >/dev/null 2>&1; then
+    if ! HAS_TEST=$(jq -r '.scripts.test // empty' package.json 2>/dev/null); then
+      PARSE_FAIL="jq failed to parse package.json (invalid JSON?)"
+    fi
+  elif command -v node >/dev/null 2>&1; then
+    if ! HAS_TEST=$(node -e "console.log((require('./package.json').scripts||{}).test||'')" 2>/dev/null); then
+      PARSE_FAIL="node failed to read/parse package.json"
+    fi
+  else
+    PARSE_FAIL="neither jq nor node on PATH"
+  fi
+  if [ -n "$PARSE_FAIL" ]; then
+    echo "Cannot determine scripts.test — $PARSE_FAIL. Ask the user." >&2
+    FAILED=1; RAN=1
+    HAS_TEST=""
+  fi
+  if [ -n "$HAS_TEST" ]; then
+    # Detect the declared package manager (mirrors Step 4 install detection).
+    # Hardcoding `npm test` fails on bun/yarn/pnpm repos, and falling back
+    # to a different tool when a lockfile exists would produce misleading
+    # baseline results and mutate lockfiles.
+    PM_CMD=""
+    PM_ERR=""
+    if   [ -f pnpm-lock.yaml ]; then
+      if command -v pnpm >/dev/null 2>&1; then PM_CMD="pnpm"
+      else PM_ERR="pnpm-lock.yaml found but pnpm is not installed"
+      fi
+    elif [ -f yarn.lock ]; then
+      if command -v yarn >/dev/null 2>&1; then PM_CMD="yarn"
+      else PM_ERR="yarn.lock found but yarn is not installed"
+      fi
+    elif [ -f bun.lockb ] || [ -f bun.lock ]; then
+      if command -v bun >/dev/null 2>&1; then PM_CMD="bun"
+      else PM_ERR="bun lockfile found but bun is not installed"
+      fi
+    elif [ -f package-lock.json ]; then
+      if command -v npm >/dev/null 2>&1; then PM_CMD="npm"
+      else PM_ERR="package-lock.json found but npm is not installed"
+      fi
+    else
+      PM=$(
+        command -v jq >/dev/null 2>&1 \
+          && jq -r '.packageManager // empty' package.json 2>/dev/null \
+          || node -e "console.log(require('./package.json').packageManager||'')" 2>/dev/null
+      )
+      PM=$(echo "$PM" | cut -d@ -f1)
+      if [ -n "$PM" ]; then
+        if command -v "$PM" >/dev/null 2>&1; then PM_CMD="$PM"
+        else PM_ERR="packageManager=$PM declared but $PM is not installed"
+        fi
+      elif command -v npm >/dev/null 2>&1; then
+        PM_CMD="npm"
+      fi
+    fi
+    if [ -n "$PM_CMD" ]; then
+      # Bun gotcha: `bun test` runs Bun's native test runner, NOT
+      # scripts.test — use `bun run test` for package scripts.
+      if [ "$PM_CMD" = "bun" ]; then bun run test || FAILED=1
+      else "$PM_CMD" test || FAILED=1
+      fi
+      RAN=1
+    else
+      echo "Node test runner not available — ${PM_ERR:-no manager on PATH}. Ask the user." >&2
+      FAILED=1; RAN=1
+    fi
+  fi
+fi
+if [ -f Cargo.toml ]; then cargo test || FAILED=1; RAN=1; fi
+
+# Python — detect the managed runner (mirrors the Step 4 install detection).
+# Plain `pytest` fails on repos scoped through poetry/uv/pdm/hatch or tox.
+# RAN=1 is set INSIDE each real-command branch so the else-branch (detection
+# failure) doesn't falsely mark the baseline as clean.
+if [ -f pyproject.toml ] || [ -f pytest.ini ] \
+  || [ -f setup.py ]     || [ -f tox.ini ]; then
+  # Each managed-runner branch requires BOTH (a) the marker/config and
+  # (b) the tool binary present in PATH — CI-only metadata shouldn't fail
+  # baseline when a different runner that IS installed would work.
+  if   [ -f tox.ini ] && command -v tox >/dev/null 2>&1;                                       then tox                || FAILED=1; RAN=1
+  elif [ -f pyproject.toml ] && grep -q '^\[tool\.poetry\]' pyproject.toml \
+    && command -v poetry >/dev/null 2>&1;                                                      then poetry run pytest  || FAILED=1; RAN=1
+  elif [ -f pyproject.toml ] && { grep -q '^\[tool\.uv\]'  pyproject.toml || [ -f uv.lock ]; } \
+    && command -v uv     >/dev/null 2>&1;                                                      then uv run pytest      || FAILED=1; RAN=1
+  elif [ -f pyproject.toml ] && { grep -q '^\[tool\.pdm\]' pyproject.toml || [ -f pdm.lock ]; } \
+    && command -v pdm    >/dev/null 2>&1;                                                      then pdm run pytest     || FAILED=1; RAN=1
+  elif [ -f pyproject.toml ] && grep -q '^\[tool\.hatch\]' pyproject.toml \
+    && command -v hatch  >/dev/null 2>&1;                                                      then hatch run test     || FAILED=1; RAN=1
+  elif command -v pytest >/dev/null 2>&1;                                                      then pytest             || FAILED=1; RAN=1
+  else
+    # Markers present but no runnable tool — this IS a baseline failure.
+    # Mark FAILED so polyglot repos (Python + Go, etc.) don't get a false
+    # "clean baseline" from a later-passing suite. RAN=1 ensures the
+    # message is surfaced instead of being swallowed by the "No recognized
+    # test suite" guard below.
+    echo "Python test runner not available — configured tool(s) missing and pytest not on PATH. Ask the user."
+    FAILED=1; RAN=1
+  fi
+fi
+
+if [ -f go.mod ]; then go test ./... || FAILED=1; RAN=1; fi
+
+if [ "$RAN" = "0" ]; then
+  echo "No recognized test suite — ask the user which command to run"
+fi
+if [ "$FAILED" = "1" ]; then
+  echo "One or more baseline test suites failed — investigate before continuing"
+fi
+```
+
+**If tests fail:** Report failures, ask whether to proceed or investigate.
+
+**If tests pass:** Report ready.
+
+6. Report Location
+
+```
+New working directory: <full-path>
+Tests passing (<N> tests, 0 failures)
+All commands and tools will now refer to: <full-path>
+```
+
+7. Understand that you are now in a new working directory. Your Bash tool instructions from here on out should refer to the worktree directory, NOT your original directory. This is ABSOLUTELY CRITICAL.
+
+</required>
+
+# Maintaining Working Directory in Worktree
+
+CRITICAL: Once you create and enter a worktree, you must stay within
+it for the entire session.
+
+Rules:
+
+1. Never use cd .. from within a worktree - It will eventually take
+   you outside the worktree boundary
+2. Always use absolute paths for commands - Use npm run lint from
+   within the worktree, not cd .. && npm run lint
+3. If you need to run root-level commands, use the full worktree path:
+   <bad-example>
+   cd .. && npm run lint
+   </bad-example>
+   <good-example>
+   npm run lint # (from worktree root)
+   </good-example>
+
+<good-example>
+cd /home/$USER/code/project/.worktrees/branch-name && npm run lint
+</good-example>
+
+4. Verify your location frequently:
+
+```bash
+pwd  # Should show .worktrees/branch-name in path
+git branch  # Should show * on your feature branch, not main
+```
+
+5. If you accidentally exit the worktree:
+
+- Immediately recognize it (check if you're on main branch)
+- Navigate back: cd /full/path/to/.worktrees/your-branch
+- Verify: git branch should show your branch, not main
+
+Red Flags:
+
+- Running git status and seeing "On branch main" when you should be on a feature branch
+- Running pwd and NOT seeing .worktrees/ in the path
+- Any cd .. command while in a worktree
+
+# Quick Reference
+
+| Situation                         | Action                                                                       |
+| --------------------------------- | ---------------------------------------------------------------------------- |
+| Project worktree dir exists       | Use it (verify .gitignore)                                                   |
+| Project worktree dir missing      | Check `CLAUDE.md` / `AGENTS.md` (current dir up to repo root) → else ask user |
+| Directory not in .gitignore       | Add it immediately                                                           |
+| Tests fail during baseline        | Report failures + ask                                                        |
+| No package.json/Cargo.toml        | Skip dependency install                                                      |
+
+# Common Mistakes
+
+**Skipping .gitignore verification**
+
+- **Problem:** Worktree contents get tracked, pollute git status
+- **Fix:** Always grep .gitignore before creating project-local worktree
+
+**Assuming directory location**
+
+- **Problem:** Creates inconsistency, violates project conventions
+- **Fix:** Follow priority: existing > `CLAUDE.md` / `AGENTS.md` (including ancestors) > ask
+
+**Missing project installation**
+
+- **Problem:** Tests and lint will fail, breaking the project
+- **Fix:** Always install the project when creating a new worktree
+
+**Proceeding with failing tests**
+
+- **Problem:** Can't distinguish new bugs from pre-existing issues
+- **Fix:** Report failures, get explicit permission to proceed
+
+**Hardcoding setup commands**
+
+- **Problem:** Breaks on projects using different tools
+- **Fix:** Auto-detect from project files (package.json, etc.)
+
+# Example Workflow
+
+```
+You: I'm using the Using Git Worktrees skill to set up an isolated workspace.
+
+[Check .worktrees/ - exists]
+[Verify .gitignore - contains .worktrees/]
+[Create worktree: git worktree add .worktrees/auth -b feature/auth]
+[Run npm install]
+[Run npm test - 47 passing]
+
+Worktree ready at myproject/.worktrees/auth
+Tests passing (47 tests, 0 failures)
+Ready to implement auth feature
+```
+
+# Red Flags
+
+**Never:**
+
+- Create worktree without .gitignore verification (project-local)
+- Skip baseline test verification
+- Proceed with failing tests without asking
+- Assume directory location when ambiguous
+- Skip `CLAUDE.md` / `AGENTS.md` check (including ancestor directories up to the repo root)
+
+**Always:**
+
+- Follow directory priority: existing > `CLAUDE.md` / `AGENTS.md` (including ancestors) > ask
+- Verify .gitignore for project-local
+- Auto-detect and run project setup
+- Verify clean test baseline

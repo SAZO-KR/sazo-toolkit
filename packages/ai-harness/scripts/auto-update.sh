@@ -28,21 +28,52 @@ if [ -f "$LOG_FILE" ] && [ "$(get_file_size "$LOG_FILE")" -gt 102400 ]; then
     tail -n 100 "$LOG_FILE" > "$TMP_LOG" && mv "$TMP_LOG" "$LOG_FILE"
 fi
 
+HARNESS_DIR="$INSTALL_DIR/packages/ai-harness"
+# Fallback for old path
+if [ ! -d "$HARNESS_DIR" ]; then
+    HARNESS_DIR="$INSTALL_DIR/packages/ai-prompts"
+fi
+
+# Permission merge must run on EVERY session start, not just after a pull.
+# Users may reset ~/.claude/settings.json or add local skill permissions
+# between updates, and without this re-sync, required permissions.allow
+# entries aren't restored until the next repo update — causing repeated
+# runtime approval prompts despite the hook firing.
+#
+# Defined BEFORE the early-exit guards so every exit path (missing install,
+# non-main branch, local changes, rate-limit, fetch failure, normal exit)
+# runs the sync before returning.
+sync_skill_permissions() {
+    local merge_script="$HARNESS_DIR/scripts/merge-permissions.sh"
+    [ -f "$merge_script" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    # shellcheck disable=SC1090
+    source "$merge_script"
+    local perm_added
+    perm_added=$(merge_skill_permissions "$HARNESS_DIR/skills" "$HOME/.claude/settings.json" 2>>"$LOG_FILE")
+    if [ "${perm_added:-0}" -gt 0 ] 2>/dev/null; then
+        log "Merged $perm_added new skill permissions into settings.allow"
+    fi
+}
+
 if [ ! -d "$INSTALL_DIR/.git" ]; then
     log "SKIP: Not installed at $INSTALL_DIR"
+    sync_skill_permissions
     exit 0
 fi
 
-cd "$INSTALL_DIR" || { log "ERROR: Cannot cd to $INSTALL_DIR"; exit 0; }
+cd "$INSTALL_DIR" || { log "ERROR: Cannot cd to $INSTALL_DIR"; sync_skill_permissions; exit 0; }
 
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 if [ "$CURRENT_BRANCH" != "main" ]; then
     log "SKIP: Not on main branch (current: $CURRENT_BRANCH)"
+    sync_skill_permissions
     exit 0
 fi
 
 if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
     log "SKIP: Local changes detected"
+    sync_skill_permissions
     exit 0
 fi
 
@@ -52,6 +83,8 @@ if [ -f "$LAST_FETCH_FILE" ]; then
     NOW=$(date +%s)
     DIFF=$((NOW - LAST_FETCH))
     if [ "$DIFF" -lt 3600 ]; then
+        # Rate-limited from fetching, but permission merge still runs.
+        sync_skill_permissions
         exit 0
     fi
 fi
@@ -93,16 +126,11 @@ if git fetch origin main --quiet 2>/dev/null; then
         log "Updating from $LOCAL_SHORT to $REMOTE_SHORT"
         if git pull --ff-only --quiet 2>/dev/null; then
             log "SUCCESS: Updated"
-            
-            HARNESS_DIR="$INSTALL_DIR/packages/ai-harness"
-            # Fallback for old path
-            if [ ! -d "$HARNESS_DIR" ]; then
-                HARNESS_DIR="$INSTALL_DIR/packages/ai-prompts"
-            fi
+
             CMD_LINKED=$(link_new_files "$HARNESS_DIR/commands" "$HOME/.claude/commands")
             SKILL_LINKED=$(link_new_files "$HARNESS_DIR/skills" "$HOME/.claude/skills")
             AGENT_LINKED=$(link_new_files "$HARNESS_DIR/agents" "$HOME/.claude/agents")
-            
+
             TOTAL=$((CMD_LINKED + SKILL_LINKED + AGENT_LINKED))
             if [ "$TOTAL" -gt 0 ]; then
                 log "Linked $TOTAL new files (commands:$CMD_LINKED skills:$SKILL_LINKED agents:$AGENT_LINKED)"
@@ -124,5 +152,10 @@ if git fetch origin main --quiet 2>/dev/null; then
 else
     log "WARN: Fetch failed (network or auth issue)"
 fi
+
+# Always sync skill permissions at the end — whether or not a pull happened,
+# whether or not the fetch succeeded. This keeps settings.allow in sync on
+# sessions with no upstream changes.
+sync_skill_permissions
 
 exit 0
