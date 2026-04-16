@@ -242,8 +242,10 @@ if [ -f pyproject.toml ] || [ -f setup.py ] || [ -f setup.cfg ] \
         "$@" ruff check --fix . || LINT_FAILED=1
       elif "$@" flake8 --version >/dev/null 2>&1; then
         "$@" flake8 . || LINT_FAILED=1
+      elif "$@" pylint --version >/dev/null 2>&1; then
+        "$@" pylint . || LINT_FAILED=1
       else
-        return 1  # neither linter available in this env
+        return 1  # no supported linter (ruff/flake8/pylint) in this env
       fi
       return 0
     }
@@ -267,7 +269,9 @@ fi
 
 # Go — only lint when the project explicitly uses golangci-lint (config file
 # present), not just because go.mod exists. Many Go projects don't use it.
-if [ -f go.mod ] && { [ -f .golangci.yml ] || [ -f .golangci.yaml ]; }; then
+# golangci-lint auto-detects .yml/.yaml/.toml/.json formats.
+if [ -f go.mod ] && { [ -f .golangci.yml ] || [ -f .golangci.yaml ] \
+  || [ -f .golangci.toml ] || [ -f .golangci.json ]; }; then
   if command -v golangci-lint >/dev/null 2>&1; then
     golangci-lint run --fix || LINT_FAILED=1
   else
