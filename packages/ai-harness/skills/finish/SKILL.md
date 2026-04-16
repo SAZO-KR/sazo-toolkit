@@ -229,17 +229,32 @@ if [ -f pyproject.toml ] || [ -f setup.py ] || [ -f setup.cfg ] \
   elif command -v pylint >/dev/null 2>&1; then pylint . || LINT_FAILED=1; PY_LINT_RAN=true
   fi
 
-  # 2. Not found globally — try via managed-env runner (mirrors test detection)
+  # 2. Not found globally — try via managed-env runner (mirrors test detection).
+  #    Fall back between tools only based on AVAILABILITY (--version succeeds),
+  #    not on exit code — a genuine ruff lint violation must NOT be masked by
+  #    trying flake8 next.
   if [ "$PY_LINT_RAN" = false ] && [ -f pyproject.toml ]; then
+    run_managed_lint() {
+      local runner="$1"
+      if "$runner" ruff --version >/dev/null 2>&1; then
+        "$runner" ruff check --fix . || LINT_FAILED=1
+      elif "$runner" flake8 --version >/dev/null 2>&1; then
+        "$runner" flake8 . || LINT_FAILED=1
+      else
+        return 1  # neither linter available in this env
+      fi
+      return 0
+    }
     if   grep -q '^\[tool\.poetry\]' pyproject.toml && command -v poetry >/dev/null 2>&1; then
-      poetry run ruff check --fix . 2>/dev/null || poetry run flake8 . 2>/dev/null || LINT_FAILED=1; PY_LINT_RAN=true
+      run_managed_lint "poetry run" && PY_LINT_RAN=true
     elif { grep -q '^\[tool\.uv\]'  pyproject.toml || [ -f uv.lock ]; } && command -v uv >/dev/null 2>&1; then
-      uv run ruff check --fix . 2>/dev/null || uv run flake8 . 2>/dev/null || LINT_FAILED=1; PY_LINT_RAN=true
+      run_managed_lint "uv run" && PY_LINT_RAN=true
     elif { grep -q '^\[tool\.pdm\]' pyproject.toml || [ -f pdm.lock ]; } && command -v pdm >/dev/null 2>&1; then
-      pdm run ruff check --fix . 2>/dev/null || pdm run flake8 . 2>/dev/null || LINT_FAILED=1; PY_LINT_RAN=true
+      run_managed_lint "pdm run" && PY_LINT_RAN=true
     elif grep -q '^\[tool\.hatch\]' pyproject.toml && command -v hatch >/dev/null 2>&1; then
       hatch run lint 2>/dev/null || LINT_FAILED=1; PY_LINT_RAN=true
     fi
+    unset -f run_managed_lint 2>/dev/null
   fi
 
   if [ "$PY_LINT_RAN" = false ]; then
@@ -248,12 +263,13 @@ if [ -f pyproject.toml ] || [ -f setup.py ] || [ -f setup.cfg ] \
   fi
 fi
 
-# Go — gate by go.mod presence AND golangci-lint availability.
-if [ -f go.mod ]; then
+# Go — only lint when the project explicitly uses golangci-lint (config file
+# present), not just because go.mod exists. Many Go projects don't use it.
+if [ -f go.mod ] && { [ -f .golangci.yml ] || [ -f .golangci.yaml ]; }; then
   if command -v golangci-lint >/dev/null 2>&1; then
     golangci-lint run --fix || LINT_FAILED=1
   else
-    echo "go.mod found but golangci-lint is not installed — ask the user." >&2
+    echo "golangci-lint config found but golangci-lint is not installed — ask the user." >&2
     LINT_FAILED=1
   fi
 fi
