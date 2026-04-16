@@ -144,6 +144,9 @@ esac
 
 - If the worktree dir is inside the repo and the pattern is not found, add a repo-relative entry to `$REPO_ROOT/.gitignore` immediately — run:
   ```bash
+  # Ensure trailing newline before appending (prevents concatenation with
+  # the last existing line if .gitignore doesn't end with a newline).
+  [ -s "$REPO_ROOT/.gitignore" ] && [ "$(tail -c1 "$REPO_ROOT/.gitignore")" != "" ] && echo "" >> "$REPO_ROOT/.gitignore"
   echo "/$WT_REL/" >> "$REPO_ROOT/.gitignore"
   ```
   This writes a root-anchored entry like `/tools/worktrees/` or `/.worktrees/`. Do not use the basename alone.
@@ -290,9 +293,22 @@ if [ -f pyproject.toml ]; then
   elif { grep -q '^\[tool\.uv\]'   pyproject.toml || [ -f uv.lock ];  } && command -v uv     >/dev/null 2>&1;               then uv sync
   elif { grep -q '^\[tool\.pdm\]'  pyproject.toml || [ -f pdm.lock ]; } && command -v pdm    >/dev/null 2>&1;               then pdm install
   elif grep -q '^\[tool\.hatch\]'  pyproject.toml && command -v hatch  >/dev/null 2>&1;                                     then hatch env create
-  elif command -v pip >/dev/null 2>&1;                                                                                       then pip install -e .   # PEP 621 generic fallback
   else
-    echo "Python install tool not available — configured tool(s) missing and pip not on PATH. Ask the user."
+    # If ANY explicit manager marker was detected above but its tool is
+    # unavailable, do NOT fall through to pip — pip uses a different resolver
+    # and ignores lock/workflow semantics, producing a mismatched env.
+    # Only use pip when NO managed-tool marker was found (plain PEP 621).
+    HAS_MANAGED_MARKER=false
+    grep -qE '^\[tool\.(poetry|uv|pdm|hatch)\]' pyproject.toml 2>/dev/null && HAS_MANAGED_MARKER=true
+    { [ -f uv.lock ] || [ -f pdm.lock ]; } && HAS_MANAGED_MARKER=true
+
+    if [ "$HAS_MANAGED_MARKER" = true ]; then
+      echo "Python install: managed tool declared in pyproject.toml but not installed — ask the user. Refusing pip fallback (resolver mismatch)." >&2
+    elif command -v pip >/dev/null 2>&1; then
+      pip install -e .   # PEP 621 generic, no managed tool declared
+    else
+      echo "Python install tool not available — no managed tool and pip not on PATH. Ask the user." >&2
+    fi
   fi
 elif [ -f requirements.txt ] && command -v pip >/dev/null 2>&1; then pip install -r requirements.txt
 fi

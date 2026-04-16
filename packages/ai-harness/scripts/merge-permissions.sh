@@ -105,7 +105,7 @@ merge_skill_permissions() {
             continue
         fi
 
-        all_bash=$(echo "$all_bash" | jq -c --argjson new "$bash_perms" '. + $new')
+        all_bash=$(jq -c -n --argjson old "$all_bash" --argjson new "$bash_perms" '$old + $new')
         skill_count=$((skill_count + 1))
     done
 
@@ -133,7 +133,7 @@ merge_skill_permissions() {
     before_count=$(jq '(.permissions.allow // []) | length' "$settings_file" 2>/dev/null || echo "0")
 
     local tmp
-    tmp=$(mktemp)
+    tmp=$(mktemp "${settings_file}.XXXXXX")
     if jq --argjson new "$all_bash" '
         .permissions = (.permissions // {})
         | .permissions.allow = ((.permissions.allow // []) + $new | unique)
