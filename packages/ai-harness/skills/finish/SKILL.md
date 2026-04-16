@@ -65,7 +65,11 @@ if [ -f package.json ]; then
       fi
     fi
     if [ -n "$PM_CMD" ]; then
-      "$PM_CMD" test || FAILED=1
+      # Bun gotcha: `bun test` runs Bun's native test runner, NOT
+      # scripts.test — use `bun run test` for package scripts.
+      if [ "$PM_CMD" = "bun" ]; then bun run test || FAILED=1
+      else "$PM_CMD" test || FAILED=1
+      fi
       RAN=1
     else
       echo "Node test runner not available — ${PM_ERR:-no manager on PATH}. Ask the user." >&2
@@ -152,6 +156,10 @@ ls .golangci.yml .golangci.yaml 2>/dev/null
 # (b) tool availability. Single-stack repos must not run `cargo clippy`
 # when no `Cargo.toml` exists, and a missing Node runner must be a hard
 # stop — not a soft warning — or PRs can bypass the linter gate entirely.
+#
+# Aggregate exit codes like Step 1 tests — an earlier lint failure must
+# NOT be masked by a later-passing one in polyglot repos.
+LINT_FAILED=0
 
 # Node.js — detect the declared package manager (mirrors Step 1 test detection).
 # Hardcoding `npm run lint` fails on bun/yarn/pnpm-managed repos where npm
@@ -190,11 +198,11 @@ if [ -f package.json ]; then
     fi
 
     if [ -n "$PM_CMD" ]; then
-      "$PM_CMD" run lint   # or run lint:fix / eslint / biome, whichever the repo defines
+      # Bun gotcha: `bun run lint` not `bun lint` (bun lint is not a thing).
+      "$PM_CMD" run lint || LINT_FAILED=1
     else
-      # HARD STOP — a missing linter must not silently bypass the gate.
       echo "Node lint gate cannot run — ${PM_ERR:-no manager on PATH}. Install the declared package manager or ask the user." >&2
-      exit 1
+      LINT_FAILED=1
     fi
   fi
 fi
@@ -202,10 +210,10 @@ fi
 # Rust — gate by Cargo.toml presence AND clippy availability.
 if [ -f Cargo.toml ]; then
   if command -v cargo >/dev/null 2>&1; then
-    cargo clippy --fix --allow-dirty --allow-staged
+    cargo clippy --fix --allow-dirty --allow-staged || LINT_FAILED=1
   else
     echo "Cargo.toml found but cargo is not installed — ask the user." >&2
-    exit 1
+    LINT_FAILED=1
   fi
 fi
 
@@ -213,23 +221,28 @@ fi
 # linter the project declares or has on PATH; do not hardcode ruff.
 if [ -f pyproject.toml ] || [ -f setup.py ] || [ -f setup.cfg ] \
   || [ -f .flake8 ]     || [ -f ruff.toml ]; then
-  if   command -v ruff   >/dev/null 2>&1; then ruff check --fix .
-  elif command -v flake8 >/dev/null 2>&1; then flake8 .
-  elif command -v pylint >/dev/null 2>&1; then pylint .
+  if   command -v ruff   >/dev/null 2>&1; then ruff check --fix . || LINT_FAILED=1
+  elif command -v flake8 >/dev/null 2>&1; then flake8 . || LINT_FAILED=1
+  elif command -v pylint >/dev/null 2>&1; then pylint . || LINT_FAILED=1
   else
     echo "Python project detected but no linter (ruff/flake8/pylint) on PATH — ask the user." >&2
-    exit 1
+    LINT_FAILED=1
   fi
 fi
 
 # Go — gate by go.mod presence AND golangci-lint availability.
 if [ -f go.mod ]; then
   if command -v golangci-lint >/dev/null 2>&1; then
-    golangci-lint run --fix
+    golangci-lint run --fix || LINT_FAILED=1
   else
     echo "go.mod found but golangci-lint is not installed — ask the user." >&2
-    exit 1
+    LINT_FAILED=1
   fi
+fi
+
+if [ "$LINT_FAILED" = "1" ]; then
+  echo "One or more lint steps failed — fix issues before proceeding to PR creation." >&2
+  exit 1
 fi
 ```
 

@@ -354,7 +354,11 @@ if [ -f package.json ]; then
       fi
     fi
     if [ -n "$PM_CMD" ]; then
-      "$PM_CMD" test || FAILED=1
+      # Bun gotcha: `bun test` runs Bun's native test runner, NOT
+      # scripts.test — use `bun run test` for package scripts.
+      if [ "$PM_CMD" = "bun" ]; then bun run test || FAILED=1
+      else "$PM_CMD" test || FAILED=1
+      fi
       RAN=1
     else
       echo "Node test runner not available — ${PM_ERR:-no manager on PATH}. Ask the user." >&2
