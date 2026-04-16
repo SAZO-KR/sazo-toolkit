@@ -332,17 +332,26 @@ if [ -f package.json ]; then
   # Only run if a "test" script is actually defined — tooling-only or
   # polyglot repos commonly have package.json without scripts.test, and
   # `npm test` would exit 1 with "Missing script" as a false baseline failure.
-  # Require at least one parser (jq or node); without either, we cannot
-  # determine scripts.test and silently skipping would let other stacks
-  # mark the baseline clean without running Node tests at all.
-  if ! command -v jq >/dev/null 2>&1 && ! command -v node >/dev/null 2>&1; then
-    echo "Cannot parse package.json — neither jq nor node on PATH. Install one or ask the user." >&2
+  # Require the parser to SUCCEED (not merely exist) — a malformed
+  # package.json with jq installed would otherwise produce empty HAS_TEST
+  # and silently skip the baseline, letting polyglot repos pass as clean.
+  HAS_TEST=""
+  PARSE_FAIL=""
+  if command -v jq >/dev/null 2>&1; then
+    if ! HAS_TEST=$(jq -r '.scripts.test // empty' package.json 2>/dev/null); then
+      PARSE_FAIL="jq failed to parse package.json (invalid JSON?)"
+    fi
+  elif command -v node >/dev/null 2>&1; then
+    if ! HAS_TEST=$(node -e "console.log((require('./package.json').scripts||{}).test||'')" 2>/dev/null); then
+      PARSE_FAIL="node failed to read/parse package.json"
+    fi
+  else
+    PARSE_FAIL="neither jq nor node on PATH"
+  fi
+  if [ -n "$PARSE_FAIL" ]; then
+    echo "Cannot determine scripts.test — $PARSE_FAIL. Ask the user." >&2
     FAILED=1; RAN=1
     HAS_TEST=""
-  elif command -v jq >/dev/null 2>&1; then
-    HAS_TEST=$(jq -r '.scripts.test // empty' package.json)
-  else
-    HAS_TEST=$(node -e "console.log((require('./package.json').scripts||{}).test||'')" 2>/dev/null)
   fi
   if [ -n "$HAS_TEST" ]; then
     # Detect the declared package manager (mirrors Step 4 install detection).

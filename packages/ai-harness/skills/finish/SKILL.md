@@ -20,18 +20,26 @@ description: Use when implementation and tests are complete and you are ready to
 RAN=0
 FAILED=0
 if [ -f package.json ]; then
-  # Require at least one parser (jq or node). Without either, we cannot
-  # safely determine whether scripts.test exists — silently skipping the
-  # Node branch in polyglot repos would let the PR gate pass without
-  # running Node tests at all.
-  if ! command -v jq >/dev/null 2>&1 && ! command -v node >/dev/null 2>&1; then
-    echo "Cannot parse package.json — neither jq nor node on PATH. Install one or ask the user." >&2
+  # Require at least one parser AND require that parse actually succeeds.
+  # A malformed package.json or missing parser must escalate, not silently
+  # skip the Node branch (polyglot repo could mark PR gate clean otherwise).
+  HAS_TEST=""
+  PARSE_FAIL=""
+  if command -v jq >/dev/null 2>&1; then
+    if ! HAS_TEST=$(jq -r '.scripts.test // empty' package.json 2>/dev/null); then
+      PARSE_FAIL="jq failed to parse package.json (invalid JSON?)"
+    fi
+  elif command -v node >/dev/null 2>&1; then
+    if ! HAS_TEST=$(node -e "console.log((require('./package.json').scripts||{}).test||'')" 2>/dev/null); then
+      PARSE_FAIL="node failed to read/parse package.json"
+    fi
+  else
+    PARSE_FAIL="neither jq nor node on PATH"
+  fi
+  if [ -n "$PARSE_FAIL" ]; then
+    echo "Cannot determine scripts.test — $PARSE_FAIL. Ask the user." >&2
     FAILED=1; RAN=1
     HAS_TEST=""
-  elif command -v jq >/dev/null 2>&1; then
-    HAS_TEST=$(jq -r '.scripts.test // empty' package.json)
-  else
-    HAS_TEST=$(node -e "console.log((require('./package.json').scripts||{}).test||'')" 2>/dev/null)
   fi
   if [ -n "$HAS_TEST" ]; then
     # Detect the declared package manager (mirrors isolate Step 4) — do NOT
@@ -173,18 +181,26 @@ LINT_FAILED=0
 # Hardcoding `npm run lint` fails on bun/yarn/pnpm-managed repos where npm
 # is unavailable.
 if [ -f package.json ]; then
-  # Only run lint if a `lint` script is actually defined — don't fail
-  # repos that use a different script name (e.g., `check`).
-  # Require at least one parser (jq or node) or we can't determine that
-  # reliably; silently skipping would bypass the lint gate.
-  if ! command -v jq >/dev/null 2>&1 && ! command -v node >/dev/null 2>&1; then
-    echo "Cannot parse package.json for lint detection — neither jq nor node on PATH. Install one or ask the user." >&2
+  # Only run lint if a `lint` script is actually defined. Require the
+  # parser to SUCCEED (not just exist) — a malformed package.json with jq
+  # installed would otherwise silently skip the lint gate.
+  HAS_LINT=""
+  PARSE_FAIL=""
+  if command -v jq >/dev/null 2>&1; then
+    if ! HAS_LINT=$(jq -r '.scripts.lint // empty' package.json 2>/dev/null); then
+      PARSE_FAIL="jq failed to parse package.json (invalid JSON?)"
+    fi
+  elif command -v node >/dev/null 2>&1; then
+    if ! HAS_LINT=$(node -e "console.log((require('./package.json').scripts||{}).lint||'')" 2>/dev/null); then
+      PARSE_FAIL="node failed to read/parse package.json"
+    fi
+  else
+    PARSE_FAIL="neither jq nor node on PATH"
+  fi
+  if [ -n "$PARSE_FAIL" ]; then
+    echo "Cannot determine scripts.lint — $PARSE_FAIL. Ask the user." >&2
     LINT_FAILED=1
     HAS_LINT=""
-  elif command -v jq >/dev/null 2>&1; then
-    HAS_LINT=$(jq -r '.scripts.lint // empty' package.json)
-  else
-    HAS_LINT=$(node -e "console.log((require('./package.json').scripts||{}).lint||'')" 2>/dev/null)
   fi
   if [ -n "$HAS_LINT" ]; then
     PM_CMD=""
