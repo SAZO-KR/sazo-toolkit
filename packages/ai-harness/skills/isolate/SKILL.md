@@ -332,11 +332,18 @@ if [ -f package.json ]; then
   # Only run if a "test" script is actually defined — tooling-only or
   # polyglot repos commonly have package.json without scripts.test, and
   # `npm test` would exit 1 with "Missing script" as a false baseline failure.
-  HAS_TEST=$(
-    command -v jq >/dev/null 2>&1 \
-      && jq -r '.scripts.test // empty' package.json \
-      || node -e "console.log((require('./package.json').scripts||{}).test||'')" 2>/dev/null
-  )
+  # Require at least one parser (jq or node); without either, we cannot
+  # determine scripts.test and silently skipping would let other stacks
+  # mark the baseline clean without running Node tests at all.
+  if ! command -v jq >/dev/null 2>&1 && ! command -v node >/dev/null 2>&1; then
+    echo "Cannot parse package.json — neither jq nor node on PATH. Install one or ask the user." >&2
+    FAILED=1; RAN=1
+    HAS_TEST=""
+  elif command -v jq >/dev/null 2>&1; then
+    HAS_TEST=$(jq -r '.scripts.test // empty' package.json)
+  else
+    HAS_TEST=$(node -e "console.log((require('./package.json').scripts||{}).test||'')" 2>/dev/null)
+  fi
   if [ -n "$HAS_TEST" ]; then
     # Detect the declared package manager (mirrors Step 4 install detection).
     # Hardcoding `npm test` fails on bun/yarn/pnpm repos, and falling back
