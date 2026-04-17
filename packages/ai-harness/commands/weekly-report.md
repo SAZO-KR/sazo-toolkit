@@ -383,8 +383,8 @@ jq '[.[] | {
       ((.attachments // []) | map((.fileUrl // "") + " " + (.title // "")) | join(" "))
     ]
     | join(" ")
-    | [scan("https?://[^\\s/]*?(?:notion\\.(?:so|site)|docs\\.google\\.com/document|drive\\.google\\.com/(?:file|drive/folders))[^\\s<>\"()\\[\\]{}|\\\\^`]*")]
-    | map(sub("[.,;:!?)\\]]+$"; ""))
+    | [scan("https?://(?:[A-Za-z0-9\\-]+\\.)*(?:notion\\.(?:so|site)|docs\\.google\\.com/document|drive\\.google\\.com/(?:file|drive/folders))(?=[/?#]|$)[^\\s<>\"()\\[\\]{}|\\\\^`]*")]
+    | map(sub("[,;:!?)\\]]+$"; ""))
     | unique
   ),
   attachments: ((.attachments // []) | map({title, fileUrl, mimeType}))
