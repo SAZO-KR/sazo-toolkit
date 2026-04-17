@@ -319,9 +319,11 @@ git add <수정 파일들>
 git commit -m "fix(<scope>): <요약>"
 git push
 
-# push 직후 hash 확보 (여러 커밋을 묶어 push한 경우 PUSH_RANGE 활용)
+# push 직후 hash 확보 (여러 커밋을 묶어 push한 경우 PUSH_RANGE 활용).
+# REPO_URL은 `gh`가 인식하는 실제 host에서 가져와 GitHub Enterprise 등 비-github.com 호스트에서도 정확한 링크 보장.
 COMMIT_HASH=$(git rev-parse --short HEAD)
-COMMIT_URL="https://github.com/$OWNER/$REPO/pull/$PR_NUM/commits/$COMMIT_HASH"
+REPO_URL=$(gh repo view --json url -q .url)
+COMMIT_URL="$REPO_URL/pull/$PR_NUM/commits/$COMMIT_HASH"
 
 # ── Step 4-7: 답변 게시 ──
 
