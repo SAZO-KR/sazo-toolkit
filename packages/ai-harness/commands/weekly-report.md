@@ -301,7 +301,32 @@ gcal_list_events(timeMin: "${LAST_FRIDAY}T00:00:00", timeMax: "${NOW_ISO}", time
 | `htmlLink` | 보고서에 표시할 캘린더 이벤트 링크 |
 | `start.dateTime`, `end.dateTime` | 회의록 페이지의 `mention-date`와 시각 매칭에 사용 |
 
-**Fallback:** MCP 서버가 위 필드를 기본 반환에 포함하지 않으면, 수집 직후 `ls "$HOME/.cache/weekly-report"/weekly-calendar.json`로 내용을 열어 필드 존재를 검증합니다. 빠진 경우 event ID 단위로 재조회합니다.
+**Fallback (필드 coverage 검증):** MCP 서버 구현에 따라 위 필드 일부가 누락될 수 있다. `ls`로는 파일 존재만 확인되므로 **필드 coverage는 jq assertion으로** 확인한다. 누락된 이벤트 ID는 `events.get(eventId)`로 재조회해서 부족 필드만 채운다.
+
+```bash
+# 필수 필드 coverage 검증 (하나라도 빠지면 stderr로 경고)
+jq -e '
+  [.[] | {
+    id: .id,
+    has_htmlLink: has("htmlLink"),
+    has_start: (has("start")),
+    has_self_marker: (
+      (.organizer.self // .creator.self // false)
+      or ([(.attendees // [])[]? | select(.self == true)] | length > 0)
+    )
+  }]
+  | map(select(
+      (.has_htmlLink | not)
+      or (.has_start | not)
+      or (.has_self_marker | not)
+    ))
+  | if length == 0 then empty
+    else "⚠️  필수 필드 누락 이벤트 \(length)건 — event ID 단위 재조회 필요:\n\(.[] | .id)" | error
+    end
+' "$HOME/.cache/weekly-report"/weekly-calendar.json
+```
+
+경고가 출력된 event는 `gcal_list_events` 기본 반환에 `self` 플래그 등이 포함되지 않은 케이스이므로, 해당 event ID로 재조회하거나 Step 2-7에서 `is_attendee`가 false로 평가될 수 있음을 인지한 상태로 진행한다.
 
 ### 2-4. Slack 메시지
 
