@@ -426,11 +426,15 @@ jq '[.[] | {
 
 **병렬 호출 권장:** 각 URL의 fetch는 독립적이므로 Agent 도구를 사용해 **여러 entry의 `mcp__claude_ai_Notion__fetch` 호출을 한 응답에 묶어 동시 발사**할 것. 순차로 돌리면 회의 10건 기준 10-20초 지연이 누적된다.
 
+**MCP 가용성 선제 확인 (CRITICAL):** Step 0이 Notion probe를 더 이상 수행하지 않으므로 Notion MCP 연결 상태는 여기서 확인한다.
+- Notion URL이 하나 이상 있으면 **첫 호출의 에러 패턴**을 본다. 연결 실패류(예: `Not connected`, `Tool not found`, `MCP server unavailable`, `connection refused`)가 반환되면 **이번 실행의 모든 Notion URL**을 `fetched: false, reason: "notion-mcp-unavailable"`로 일괄 기록하고 이후 Notion fetch를 전부 skip. 반복 실패로 flow가 깨지지 않도록.
+- 연결은 정상이나 특정 페이지에서 403/404(권한/삭제)면 개별 entry에 `reason: "access-denied"` 기록 후 다음 entry 진행.
+
 1. **Notion URL** (`notion.so` / `notion.site`):
-   - 정확히 `mcp__claude_ai_Notion__fetch(id: URL)` 호출 (이 MCP는 Step 0 TOOLS allowlist에 등록되어 있어 팝업 없이 실행됨)
+   - `mcp__claude_ai_Notion__fetch(id: URL)` 호출 (Step 0 TOOLS allowlist에 등록되어 있어 팝업 없이 실행됨)
    - 반환 content에서 `<meeting-notes>` 태그가 있으면 **`<summary>` 섹션의 markdown 텍스트만** 보존 (transcript는 용량 크고 대부분 불필요 — 건너뜀)
    - `<meeting-notes>`가 없는 일반 페이지면 제목 + 본문 첫 1500자로 truncate
-   - fetch가 403/404 반환하면 `fetched: false, reason: "access-denied"`로 기록하고 다음 entry 진행
+   - 403/404 → `reason: "access-denied"`. MCP 자체 연결 실패 → 위 선제 확인 경로 (`reason: "notion-mcp-unavailable"`)
 
 2. **Google Docs / Drive URL**:
    - Google Docs MCP가 연결되어 있지 않으므로 본문 fetch 불가
@@ -438,9 +442,10 @@ jq '[.[] | {
    - 향후 Google Docs MCP 도입 시 이 분기를 확장
 
 **`reason` 값의 의미 (Agent C에 전달됨)**:
-- `access-denied` → 본인 계정에 해당 페이지 권한 없음. 회의록은 있으나 fetch 실패.
+- `access-denied` → 본인 계정에 해당 페이지 권한 없음. 회의록은 있으나 fetch 실패 (개별 페이지).
+- `notion-mcp-unavailable` → Notion MCP가 이 세션에 연결되지 않음. 이번 실행의 모든 Notion URL 영향.
 - `gdocs-mcp-unavailable` → Google Docs MCP 미설치. 회의록 존재 여부는 URL 제목에서만 추정.
-- 둘의 구분이 최종 보고서에 영향(독자가 "권한 요청" vs "MCP 추가"로 다른 action을 취함)이므로 Agent C는 이를 구분해 인용.
+- 셋의 구분이 최종 보고서에 영향(독자가 "권한 요청" vs "MCP 연결 복구" vs "MCP 추가"로 다른 action을 취함)이므로 Agent C는 이를 구분해 인용.
 
 **2-7-c. 결과 저장**
 
@@ -645,8 +650,9 @@ jq '[.[] | {
 2. **회의록이 있으면 본문을 인용해 작성 (CRITICAL)** — `"$HOME/.cache/weekly-report"/weekly-meeting-notes.json`에 해당 eventId의 `notes[].summary`가 있고 `fetched: true`면, **그 내용에서 액션 아이템·결정사항을 뽑아** 요약한다. 추측이나 제목 기반 상상 금지. 회의록에 없으면 "세부 내용 추후 공유 예정"이라고 쓴다.
 3. **fetch 실패 시 reason을 구분해 인용** — `fetched: false`인 경우 `reason` 값에 따라 다르게 처리:
    - `reason: "gdocs-mcp-unavailable"` → "회의록: [제목](url) (Google Docs MCP 미설치로 본문 미인용)"처럼 MCP 확장 필요성이 있는 상태라고 독자에게 힌트
+   - `reason: "notion-mcp-unavailable"` → "회의록: [제목](url) (Notion MCP 미연결 — 이번 세션 한정)"으로 MCP 재연결 action을 유도
    - `reason: "access-denied"` → "회의록: [제목](url) (접근 권한 필요)"로 권한 요청 action을 유도
-   - 두 경우 모두 제목/URL만 참조로 달아 독자가 원본 확인 가능하도록
+   - 세 경우 모두 제목/URL만 참조로 달아 독자가 원본 확인 가능하도록
 4. **정기 회의는 묶기** — 데일리 스탠드업, 위클리 등 반복 회의는 "정기 회의 N회" 1줄로. 단, 특별한 안건이 있었으면 별도 언급
 5. **외부 파트너 미팅은 각각 명시** — OpenAI/eBay/Bunjang/Mercari/Rakuten 등 파트너십 맥락 명확화
 6. **1on1 복수 건은 묶기** — "개발팀 전원 1on1 진행 (N명)"처럼
