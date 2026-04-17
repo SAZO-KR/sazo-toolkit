@@ -326,15 +326,24 @@ COMMIT_URL="https://github.com/$OWNER/$REPO/pull/$PR_NUM/commits/$COMMIT_HASH"
 # ── Step 4-7: 답변 게시 ──
 
 # 동의 (수정 완료) — 멘션 없음, commit hash 링크 필수.
-# noglob은 답변 본문에 ?=[/?#] 같은 regex 문자가 포함될 때 zsh glob 해석 방지.
-noglob gh api repos/$OWNER/$REPO/pulls/$PR_NUM/comments/$COMMENT_ID/replies \
+# URL은 따옴표로 감싸 shell globbing 방지 (bash/zsh 공통 동작).
+# body에 regex/glob 특수문자가 많으면 HEREDOC 사용 권장 (아래 대안 참조).
+gh api "repos/$OWNER/$REPO/pulls/$PR_NUM/comments/$COMMENT_ID/replies" \
   -f body="✅ **수정 완료** ([\`$COMMIT_HASH\`]($COMMIT_URL)) — <설명>"
 
 # decline (반대) — 리뷰어 멘션, commit 링크 불필요.
 # reviewer_login은 해당 코멘트 객체의 .reviewer_login 필드.
 REVIEWER_HANDLE=$(echo "$REVIEWER_LOGIN" | sed 's/\[bot\]$//')
-noglob gh api repos/$OWNER/$REPO/pulls/$PR_NUM/comments/$COMMENT_ID/replies \
+gh api "repos/$OWNER/$REPO/pulls/$PR_NUM/comments/$COMMENT_ID/replies" \
   -f body="@${REVIEWER_HANDLE} 📝 <기술적 이유와 파일:줄 참조>"
+
+# 대안: body가 복잡해 shell escape가 까다로우면 HEREDOC + --input -
+gh api "repos/$OWNER/$REPO/pulls/$PR_NUM/comments/$COMMENT_ID/replies" \
+  --input - <<EOF
+{"body": "✅ **수정 완료** ([\`$COMMIT_HASH\`]($COMMIT_URL)) — <설명>"}
+EOF
+
+# zsh 사용자는 선택적으로 `noglob gh api ...` 래퍼를 써도 됨 (bash에서는 동작 안 함).
 ```
 
 ## Step 5: Quota Check & Gemini Fallback
@@ -448,7 +457,7 @@ PR이 머지 가능한 상태입니다. / 사용자 확인이 필요합니다.
 | 반대(decline) 답변에 리뷰어 멘션 누락                        | `@<reviewer_login>` 멘션으로 재검토 트리거                                  |
 | 답변을 commit/push 이전에 게시                               | `commit → push → 답변` 순서 엄수. 그러지 않으면 답변 시점 `commit_id`가 수정 이전을 가리켜 검증 불가 |
 | 수정 답변에 commit hash 링크 누락                            | 답변 본문에 `[`short-hash`](commit URL)` 필수 — 리뷰어가 "수정 완료" 주장의 근거 커밋을 1-클릭 추적 |
-| 답변 본문에 regex/glob 특수문자 포함 시 zsh glob 해석 충돌   | `noglob gh api ...` 또는 HEREDOC으로 전달                                   |
+| 답변 본문에 regex/glob 특수문자 포함 시 shell 해석 충돌       | URL을 따옴표로 감싸거나 HEREDOC + `--input -` 사용 (bash/zsh 공통). `noglob`은 zsh 전용이므로 범용 기본값으로 쓰지 말 것 |
 
 ## Related Skills
 
