@@ -321,7 +321,7 @@ jq -e '
       or (.has_start | not)
       or (.has_self_marker | not)
     ))
-  | if length == 0 then empty
+  | if length == 0 then true
     else "⚠️  필수 필드 누락 이벤트 \(length)건 — event ID 단위 재조회 필요:\n\(.[] | .id)" | error
     end
 ' "$HOME/.cache/weekly-report"/weekly-calendar.json
