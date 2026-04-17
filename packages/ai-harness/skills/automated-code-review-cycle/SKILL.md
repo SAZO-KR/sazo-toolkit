@@ -337,8 +337,9 @@ REVIEWER_HANDLE=$(echo "$REVIEWER_LOGIN" | sed 's/\[bot\]$//')
 gh api "repos/$OWNER/$REPO/pulls/$PR_NUM/comments/$COMMENT_ID/replies" \
   -f body="@${REVIEWER_HANDLE} 📝 <기술적 이유와 파일:줄 참조>"
 
-# 대안: body가 복잡해 shell escape가 까다로우면 HEREDOC + --input -
-gh api "repos/$OWNER/$REPO/pulls/$PR_NUM/comments/$COMMENT_ID/replies" \
+# 대안: body가 복잡해 shell escape가 까다로우면 HEREDOC + --input -.
+# `gh api`는 `-f/-F`가 없으면 기본 GET이므로 create-reply 엔드포인트에는 `--method POST` 필수.
+gh api --method POST "repos/$OWNER/$REPO/pulls/$PR_NUM/comments/$COMMENT_ID/replies" \
   --input - <<EOF
 {"body": "✅ **수정 완료** ([\`$COMMIT_HASH\`]($COMMIT_URL)) — <설명>"}
 EOF
