@@ -56,24 +56,44 @@ sync_skill_permissions() {
     fi
 }
 
+# RTK 셋업은 install.sh가 대화형으로 초기 등록하지만, 사용자가 settings.json을
+# 리셋하거나 rtk를 수동으로 재설치한 경우 hook 등록이 풀릴 수 있다.
+# --quiet 모드는 opt-out 마커가 있거나 rtk 부재 시 조용히 통과하며,
+# hook이 빠진 경우에만 `rtk init --auto-patch --global`로 복구한다.
+#
+# sync_skill_permissions와 동일하게 early-exit 가드 이전에 정의하여
+# 모든 exit path에서 호출되도록 한다.
+sync_rtk_setup() {
+    local rtk_setup_script="$HARNESS_DIR/scripts/setup-rtk.sh"
+    [ -f "$rtk_setup_script" ] || return 0
+    # opt-out fast path — 가장 흔한 경우(거부한 사용자)에 fork+exec 비용 회피.
+    # 매 SessionStart마다 호출되므로 ~10ms 절감이 누적적으로 의미 있다.
+    [ -f "$HOME/.config/sazo-ai-harness/.rtk-optout" ] && return 0
+    # 실패는 조용히 무시 — auto-update는 noise 없이 동작해야 함
+    "$rtk_setup_script" --quiet >>"$LOG_FILE" 2>&1 || true
+}
+
 if [ ! -d "$INSTALL_DIR/.git" ]; then
     log "SKIP: Not installed at $INSTALL_DIR"
     sync_skill_permissions
+    sync_rtk_setup
     exit 0
 fi
 
-cd "$INSTALL_DIR" || { log "ERROR: Cannot cd to $INSTALL_DIR"; sync_skill_permissions; exit 0; }
+cd "$INSTALL_DIR" || { log "ERROR: Cannot cd to $INSTALL_DIR"; sync_skill_permissions; sync_rtk_setup; exit 0; }
 
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 if [ "$CURRENT_BRANCH" != "main" ]; then
     log "SKIP: Not on main branch (current: $CURRENT_BRANCH)"
     sync_skill_permissions
+    sync_rtk_setup
     exit 0
 fi
 
 if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
     log "SKIP: Local changes detected"
     sync_skill_permissions
+    sync_rtk_setup
     exit 0
 fi
 
@@ -83,8 +103,9 @@ if [ -f "$LAST_FETCH_FILE" ]; then
     NOW=$(date +%s)
     DIFF=$((NOW - LAST_FETCH))
     if [ "$DIFF" -lt 3600 ]; then
-        # Rate-limited from fetching, but permission merge still runs.
+        # Rate-limited from fetching, but auxiliary syncs still run.
         sync_skill_permissions
+        sync_rtk_setup
         exit 0
     fi
 fi
@@ -153,9 +174,10 @@ else
     log "WARN: Fetch failed (network or auth issue)"
 fi
 
-# Always sync skill permissions at the end — whether or not a pull happened,
-# whether or not the fetch succeeded. This keeps settings.allow in sync on
-# sessions with no upstream changes.
+# Always run auxiliary syncs at the end — whether or not a pull happened,
+# whether or not the fetch succeeded. This keeps settings.allow and the
+# RTK hook in sync on sessions with no upstream changes.
 sync_skill_permissions
+sync_rtk_setup
 
 exit 0

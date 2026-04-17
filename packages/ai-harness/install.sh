@@ -305,6 +305,25 @@ else
     echo "  Claude Code: registered SessionStart hook (matcher: $DESIRED_MATCHER)"
 fi
 
+# --- RTK Token-Saving Proxy (Claude Code 전용, optional) ---
+#
+# RTK은 Claude Code의 bash 출력을 압축해 LLM 토큰을 60-90% 절감해주는
+# CLI 프록시입니다 (~/.claude/settings.json 의 PreToolUse hook에 등록).
+# setup-rtk.sh가 자체 안내/설치/opt-out을 모두 처리하며, 팀원이 한 번
+# 거부하면 opt-out 마커로 재안내 없이 통과합니다.
+# auto-update.sh가 매 세션마다 --quiet 모드로 멱등 검증을 수행합니다.
+#
+# 위치: Claude Code 전용 단계이므로 Part 1(Claude Code) 내부에서 처리.
+# Part 2(OpenCode) 진입 전 완결.
+
+RTK_SETUP_SCRIPT="$HARNESS_DIR/scripts/setup-rtk.sh"
+
+if [ -f "$RTK_SETUP_SCRIPT" ]; then
+    chmod +x "$RTK_SETUP_SCRIPT"
+    # 실패해도 install 전체는 계속 — RTK는 optional
+    "$RTK_SETUP_SCRIPT" || true
+fi
+
 # --- OpenCode agent config ---
 
 OPENCODE_AGENTS_TEMPLATE="$HARNESS_DIR/opencode/agents.json"
