@@ -86,14 +86,17 @@ assert_file_content() {
 }
 
 # 디렉토리 상태 스냅샷 (멱등성 검증용)
-# macOS는 shasum, Linux는 sha256sum을 기본 제공 — 둘 중 가용한 것 선택.
+# - macOS는 shasum, Linux는 sha256sum을 기본 제공 — 둘 중 가용한 것 선택.
+# - `sort -z`는 GNU extension이라 구 BSD sort(일부 macOS 버전)에서 미지원 →
+#   sandbox 파일명은 우리가 완전 제어(공백/개행 없음)하므로 일반 `sort` 사용.
 snapshot() {
     local dir="$1"
     local hash_cmd="shasum -a 256"
     command -v sha256sum >/dev/null 2>&1 && hash_cmd="sha256sum"
-    find "$dir" -type f -print0 2>/dev/null \
-        | sort -z \
-        | xargs -0 -I {} sh -c "printf '%s:' \"\$1\"; $hash_cmd \"\$1\" 2>/dev/null | awk '{print \$1}'" _ {}
+    find "$dir" -type f 2>/dev/null | sort | while IFS= read -r f; do
+        printf '%s:' "$f"
+        $hash_cmd "$f" 2>/dev/null | awk '{print $1}'
+    done
 }
 
 # rtk/brew 배제한 최소 PATH + jq 격리 심볼릭 포함

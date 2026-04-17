@@ -72,7 +72,7 @@ TOOLS='[
   "Bash(GH_USER=*)", "Bash(GH_ORG=*)", "Bash(PR_COUNT=*)",
   "Bash(REPO=*)", "Bash(NUM=*)",
   "Bash(SETTINGS=*)", "Bash(TOOLS=*)", "Bash(TMP=*)",
-  "Bash(mkdir *)", "Bash(chmod *)", "Bash(umask *)", "Bash(rm -f *)",
+  "Bash(mkdir *)", "Bash(chmod *)", "Bash(umask *)", "Bash(rm -f *)", "Bash(rtk *)",
   "Read", "Write", "Edit"
 ]'
 
