@@ -86,11 +86,14 @@ assert_file_content() {
 }
 
 # 디렉토리 상태 스냅샷 (멱등성 검증용)
+# macOS는 shasum, Linux는 sha256sum을 기본 제공 — 둘 중 가용한 것 선택.
 snapshot() {
     local dir="$1"
+    local hash_cmd="shasum -a 256"
+    command -v sha256sum >/dev/null 2>&1 && hash_cmd="sha256sum"
     find "$dir" -type f -print0 2>/dev/null \
         | sort -z \
-        | xargs -0 -I {} sh -c 'printf "%s:" "$1"; shasum -a 256 "$1" 2>/dev/null | awk "{print \$1}"' _ {}
+        | xargs -0 -I {} sh -c "printf '%s:' \"\$1\"; $hash_cmd \"\$1\" 2>/dev/null | awk '{print \$1}'" _ {}
 }
 
 # rtk/brew 배제한 최소 PATH + jq 격리 심볼릭 포함

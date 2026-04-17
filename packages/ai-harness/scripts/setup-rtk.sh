@@ -118,8 +118,8 @@ if ! command -v rtk >/dev/null 2>&1; then
             echo "  → 이번 실행은 설치 건너뜀. 영구 거부를 원하면 다음 실행 시 'n' 입력."
             echo "     (명시적 opt-out: touch $OPTOUT_MARKER)"
             echo ""
-            # 명시적 n 이면 opt-out 마커 생성
-            if [ -n "$answer" ] && { [ "$answer" = "n" ] || [ "$answer" = "N" ] || [ "$answer" = "no" ] || [ "$answer" = "NO" ]; }; then
+            # 명시적 n / no 이면 opt-out 마커 생성 (대소문자 변형 모두 수용: n/N/no/No/nO/NO)
+            if [[ "$answer" =~ ^[nN][oO]?$ ]]; then
                 mkdir -p "$MARKER_DIR"
                 touch "$OPTOUT_MARKER"
                 echo "  → 명시적 거부 감지 — 다시 묻지 않습니다. 재활성화: rm $OPTOUT_MARKER"
