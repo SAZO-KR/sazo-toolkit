@@ -169,9 +169,14 @@ echo "분석 기간: $LAST_FRIDAY ~ $TODAY ($NOW_ISO)"
 #
 # 경로는 $HOME/.cache/weekly-report로 절대경로 하드코딩. 각 Bash 호출이 새 shell이라
 # export 변수가 persist되지 않는 문제를 원천 회피 — 후속 스니펫은 모두 절대경로 참조.
-umask 077  # 파일 기본 권한을 0600/0700으로 (WEEKLY_DIR 내 민감 파일 world-readable 방지)
+#
+# CRITICAL: **매 실행 시 이전 주 수집 파일(weekly-*.json)을 전부 제거**한다.
+# 디렉토리 자체는 persist(권한 유지)하되 내부 데이터는 clean start — Calendar/Notion
+# 수집이 이번 주에 skip되더라도 이전 주의 회의록·PR 통계가 Agent 입력에 섞이지 않도록.
+umask 077
 mkdir -p "$HOME/.cache/weekly-report"
 chmod 700 "$HOME/.cache/weekly-report"
+rm -f "$HOME/.cache/weekly-report"/weekly-*.json
 ```
 
 ## Step 2: 데이터 수집
@@ -308,8 +313,11 @@ gcal_list_events(timeMin: "${LAST_FRIDAY}T00:00:00", timeMax: "${NOW_ISO}", time
 **Fallback (필드 coverage 검증):** MCP 서버 구현에 따라 위 필드 일부가 누락될 수 있다. `ls`로는 파일 존재만 확인되므로 **필드 coverage는 jq assertion으로** 확인한다. 누락된 이벤트 ID는 `events.get(eventId)`로 재조회해서 부족 필드만 채운다.
 
 ```bash
-# 필수 필드 coverage 검증 (하나라도 빠지면 stderr로 경고)
-jq -e '
+# 필수 필드 coverage 검증 (하나라도 빠지면 stderr로 경고만 — exit code는 항상 0).
+# `| error`로 hard fail하지 않는 이유: `set -e` 스크립트나 strict wrapper가
+# weekly-report flow를 중간에 abort시킬 위험 회피. 경고만 내고 per-event 재조회는
+# Agent가 후속에서 결정.
+MISSING=$(jq -r '
   [.[] | {
     id: .id,
     has_htmlLink: has("htmlLink"),
@@ -325,10 +333,11 @@ jq -e '
       or (.has_start | not)
       or (.has_self_marker | not)
     ))
-  | if length == 0 then true
-    else "⚠️  필수 필드 누락 이벤트 \(length)건 — event ID 단위 재조회 필요:\n\(.[] | .id)" | error
+  | if length == 0 then ""
+    else "⚠️  필수 필드 누락 이벤트 \(length)건 — event ID 단위 재조회 권장:\n\([.[] | .id] | join(", "))"
     end
-' "$HOME/.cache/weekly-report"/weekly-calendar.json
+' "$HOME/.cache/weekly-report"/weekly-calendar.json)
+[ -n "$MISSING" ] && printf '%s\n' "$MISSING" >&2
 ```
 
 경고가 출력된 event는 `gcal_list_events` 기본 반환에 `self` 플래그 등이 포함되지 않은 케이스이므로, 해당 event ID로 재조회하거나 Step 2-7에서 `is_attendee`가 false로 평가될 수 있음을 인지한 상태로 진행한다.
@@ -415,7 +424,7 @@ jq '[.[] | {
     ]
     | join(" ")
     | [scan("https?://(?:[A-Za-z0-9\\-]+\\.)*(?:notion\\.(?:so|site)|docs\\.google\\.com/(?:u/\\d+/)?document|drive\\.google\\.com/(?:u/\\d+/)?(?:file|drive/folders))(?=[/?#]|$)[^\\s<>\"()\\[\\]{}|\\\\^`]*")]
-    | map(sub("[,;:!?)\\]]+$"; ""))
+    | map(sub("[.,;:!?)\\]]+$"; ""))
     | unique
   ),
   attachments: ((.attachments // []) | map({title, fileUrl, mimeType}))
