@@ -72,6 +72,7 @@ TOOLS='[
   "Bash(GH_USER=*)", "Bash(GH_ORG=*)", "Bash(PR_COUNT=*)",
   "Bash(REPO=*)", "Bash(NUM=*)",
   "Bash(SETTINGS=*)", "Bash(TOOLS=*)", "Bash(TMP=*)",
+  "Bash(mkdir *)", "Bash(chmod *)", "Bash(umask *)", "Bash(rm -f *)",
   "Read", "Write", "Edit"
 ]'
 
@@ -247,7 +248,9 @@ jq '[.[] | {
 }]' "$HOME/.cache/weekly-report"/weekly-commits.json > "$HOME/.cache/weekly-report"/weekly-commits-slim.json
 
 # 5) (선택) 상위 PR의 diff stat — Agent A에 부피 부담 줄 수 있으니 많을 때는 건너뜀
-# PR 10건 이하일 때만 stat 보강
+# $HOME/.cache/weekly-report는 주간 간 persist되므로 stat 파일은 **매 실행 시 먼저 제거**
+# 하여 이전 주 stale 데이터가 섞이지 않도록 한다. PR이 10건 이하일 때만 갱신.
+rm -f "$HOME/.cache/weekly-report"/weekly-pr-stats.json
 PR_COUNT=$(jq 'length' "$HOME/.cache/weekly-report"/weekly-prs.json)
 if [ "$PR_COUNT" -le 10 ]; then
   jq -r '.[] | [.repository.nameWithOwner, .number] | @tsv' "$HOME/.cache/weekly-report"/weekly-prs.json \
