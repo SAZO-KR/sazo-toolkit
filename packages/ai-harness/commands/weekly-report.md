@@ -61,6 +61,7 @@ TOOLS='[
   "mcp__claude_ai_Gmail__gmail_get_profile",
   "mcp__claude_ai_Google_Calendar__gcal_list_events",
   "mcp__claude_ai_Google_Calendar__gcal_list_calendars",
+  "mcp__claude_ai_Google_Calendar__gcal_get_event",
   "mcp__claude_ai_Notion__fetch",
   "Bash(git *)", "Bash(gh *)", "Bash(gh auth *)", "Bash(gh api *)",
   "Bash(gh search *)", "Bash(gh pr *)", "Bash(gh repo *)",
@@ -409,7 +410,7 @@ jq '[.[] | {
       ((.attachments // []) | map((.fileUrl // "") + " " + (.title // "")) | join(" "))
     ]
     | join(" ")
-    | [scan("https?://(?:[A-Za-z0-9\\-]+\\.)*(?:notion\\.(?:so|site)|docs\\.google\\.com/document|drive\\.google\\.com/(?:file|drive/folders))(?=[/?#]|$)[^\\s<>\"()\\[\\]{}|\\\\^`]*")]
+    | [scan("https?://(?:[A-Za-z0-9\\-]+\\.)*(?:notion\\.(?:so|site)|docs\\.google\\.com/(?:u/\\d+/)?document|drive\\.google\\.com/(?:u/\\d+/)?(?:file|drive/folders))(?=[/?#]|$)[^\\s<>\"()\\[\\]{}|\\\\^`]*")]
     | map(sub("[,;:!?)\\]]+$"; ""))
     | unique
   ),
