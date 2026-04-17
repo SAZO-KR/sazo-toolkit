@@ -62,9 +62,14 @@ if ! command -v rtk >/dev/null 2>&1; then
         exit 0
     fi
 
-    # TTY 없으면 유도 금지 — 비대화형에서 무단 brew install + hook 등록 방지
-    # (curl | bash, CI, nohup 등)
-    if [ ! -t 0 ] && [ ! -e /dev/tty ]; then
+    # Prompt 가능 여부 확인 — 비대화형(CI, nohup, 파이프)에서 brew install +
+    # hook 등록 유도 방지. `[ -e /dev/tty ]`만으로는 불충분 — CI 환경에서도
+    # device file은 존재. 실제로 controlling terminal을 **열 수 있는지** 검증.
+    # (exec <)를 서브쉘로 감싸 stdin 재지정 side effect 없이 가능 여부만 본다.
+    can_prompt() {
+        [ -t 0 ] || (exec </dev/tty) 2>/dev/null
+    }
+    if ! can_prompt; then
         echo "ℹ️  RTK 미설치, 비대화형 환경 — 설치 안내를 건너뜁니다."
         echo "    대화형 터미널에서 재실행: bash $0"
         exit 0

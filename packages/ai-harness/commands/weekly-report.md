@@ -296,7 +296,8 @@ gcal_list_events(timeMin: "${LAST_FRIDAY}T00:00:00", timeMax: "${NOW_ISO}", time
 | `description` | 아젠다·평문 회의록·Notion/Docs 링크가 박혀 있는 경우가 많음 |
 | `attachments[].fileUrl`, `attachments[].title` | Google Meet이 자동 첨부하는 Gemini 회의록 Doc, 수동 첨부 아젠다 — 회의록 fetch의 1차 경로 |
 | `conferenceData.entryPoints`, `hangoutLink` | Meet 링크 — Gemini 회의록 존재 여부의 단서 |
-| `attendees[].email`, `attendees[].responseStatus` | 본인 참석 여부 및 accepted 확인 |
+| `attendees[].email`, `attendees[].responseStatus`, `attendees[].self` | 본인 참석 여부 및 accepted 확인 — `self`는 Step 2-7 `is_attendee` 판정의 핵심 |
+| `organizer.self`, `creator.self` | 본인이 organizer/creator인 회의 판정 — Step 2-7 `is_attendee` OR 조건 |
 | `htmlLink` | 보고서에 표시할 캘린더 이벤트 링크 |
 | `start.dateTime`, `end.dateTime` | 회의록 페이지의 `mention-date`와 시각 매칭에 사용 |
 
