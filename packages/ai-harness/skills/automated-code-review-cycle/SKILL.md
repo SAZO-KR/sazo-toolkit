@@ -1,7 +1,7 @@
 ---
 name: Automated-Code-Review-Cycle
 description: PR에 대해 Codex/Gemini 코드 리뷰를 자동으로 받고, 피드백 수정 → 재리뷰 사이클을 사용자 개입 없이 반복. 활성 리뷰어 전부 통과하면 완료. Gemini 미설정 repo는 Codex만으로 판단.
-version: 1.5.0
+version: 1.6.0
 when_to_use: PR 생성 후 코드 리뷰 사이클을 자동화하고 싶을 때
 ---
 
@@ -12,7 +12,7 @@ when_to_use: PR 생성 후 코드 리뷰 사이클을 자동화하고 싶을 때
 2. Record CYCLE_START_TIME — 이 시각 이후의 quota 코멘트만 인식
 3. Determine current state: 미처리 리뷰가 있는지 파악
 4. Fetch review feedback and evaluate pass/fail
-5. If feedback exists: fix → test → push → trigger re-review
+5. If feedback exists: fix → test → commit → push → reply (with commit hash)
 6. Repeat step 4-5 until both reviewers pass or quota exhausted
 7. Report final status to user
    </required>
@@ -23,7 +23,9 @@ when_to_use: PR 생성 후 코드 리뷰 사이클을 자동화하고 싶을 때
 
 PR에 대해 Codex(및 Gemini가 설정된 경우)의 코드 리뷰를 자동으로 받고, 타당한 피드백은 수정하여 재리뷰를 요청하는 사이클을 사용자 개입 없이 반복합니다. Gemini가 미설정된 repo에서는 Codex만으로 통과 판단합니다.
 
-**Core principle:** Detect PR → Determine state → Fix feedback → Re-test → Push → Trigger re-review → Repeat until pass.
+**Core principle:** Detect PR → Determine state → Fix → Test → Commit → Push → Reply (with commit hash) → Re-review → Repeat until pass.
+
+> **CRITICAL 순서:** 답변(reply)은 반드시 `commit` + `push` **이후에** 게시하고, 답변 본문에 해당 commit의 짧은 hash와 URL을 링크로 포함한다. 답변이 먼저 달리면 GitHub PR discussion의 `commit_id` anchor가 수정 이전 커밋을 가리키게 되어 리뷰어(사람 + 봇 모두)가 "수정 완료" 주장을 검증할 수 없다.
 
 **Announce at start:** "자동 코드 리뷰 사이클을 시작합니다."
 
@@ -276,19 +278,22 @@ fi
 **미답변 피드백이 있으면 → Step 4로.**
 **미답변 피드백 0건이면 → 통과 확인 후 Step 7로.**
 
-## Step 4: Fix Feedback
+## Step 4: Fix Feedback → Commit → Push → Reply
 
-Code-Review-Reception 스킬의 프로세스를 따르되, 자동화:
+Code-Review-Reception 스킬의 프로세스를 따르되, 자동화. **순서 엄수 — 답변은 반드시 push 이후.**
 
 1. **분석**: 각 피드백을 P1/P2/P3으로 분류
 2. **판단**: 기술적으로 타당한지 검증 (코드베이스 확인)
    - 타당 → 수정
-   - 부당 → decline 답변 (기술적 이유와 함께)
+   - 부당 → decline 답변 (기술적 이유와 함께) — 수정이 없으므로 commit/push 경로는 건너뛰고 바로 Step 4-7 답변으로
    - 이전 라운드와 모순 → decline 답변 (이전 결정 참조)
 3. **수정**: blocking → simple → complex 순서로 구현
-4. **테스트**: 프로젝트 테스트/린트/빌드 명령 실행
+4. **테스트**: 프로젝트 테스트/린트/빌드 명령 실행 (실패하면 Step 4-3으로 복귀)
 5. **커밋**: 수정 내용을 요약한 커밋 메시지
-6. **답변**: 각 코멘트에 gh api로 답변 게시 — **동의/반대에 따라 멘션 분기**
+6. **Push**: `git push` — Codex 자동 재리뷰도 이 시점에 트리거됨
+7. **답변 게시** (이 순서 필수): 각 코멘트에 `gh api`로 답변. 수정 답변은 **방금 푸시된 commit의 hash를 본문에 링크**. decline 답변은 commit 불필요.
+
+> ⚠️ **답변을 먼저 게시하고 나중에 commit/push하면 안 된다.** GitHub PR discussion은 답변이 달린 시점의 `commit_id`에 anchored되기 때문에, 리뷰어가 "수정 완료" 답변을 열어도 그 시점 branch에는 변경이 없어 검증 불가능하다. 또한 Codex 재리뷰는 push 시각 기준으로 동작하므로 push를 먼저 끝내야 다음 polling이 올바르게 기능한다.
 
 ### 답변 멘션 규칙 (CRITICAL)
 
@@ -302,24 +307,53 @@ Code-Review-Reception 스킬의 프로세스를 따르되, 자동화:
   - 예: `gemini-code-assist[bot]` → `@gemini-code-assist`
 - `reviewer_login`은 Step 3-1에서 수집한 코멘트 객체에 포함됨 (`.user.login`).
 
-```bash
-# 동의 (수정 완료) — 멘션 없이
-gh api repos/$OWNER/$REPO/pulls/$PR_NUM/comments/$COMMENT_ID/replies \
-  -f body="✅ **수정 완료**: <설명>"
+### 답변 본문 규칙 (CRITICAL)
 
-# decline (반대) — 리뷰어 멘션 포함
-# reviewer_login은 해당 코멘트 객체의 .reviewer_login 필드에서 가져옴
-REVIEWER_HANDLE=$(echo "$REVIEWER_LOGIN" | sed 's/\[bot\]$//')
-gh api repos/$OWNER/$REPO/pulls/$PR_NUM/comments/$COMMENT_ID/replies \
-  -f body="@${REVIEWER_HANDLE} 📝 <기술적 이유>"
-```
-
-## Step 5: Trigger Re-review
+- **수정 답변**은 첫 줄에 `([` + 짧은 hash + `](commit URL))` 형식으로 commit 링크를 포함한다. 리뷰어/사람이 "이 답변이 참조하는 코드 상태"를 1-클릭으로 확인 가능하도록.
+- 여러 commit이 누적됐으면 전부 링크(쉼표 구분)하거나 range URL 하나.
+- **decline 답변**은 수정이 없으므로 commit 링크 대신 결정 근거를 파일:줄 참조로 보강.
 
 ```bash
-# Push → Codex 자동 재리뷰
+# ── Step 4-5/6: 커밋 + push ──
+git add <수정 파일들>
+git commit -m "fix(<scope>): <요약>"
 git push
 
+# push 직후 hash 확보 (여러 커밋을 묶어 push한 경우 PUSH_RANGE 활용).
+# REPO_URL은 `gh`가 인식하는 실제 host에서 가져와 GitHub Enterprise 등 비-github.com 호스트에서도 정확한 링크 보장.
+COMMIT_HASH=$(git rev-parse --short HEAD)
+REPO_URL=$(gh repo view --json url -q .url)
+COMMIT_URL="$REPO_URL/pull/$PR_NUM/commits/$COMMIT_HASH"
+
+# ── Step 4-7: 답변 게시 ──
+
+# 동의 (수정 완료) — 멘션 없음, commit hash 링크 필수.
+# URL은 따옴표로 감싸 shell globbing 방지 (bash/zsh 공통 동작).
+# body에 regex/glob 특수문자가 많으면 HEREDOC 사용 권장 (아래 대안 참조).
+gh api "repos/$OWNER/$REPO/pulls/$PR_NUM/comments/$COMMENT_ID/replies" \
+  -f body="✅ **수정 완료** ([\`$COMMIT_HASH\`]($COMMIT_URL)) — <설명>"
+
+# decline (반대) — 리뷰어 멘션, commit 링크 불필요.
+# reviewer_login은 해당 코멘트 객체의 .reviewer_login 필드.
+REVIEWER_HANDLE=$(echo "$REVIEWER_LOGIN" | sed 's/\[bot\]$//')
+gh api "repos/$OWNER/$REPO/pulls/$PR_NUM/comments/$COMMENT_ID/replies" \
+  -f body="@${REVIEWER_HANDLE} 📝 <기술적 이유와 파일:줄 참조>"
+
+# 대안: body가 복잡해 shell escape가 까다로우면 HEREDOC + --input -.
+# `gh api`는 `-f/-F`가 없으면 기본 GET이므로 create-reply 엔드포인트에는 `--method POST` 필수.
+gh api --method POST "repos/$OWNER/$REPO/pulls/$PR_NUM/comments/$COMMENT_ID/replies" \
+  --input - <<EOF
+{"body": "✅ **수정 완료** ([\`$COMMIT_HASH\`]($COMMIT_URL)) — <설명>"}
+EOF
+
+# zsh 사용자는 선택적으로 `noglob gh api ...` 래퍼를 써도 됨 (bash에서는 동작 안 함).
+```
+
+## Step 5: Quota Check & Gemini Fallback
+
+Step 4-6의 push로 Codex는 이미 자동 재리뷰 경로에 진입. 이 단계는 quota 초과 시 Gemini로 경로 전환을 담당한다.
+
+```bash
 # Codex quota 초과 상태면 Gemini fallback (Gemini 활성 시에만)
 if [ "$CODEX_QUOTA_HIT" = true ] && [ "$GEMINI_ENABLED" = true ]; then
   gh pr comment $PR_NUM --body "/gemini review"
@@ -378,8 +412,8 @@ while ROUND < MAX_ROUNDS:
     if all_passed: break        # ALL_PASSED = Codex통과 && (Gemini통과 or 미설정)
     # 통과 조건 미충족 + 새 리뷰 없음 → stale로 처리됨 (위 로직)
 
-  fix_feedback()                # Step 4
-  push_and_trigger_rereview()   # Step 5
+  fix_commit_push_reply()       # Step 4 — 수정 → 테스트 → 커밋 → push → 답변(commit hash)
+  gemini_fallback_if_quota()    # Step 5 — Codex quota 초과 시에만
 ```
 
 **안전 가드:**
@@ -424,6 +458,9 @@ PR이 머지 가능한 상태입니다. / 사용자 확인이 필요합니다.
 | 최신 리뷰만 확인하여 이전 리뷰 미답변 누락                   | `ALL_*_REVIEW_IDS`로 모든 리뷰의 코멘트를 스캔                              |
 | 동의 답변에 리뷰어 멘션 포함                                 | 동의 시 멘션 생략 (재트리거 불필요, 토큰 낭비)                              |
 | 반대(decline) 답변에 리뷰어 멘션 누락                        | `@<reviewer_login>` 멘션으로 재검토 트리거                                  |
+| 답변을 commit/push 이전에 게시                               | `commit → push → 답변` 순서 엄수. 그러지 않으면 답변 시점 `commit_id`가 수정 이전을 가리켜 검증 불가 |
+| 수정 답변에 commit hash 링크 누락                            | 답변 본문에 `[`short-hash`](commit URL)` 필수 — 리뷰어가 "수정 완료" 주장의 근거 커밋을 1-클릭 추적 |
+| 답변 본문에 regex/glob 특수문자 포함 시 shell 해석 충돌       | URL을 따옴표로 감싸거나 HEREDOC + `--input -` 사용 (bash/zsh 공통). `noglob`은 zsh 전용이므로 범용 기본값으로 쓰지 말 것 |
 
 ## Related Skills
 
