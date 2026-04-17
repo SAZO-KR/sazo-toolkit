@@ -234,7 +234,7 @@ jq -s '.[0] + .[1] | unique_by(.url)' "$HOME/.cache/weekly-report"/weekly-prs-cr
 #      (RTK hook이 bash 출력 자체도 추가 압축해주므로 절감 효과가 중첩됨)
 jq '[.[] | {
   number, title, state, createdAt, updatedAt, url,
-  repository: .repository.nameWithOwner,
+  repository: {nameWithOwner: .repository.nameWithOwner},
   body: ((.body // "") | .[0:2000])
 }]' "$HOME/.cache/weekly-report"/weekly-prs.json > "$HOME/.cache/weekly-report"/weekly-prs-slim.json
 
@@ -243,7 +243,7 @@ jq '[.[] | {
   message: ((.commit.message // "") | .[0:900]),
   author_date: .commit.author.date,
   url,
-  repository: .repository.nameWithOwner
+  repository: {nameWithOwner: .repository.nameWithOwner}
 }]' "$HOME/.cache/weekly-report"/weekly-commits.json > "$HOME/.cache/weekly-report"/weekly-commits-slim.json
 
 # 5) (선택) 상위 PR의 diff stat — Agent A에 부피 부담 줄 수 있으니 많을 때는 건너뜀
@@ -312,8 +312,9 @@ jq -e '
     has_htmlLink: has("htmlLink"),
     has_start: (has("start")),
     has_self_marker: (
-      (.organizer.self // .creator.self // false)
-      or ([(.attendees // [])[]? | select(.self == true)] | length > 0)
+      (.organizer | has("self"))
+      or (.creator | has("self"))
+      or ([(.attendees // [])[]? | has("self")] | any)
     )
   }]
   | map(select(
