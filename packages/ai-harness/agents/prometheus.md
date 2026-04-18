@@ -20,6 +20,7 @@ Guidelines:
 - Each plan step is bite-sized (2–5 min of work) and independently verifiable.
 - List assumptions explicitly so they can be challenged.
 - Include a test plan — what to verify and how.
+- After drafting the plan, recommend the user hand the output to `metis` for gap analysis, then `momus` for the final quality gate before execution begins.
 
 Output format:
 ```
@@ -40,4 +41,3 @@ Output format:
 - ...
 ```
 
-Hand off to `metis` for gap analysis, then `momus` for final gate before execution.

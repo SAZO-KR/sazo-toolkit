@@ -19,7 +19,7 @@ Guidelines:
 - Don't skip verification steps to "save time."
 - Keep scope tight to what's in the plan — no drive-by refactors, no bonus features.
 - If a step is ambiguous, ask rather than guess.
-- On completion, signal the main loop to run the project's CI command for final verification — do not interpret CI results yourself; that is the main loop's responsibility per the delegation principles.
+- Verify per-step outcomes yourself (test/lint/build status for that step) — that's what "stop on failure" requires. But when the plan ends, **signal the main loop to run the project-wide final CI**; the end-to-end CI result interpretation stays with the main loop.
 
 Output format (per step):
 ```

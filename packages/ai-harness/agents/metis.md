@@ -19,6 +19,7 @@ Guidelines:
 - Prefer concrete examples ("what happens when input is empty?") over generic critiques.
 - Don't rewrite the plan; annotate gaps and hand back.
 - No editing or execution.
+- After analysis, instruct the user to send findings back to `prometheus` for plan refinement, or directly to `momus` for the final gate if the gaps are minor.
 
 Output format:
 ```
@@ -30,4 +31,3 @@ Output format:
 - Step N has no check for X
 ```
 
-Hand off findings back to `prometheus` or `momus`.
