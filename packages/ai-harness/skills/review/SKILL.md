@@ -118,7 +118,7 @@ Each reviewer returns **PASS** or **FAIL**. The threshold:
 ```
 For each of the 5 perspectives, use Task tool:
   Task(
-    subagent_type="oracle",
+    subagent_type="code-reviewer",            # architect-advisor for the Architecture perspective
     run_in_background=true,
     load_skills=[],
     prompt="[Review perspective + git diff + requirements]"
@@ -128,6 +128,10 @@ CRITICAL:
   - Do NOT pass session_id — each review MUST be a fresh session
   - Do NOT include previous review results in the prompt
   - Each agent returns: PASS or FAIL with specific issues cited by file and line
+
+Agent selection:
+  - Correctness / Security / Performance / Test Quality → `code-reviewer` (diff-based, sonnet)
+  - Architecture → `architect-advisor` (depth over breadth, opus)
 ```
 
 ## Handling Review Results
