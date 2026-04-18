@@ -1,7 +1,7 @@
 ---
 name: librarian
 description: External documentation and OSS research specialist. Use for looking up current library APIs, framework best practices, version/migration notes, and unfamiliar dependencies. Prefer this over ad-hoc web search.
-tools: WebSearch, WebFetch, Read, Grep, Glob
+tools: WebSearch, WebFetch, Read, Grep, Glob, mcp__context7__resolve-library-id, mcp__context7__query-docs
 model: haiku
 color: blue
 ---
