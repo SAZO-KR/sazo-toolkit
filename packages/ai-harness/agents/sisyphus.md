@@ -1,6 +1,7 @@
 ---
 name: sisyphus
 description: Orchestration planner. Produces a delegation plan (which specialist subagent handles which subtask, in what order, what runs in parallel) for the main loop to execute. Does NOT execute delegations itself — Claude Code subagents cannot nest further subagent calls.
+tools: Read, Glob, Grep
 model: opus
 color: indigo
 ---
