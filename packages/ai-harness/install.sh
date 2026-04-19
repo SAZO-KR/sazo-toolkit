@@ -178,9 +178,9 @@ if [ ${#ORPHANS[@]} -gt 0 ]; then
         echo "  - $f"
     done
     echo ""
-    echo "These will shadow the renamed agents if kept. Remove them?"
-    read -r -p "  [y/N] " confirm
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+    # Use ask_yes_no helper — it handles curl|bash (stdin EOF) via /dev/tty fallback
+    # and returns a safe default instead of aborting under `set -euo pipefail`.
+    if ask_yes_no "These will shadow the renamed agents if kept. Remove them?" n; then
         rm -f "${ORPHANS[@]}"
         echo "  Removed ${#ORPHANS[@]} legacy file(s)."
     else
