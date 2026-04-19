@@ -155,6 +155,39 @@ link_files "$HARNESS_DIR/skills" "$HOME/.claude/skills"
 echo "Agents:"
 link_files "$HARNESS_DIR/agents" "$HOME/.claude/agents"
 
+# --- Cleanup: old agent names from pre-rename versions ---
+# These names existed briefly in early feat/ai-harness-subagents commits and in
+# legacy ~/.claude/agents installs. After the rename we prompt the user once
+# (interactive only — auto-update.sh never prompts and skips this block).
+OLD_AGENT_NAMES=(
+    sisyphus prometheus metis momus atlas oracle
+    librarian explore multimodal-looker document-writer frontend-engineer
+)
+ORPHANS=()
+for name in "${OLD_AGENT_NAMES[@]}"; do
+    f="$HOME/.claude/agents/$name.md"
+    if [ -L "$f" ] || [ -e "$f" ]; then
+        ORPHANS+=("$f")
+    fi
+done
+
+if [ ${#ORPHANS[@]} -gt 0 ]; then
+    echo ""
+    echo "Legacy agent files detected (renamed or removed in this package):"
+    for f in "${ORPHANS[@]}"; do
+        echo "  - $f"
+    done
+    echo ""
+    echo "These will shadow the renamed agents if kept. Remove them?"
+    read -r -p "  [y/N] " confirm
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        rm -f "${ORPHANS[@]}"
+        echo "  Removed ${#ORPHANS[@]} legacy file(s)."
+    else
+        echo "  Skipped. Invoking old names (e.g., 'oracle', 'explore') may surface stale prompts."
+    fi
+fi
+
 OPENCODE_COMMANDS_LINKED=0
 link_opencode_commands() {
     if [ "$OPENCODE_COMMANDS_LINKED" -eq 1 ]; then return; fi

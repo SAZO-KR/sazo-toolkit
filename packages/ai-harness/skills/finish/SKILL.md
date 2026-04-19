@@ -322,7 +322,7 @@ fi
 
    - **Preferred:** use the `/review-work` command. ALL reviewers must PASS to proceed.
    - **Fallback 1:** follow the `review` skill (`~/.claude/skills/review/SKILL.md`), which launches 5 independent agents (correctness / architecture / security / performance / test quality) under the same PASS/FAIL gate.
-   - **Fallback 2 (last resort):** consult an Oracle agent with the full `git diff`, then apply the same PASS/FAIL criteria manually.
+   - **Fallback 2 (last resort):** consult the `architect-advisor` subagent with the full `git diff`, then apply the same PASS/FAIL criteria manually.
 
    **Do NOT proceed to push/PR creation while any reviewer reports a correctness, security, or behavioral-regression FAIL.** Minor style/preference suggestions may be deferred at your discretion, but known bugs, security issues, behavioral regressions, or CLAUDE.md / AGENTS.md rule violations MUST be fixed (or explicitly escalated to the user) before Step 7.
 

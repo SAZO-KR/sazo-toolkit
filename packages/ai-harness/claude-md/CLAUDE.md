@@ -26,7 +26,7 @@
 | 4. 프론트엔드/UI | `ui-engineer` | sonnet |
 | 5. CI 실행 | 메인 직접 (결과 해석 필요) | — |
 | 6. 코드리뷰 (PR 생성 전, 기본) | `code-reviewer` — diff 기반 종합 리뷰 | sonnet |
-| 6. 코드리뷰 (심층) | `architect-advisor` — 아키텍처/설계 판단, 병렬 호출 | opus |
+| 6. 코드리뷰 (심층) | `architect-advisor` — 아키텍처/설계 판단, 병렬 호출 | sonnet (옵션: 메인 판단 시 opus 승격) |
 | 7. 문서 업데이트 | `doc-writer` | haiku |
 | 7. PR 생성 후 자동 리뷰 사이클 | `automated-code-review-cycle` 스킬 (Codex/Gemini 봇 리뷰 수신·대응) | — |
 
@@ -85,6 +85,7 @@
 - **매 리뷰는 반드시 새로운 컨텍스트(새 세션)에서 독립적으로 실행** — 이전 리뷰/수정 히스토리를 모르는 상태에서 평가.
 - 기본 리뷰는 `code-reviewer` subagent로 수행 (diff 기반). 아키텍처/설계 판단이 필요하면 `architect-advisor`를 **병렬 호출**해 관점을 다양화. 두 에이전트 모두 ai-harness 내장.
 - 리뷰 지적 사항 → 수정 → CI 재검증(5단계) → 새 세션으로 재리뷰. **전원 PASS까지 반복. 합의 없이 PR 생성 금지.**
+- **Step 6은 PR 생성 전 1회만 실행**. Step 7의 봇(Codex/Gemini) 리뷰 사이클이 추가 fix를 유발해도 **Step 6은 자동 재호출하지 않는다**. 봇 피드백이 아키텍처/인터페이스 수준의 변경을 요구한다고 메인 루프가 판단하는 경우에만 **사용자 확인 후** Step 6 재호출. 이 분리는 runaway review 비용을 방지하기 위한 의도된 trade-off.
 
 ## 7. 마무리
 
