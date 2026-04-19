@@ -63,6 +63,46 @@ sync_skill_permissions() {
 #
 # sync_skill_permissions와 동일하게 early-exit 가드 이전에 정의하여
 # 모든 exit path에서 호출되도록 한다.
+# pre-commit lint hook도 install.sh에서 최초 등록하지만, 신규 hook 도입 이전에
+# 설치한 기존 팀원은 install.sh 재실행 없이 auto-update만 받는 경우가 있다.
+# 매 SessionStart마다 멱등 등록으로 커버 (merge_skill_permissions와 같은 정당화).
+sync_precommit_lint_hook() {
+    local settings="$HOME/.claude/settings.json"
+    local hook="$HARNESS_DIR/scripts/pre-commit-lint.sh"
+    local detect="$HARNESS_DIR/scripts/lint-autofix-detect.sh"
+    local matcher="Bash(git commit:*)"
+    [ -f "$hook" ] || return 0
+    [ -f "$settings" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    # rebase/머지가 mode bit을 떨어뜨릴 수 있어 매번 보장.
+    chmod +x "$hook" 2>/dev/null || true
+    [ -f "$detect" ] && chmod +x "$detect" 2>/dev/null || true
+
+    local existing
+    existing=$(jq --arg cmd "$hook" '
+      (.hooks.PreToolUse // []) | map(select(.hooks // [] | any(.command == $cmd))) | length
+    ' "$settings" 2>/dev/null) || return 0
+
+    if [ "${existing:-0}" -gt 0 ] 2>/dev/null; then
+        # 이미 등록됨. matcher 갱신은 install.sh에서만 처리(여기서 mass-migrate 지양).
+        return 0
+    fi
+
+    local new_hook tmp
+    new_hook=$(jq -n --arg cmd "$hook" --arg m "$matcher" '{
+        "matcher": $m,
+        "hooks": [{"type": "command", "command": $cmd}]
+    }')
+    tmp=$(mktemp)
+    if jq --argjson entry "$new_hook" '.hooks.PreToolUse = (.hooks.PreToolUse // []) + [$entry]' \
+        "$settings" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$settings"
+        log "Registered missing PreToolUse pre-commit-lint hook"
+    else
+        rm -f "$tmp"
+    fi
+}
+
 sync_rtk_setup() {
     local rtk_setup_script="$HARNESS_DIR/scripts/setup-rtk.sh"
     [ -f "$rtk_setup_script" ] || return 0
@@ -77,16 +117,18 @@ if [ ! -d "$INSTALL_DIR/.git" ]; then
     log "SKIP: Not installed at $INSTALL_DIR"
     sync_skill_permissions
     sync_rtk_setup
+    sync_precommit_lint_hook
     exit 0
 fi
 
-cd "$INSTALL_DIR" || { log "ERROR: Cannot cd to $INSTALL_DIR"; sync_skill_permissions; sync_rtk_setup; exit 0; }
+cd "$INSTALL_DIR" || { log "ERROR: Cannot cd to $INSTALL_DIR"; sync_skill_permissions; sync_rtk_setup; sync_precommit_lint_hook; exit 0; }
 
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 if [ "$CURRENT_BRANCH" != "main" ]; then
     log "SKIP: Not on main branch (current: $CURRENT_BRANCH)"
     sync_skill_permissions
     sync_rtk_setup
+    sync_precommit_lint_hook
     exit 0
 fi
 
@@ -94,6 +136,7 @@ if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; th
     log "SKIP: Local changes detected"
     sync_skill_permissions
     sync_rtk_setup
+    sync_precommit_lint_hook
     exit 0
 fi
 
@@ -106,6 +149,7 @@ if [ -f "$LAST_FETCH_FILE" ]; then
         # Rate-limited from fetching, but auxiliary syncs still run.
         sync_skill_permissions
         sync_rtk_setup
+    sync_precommit_lint_hook
         exit 0
     fi
 fi
@@ -179,5 +223,6 @@ fi
 # RTK hook in sync on sessions with no upstream changes.
 sync_skill_permissions
 sync_rtk_setup
+    sync_precommit_lint_hook
 
 exit 0
