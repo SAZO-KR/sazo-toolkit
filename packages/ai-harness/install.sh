@@ -180,11 +180,11 @@ if [ ${#ORPHANS[@]} -gt 0 ]; then
     echo ""
     # Use ask_yes_no helper — it handles curl|bash (stdin EOF) via /dev/tty fallback
     # and returns a safe default instead of aborting under `set -euo pipefail`.
-    if ask_yes_no "These will shadow the renamed agents if kept. Remove them?" n; then
+    if ask_yes_no "기존 에이전트 파일이 남아있으면 이름이 바뀐 새 에이전트를 가릴 수 있습니다. 삭제할까요?" n; then
         rm -f "${ORPHANS[@]}"
-        echo "  Removed ${#ORPHANS[@]} legacy file(s)."
+        echo "  제거 완료 (${#ORPHANS[@]}개)"
     else
-        echo "  Skipped. Invoking old names (e.g., 'oracle', 'explore') may surface stale prompts."
+        echo "  건너뜀. 구 이름('oracle', 'explore' 등)으로 호출 시 stale 프롬프트가 노출될 수 있음."
     fi
 fi
 

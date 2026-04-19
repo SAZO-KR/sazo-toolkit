@@ -419,7 +419,7 @@ while ROUND < MAX_ROUNDS:
   gemini_fallback_if_quota()    # Step 5 — Codex quota 초과 시에만
 
   # Wall-clock budget check
-  if (now - WALL_CLOCK_START) > WALL_CLOCK_BUDGET:
+  if ($(date +%s) - WALL_CLOCK_START) > WALL_CLOCK_BUDGET:
     notify_user("30분 경과. 계속 진행 할까요? (진행 / 중단)")
     break  # 사용자 응답 대기
 ```
