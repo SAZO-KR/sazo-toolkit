@@ -1,7 +1,7 @@
 ---
 name: code-reviewer
 description: Independent code reviewer for diff-based PR review. Use after CI passes and before PR creation (step 6 of the workflow) as a final check on bugs, anti-patterns, test quality, and style. Each invocation should be a fresh session with no prior review history.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob
 model: sonnet
 color: yellow
 ---
