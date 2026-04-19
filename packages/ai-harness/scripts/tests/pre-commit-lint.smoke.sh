@@ -324,13 +324,17 @@ chmod +x "$FAKE_LINT"
 (cd "$REPO" && SAZO_LINT_CACHE_FILE="$CACHE_FILE" "$HOOK" --set "$FAKE_LINT" --files-arg >/dev/null)
 run_hook "$REPO" "git commit -m x" >/dev/null 2>&1
 
-# -f 테스트로 심볼릭 링크도 "regular file"이 아니라 제외됨 (symlink-to-file은 -f true이지만
-# macOS bash에서 -f는 symlink를 dereference. 여기선 regular file 모두 허용되는 게 기본.
-# 핵심은 디렉토리/존재하지 않는 파일 제외. symlink-to-file은 허용이 안전한 기본값.)
-# 이 케이스는 주로 실행 안 터지고 결과가 real.txt 최소 1개 포함되면 OK.
+# Codex R5: -f는 symlink dereference하지만 -L 체크 추가로 symlink entry는 명시적 제외.
+# symlink target이 repo 외부 파일이면 autofix가 외부 파일 변경 + index는 symlink만 추적 →
+# staged-only 불변식 위반 가능. 따라서 real.txt는 포함, link.txt는 제외되어야 한다.
 received=$(cat "$FAKE_LOG")
 case "$received" in
-    *"./real.txt"*) echo "  OK   real file included (./real.txt in args)" ;;
+    *"./real.txt"*)
+        case "$received" in
+            *"link.txt"*) echo "  FAIL symlink included: $received"; FAIL=$((FAIL + 1)) ;;
+            *) echo "  OK   real file included, symlink excluded" ;;
+        esac
+        ;;
     *) echo "  FAIL real file not included. actual=<$received>"; FAIL=$((FAIL + 1)) ;;
 esac
 

@@ -105,8 +105,9 @@ STAGED=()
 PARTIAL_SKIPPED=0
 while IFS= read -r -d '' f; do
     # regular file만 포함 — 서브모듈(gitlink)은 디렉토리로 잡혀 recursive lint로 이어질 수 있고,
-    # 심볼릭 링크는 autofix 대상으로 부적절. git이 이미 삭제로 제외했으니 -f로 충분.
-    [ -f "$REPO_ROOT/$f" ] || continue
+    # 심볼릭 링크는 lint 시 target(repo 외부 가능)을 변형할 수 있으나 index는 symlink
+    # 엔트리만 추적하므로 staged-only 불변식이 깨짐 → `-f && ! -L`로 real file만.
+    [ -f "$REPO_ROOT/$f" ] && [ ! -L "$REPO_ROOT/$f" ] || continue
 
     # Partial staging (`git add -p`) 방어 — working tree에 unstaged hunk가 남아 있는 파일을
     # lint 후 `git add`로 re-stage하면 사용자가 의도하지 않은 unstaged hunk까지 커밋에 섞인다.
