@@ -91,12 +91,28 @@ lint_cache_unset() {
 }
 
 _detect_pm() {
+    # lockfile 기반으로 선호 runner를 고른 뒤, 해당 runner가 PATH에 실제로 있는지 확인.
+    # 없으면 대체 runner 시도 → 전부 없으면 빈 문자열 + return 1 (호출자가 lint-staged 분기 skip).
+    # 선호 결정 규칙:
+    #   yarn.lock         → yarn
+    #   pnpm-lock.yaml    → pnpm
+    #   package-lock.json → npm (npx)
+    #   lockfile 없음     → npm (npx) 기본
     local repo="$1"
-    if [ -f "$repo/yarn.lock" ]; then echo yarn
-    elif [ -f "$repo/pnpm-lock.yaml" ]; then echo pnpm
-    elif [ -f "$repo/package-lock.json" ]; then echo npm
-    else echo npm
+    local preferred
+    if   [ -f "$repo/yarn.lock" ];         then preferred=yarn
+    elif [ -f "$repo/pnpm-lock.yaml" ];    then preferred=pnpm
+    else                                        preferred=npm
     fi
+
+    local candidate
+    for candidate in "$preferred" npm pnpm yarn; do
+        case "$candidate" in
+            npm) command -v npx >/dev/null 2>&1 && { echo npm; return 0; } ;;
+            *)   command -v "$candidate" >/dev/null 2>&1 && { echo "$candidate"; return 0; } ;;
+        esac
+    done
+    return 1
 }
 
 detect_lint_autofix() {
@@ -112,32 +128,38 @@ detect_lint_autofix() {
             ((.devDependencies // {}) | has("lint-staged"))
             or ((.dependencies // {}) | has("lint-staged"))
         ' "$repo/package.json" >/dev/null 2>&1; then
+            # runner가 PATH에 실제로 있을 때만 선택. 없으면 lint-staged 분기 skip →
+            # 다음 감지 규칙(pyproject/go.mod)으로 넘어가고, 전부 실패 시 detection-miss
+            # pass-through 경로로 빠진다 (exit 127로 commit 차단되는 문제 방지).
             local pm
-            pm=$(_detect_pm "$repo")
-            case "$pm" in
-                yarn) printf 'yarn lint-staged\tfalse\n' ;;
-                pnpm) printf 'pnpm lint-staged\tfalse\n' ;;
-                npm)  printf 'npx lint-staged\tfalse\n' ;;
-            esac
-            return 0
+            if pm=$(_detect_pm "$repo"); then
+                case "$pm" in
+                    yarn) printf 'yarn lint-staged\tfalse\n'; return 0 ;;
+                    pnpm) printf 'pnpm lint-staged\tfalse\n'; return 0 ;;
+                    npm)  printf 'npx lint-staged\tfalse\n';  return 0 ;;
+                esac
+            fi
         fi
     fi
 
     # 2. Python — section 헤딩은 정확히 `[tool.ruff]` 또는 `[tool.ruff.*]`만 매칭.
-    # `[tool.rufflehandler]` 같은 이름 충돌 방지.
+    # `[tool.rufflehandler]` 같은 이름 충돌 방지. 실행 파일이 PATH에 있는 경우만 선택
+    # (project-local venv 등으로 ruff가 글로벌 PATH에 없는 경우 exit 127 방지).
     if [ -f "$repo/pyproject.toml" ]; then
-        if grep -Eq '^\[tool\.ruff(\]|\.)' "$repo/pyproject.toml" 2>/dev/null; then
+        if grep -Eq '^\[tool\.ruff(\]|\.)' "$repo/pyproject.toml" 2>/dev/null \
+           && command -v ruff >/dev/null 2>&1; then
             printf 'ruff check --fix\ttrue\n'
             return 0
         fi
-        if grep -Eq '^\[tool\.black(\]|\.)' "$repo/pyproject.toml" 2>/dev/null; then
+        if grep -Eq '^\[tool\.black(\]|\.)' "$repo/pyproject.toml" 2>/dev/null \
+           && command -v black >/dev/null 2>&1; then
             printf 'black\ttrue\n'
             return 0
         fi
     fi
 
-    # 3. Go
-    if [ -f "$repo/go.mod" ]; then
+    # 3. Go — gofmt는 통상 Go toolchain과 함께 설치되지만 환경에 따라 부재 가능
+    if [ -f "$repo/go.mod" ] && command -v gofmt >/dev/null 2>&1; then
         printf 'gofmt -w\ttrue\n'
         return 0
     fi

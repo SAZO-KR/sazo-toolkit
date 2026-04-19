@@ -27,6 +27,20 @@ command -v git >/dev/null 2>&1 || { echo "SKIP: git required"; exit 0; }
 SANDBOX=$(mktemp -d)
 trap 'rm -rf "$SANDBOX"' EXIT
 
+# detect_lint_autofix 가 `command -v <bin>` 체크를 하므로, host env에 따라
+# yarn/pnpm/npx/ruff/black/gofmt 가 없으면 감지가 miss로 떨어진다. 테스트는
+# 감지 로직 자체를 검증하는 것이므로 PATH에 no-op stub을 얹어 격리.
+STUB_BIN="$SANDBOX/stub-bin"
+mkdir -p "$STUB_BIN"
+for bin in yarn pnpm npm npx ruff black gofmt; do
+    cat > "$STUB_BIN/$bin" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+    chmod +x "$STUB_BIN/$bin"
+done
+export PATH="$STUB_BIN:$PATH"
+
 FAIL=0
 
 assert_eq() {
@@ -361,6 +375,56 @@ assert_eq "exit 0 on echo containing git commit" "0" "$rc"
 # 진짜 git commit은 여전히 발동해서 false lint로 차단
 out=$(run_hook "$REPO" "git commit -m x" 2>&1); rc=$?
 assert_eq "exit 2 on real git commit (lint fails)" "2" "$rc"
+
+# ───────────────────────────────────
+echo ""
+echo "Case 18: runner/executable 부재 시 감지 miss (Codex R2 P1/P2 회귀 방어)"
+REPO="$SANDBOX/c18"
+mkdir -p "$REPO"
+
+# lint-staged devDep 선언됐지만 yarn/pnpm/npx 전부 PATH에 없음
+echo '{"devDependencies":{"lint-staged":"^15"}}' > "$REPO/package.json"
+touch "$REPO/yarn.lock"
+resolved=$(
+    PATH="/usr/bin:/bin"   # stub 배제
+    . "$DETECT"
+    detect_lint_autofix "$REPO" 2>&1
+    echo "RC=$?"
+)
+case "$resolved" in
+    *"RC=1"*) echo "  OK   runner 전부 부재 → lint-staged 감지 skip" ;;
+    *) echo "  FAIL detected without runner: $resolved"; FAIL=$((FAIL + 1)) ;;
+esac
+
+# pyproject.toml만 있고 ruff 실행 파일 없으면 감지 miss
+REPO2="$SANDBOX/c18b"
+mkdir -p "$REPO2"
+echo '[tool.ruff]' > "$REPO2/pyproject.toml"
+resolved=$(
+    PATH="/usr/bin:/bin"
+    . "$DETECT"
+    detect_lint_autofix "$REPO2" 2>&1
+    echo "RC=$?"
+)
+case "$resolved" in
+    *"RC=1"*) echo "  OK   ruff 부재 → ruff 감지 skip" ;;
+    *) echo "  FAIL detected without ruff: $resolved"; FAIL=$((FAIL + 1)) ;;
+esac
+
+# go.mod만 있고 gofmt 부재
+REPO3="$SANDBOX/c18c"
+mkdir -p "$REPO3"
+echo "module x" > "$REPO3/go.mod"
+resolved=$(
+    PATH="/usr/bin:/bin"
+    . "$DETECT"
+    detect_lint_autofix "$REPO3" 2>&1
+    echo "RC=$?"
+)
+case "$resolved" in
+    *"RC=1"*) echo "  OK   gofmt 부재 → gofmt 감지 skip" ;;
+    *) echo "  FAIL detected without gofmt: $resolved"; FAIL=$((FAIL + 1)) ;;
+esac
 
 # ───────────────────────────────────
 echo ""
