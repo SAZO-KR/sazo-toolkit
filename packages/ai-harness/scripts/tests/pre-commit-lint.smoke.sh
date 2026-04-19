@@ -376,6 +376,18 @@ assert_eq "exit 0 on echo containing git commit" "0" "$rc"
 out=$(run_hook "$REPO" "git commit -m x" 2>&1); rc=$?
 assert_eq "exit 2 on real git commit (lint fails)" "2" "$rc"
 
+# Codex R4: 'echo git commit' (인자 위치) → 제외
+out=$(run_hook "$REPO" "echo git commit" 2>&1); rc=$?
+assert_eq "exit 0 on 'echo git commit' (non-commit arg)" "0" "$rc"
+
+# 'cat /tmp/git commit.txt' 유사 케이스 → 제외
+out=$(run_hook "$REPO" 'cat /tmp/git commit.txt' 2>&1); rc=$?
+assert_eq "exit 0 on path containing 'git commit'" "0" "$rc"
+
+# shell separator로는 여전히 통과 — '; git commit'
+out=$(run_hook "$REPO" 'foo ; git commit -m x' 2>&1); rc=$?
+assert_eq "exit 2 on '; git commit' (real command after separator)" "2" "$rc"
+
 # ───────────────────────────────────
 echo ""
 echo "Case 19: partial staging (unstaged hunk) 파일은 lint 대상에서 제외 (Codex R3 P1 회귀 방어)"

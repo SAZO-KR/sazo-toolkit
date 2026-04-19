@@ -89,9 +89,11 @@ COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/nul
 CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
 
 # 방어적 재검증 — matcher가 좁혀주지만, `git commit-tree` / `git commit-graph`,
-# 혹은 `echo "git commit"` 같은 substring 매칭 함정을 배제한다.
-# `git commit` 또는 `git commit <whitespace>` 또는 `git commit<EOL>`만 통과.
-if [[ ! "$COMMAND" =~ (^|[[:space:];\&\|]+)git[[:space:]]+commit([[:space:]]|$) ]]; then
+# `echo git commit`, `cat /tmp/git commit.txt` 같은 substring·인자 매칭 함정을 배제.
+# prefix는 **command boundary** (라인 시작 또는 shell separator `;`/`&`/`|`)만 허용한다
+# — 단순 공백(`echo git commit`의 인자 위치)은 받지 않는다.
+# suffix는 공백 또는 EOL — `commit-tree`/`commit-graph`의 `-` 배제.
+if [[ ! "$COMMAND" =~ (^|[;\&\|])[[:space:]]*git[[:space:]]+commit([[:space:]]|$) ]]; then
     exit 0
 fi
 
