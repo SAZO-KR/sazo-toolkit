@@ -105,10 +105,12 @@ detect_lint_autofix() {
     # 1. lint-staged (스코프 한정의 de-facto 표준)
     # `has()`로 null-safe 검사 — devDependencies 키 자체가 없는 package.json도 안전하게 처리
     if [ -f "$repo/package.json" ] && command -v jq >/dev/null 2>&1; then
+        # 실제 dependency로 선언된 경우만 인식.
+        # top-level `"lint-staged"` config key만 있고 dependency 선언이 없으면
+        # `npx lint-staged`가 on-demand fetch 또는 실패하여 commit을 조용히 차단할 수 있음.
         if jq -e '
             ((.devDependencies // {}) | has("lint-staged"))
             or ((.dependencies // {}) | has("lint-staged"))
-            or has("lint-staged")
         ' "$repo/package.json" >/dev/null 2>&1; then
             local pm
             pm=$(_detect_pm "$repo")

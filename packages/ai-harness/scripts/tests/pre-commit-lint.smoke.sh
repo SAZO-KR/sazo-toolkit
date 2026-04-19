@@ -364,6 +364,56 @@ assert_eq "exit 2 on real git commit (lint fails)" "2" "$rc"
 
 # ───────────────────────────────────
 echo ""
+echo "Case 16: Python repo + .md만 staged → lint 스킵 (P1 회귀 방어)"
+CACHE_FILE="$SANDBOX/c16-cache.json"
+REPO="$SANDBOX/c16"
+make_repo "$REPO"
+# pyproject.toml은 ruff 감지 트리거, 커밋은 Markdown만
+cat > "$REPO/pyproject.toml" <<'EOF'
+[tool.ruff]
+line-length = 100
+EOF
+echo "# hi" > "$REPO/README.md"
+git -C "$REPO" add pyproject.toml README.md
+# HEAD를 만들어서 이후 커밋의 staged가 README.md만이 되게 함
+git -C "$REPO" -c user.email=t@t -c user.name=t commit -q -m "init"
+echo "# hi v2" > "$REPO/README.md"
+git -C "$REPO" add README.md
+
+# 감지는 ruff로 될 것. 실제 ruff 없어도 필터로 FILTERED 비어서 skip되어야 함.
+out=$(run_hook "$REPO" "git commit -m x" 2>&1); rc=$?
+assert_eq "exit 0 — ruff 감지됐지만 .md만 staged이므로 skip" "0" "$rc"
+
+# ───────────────────────────────────
+echo ""
+echo "Case 17: lint-staged dependency 없고 top-level config key만 있는 repo → 감지 miss (P2 회귀 방어)"
+REPO="$SANDBOX/c17"
+mkdir -p "$REPO"
+cat > "$REPO/package.json" <<'EOF'
+{"name":"x","version":"1.0.0","lint-staged":{"*.js":"eslint --fix"}}
+EOF
+
+resolved=$(
+    . "$DETECT"
+    detect_lint_autofix "$REPO" 2>&1
+    echo "RC=$?"
+)
+# 감지 실패 (return 1) → stdout 없고 RC=1
+case "$resolved" in
+    *"RC=1"*) echo "  OK   top-level lint-staged config 무시 (dependency 선언 없음)" ;;
+    *) echo "  FAIL config-only detected: $resolved"; FAIL=$((FAIL + 1)) ;;
+esac
+
+# 반면 devDependency로 선언되면 정상 감지
+echo '{"name":"x","devDependencies":{"lint-staged":"^15"}}' > "$REPO/package.json"
+resolved=$(
+    . "$DETECT"
+    detect_lint_autofix "$REPO"
+)
+assert_eq "devDependency 선언 시 정상 감지" "$(printf 'npx lint-staged\tfalse')" "$resolved"
+
+# ───────────────────────────────────
+echo ""
 echo "─────────────────────"
 if [ "$FAIL" -eq 0 ]; then
     echo "OK: All pre-commit-lint smoke tests passed"

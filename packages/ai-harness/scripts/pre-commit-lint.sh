@@ -151,17 +151,41 @@ cd "$REPO_ROOT" || {
 
 START=$(date +%s)
 if [ "$SUPPORTS_FILES" = "true" ]; then
-    # 파일명이 '--foo' 같은 옵션으로 해석되는 것을 방지하기 위해 './' prefix.
-    # gofmt는 `--` 구분자를 지원하지 않으므로 경로 정규화가 가장 범용적.
-    SAFE_STAGED=()
+    # 커맨드별 확장자 필터 — 자동 감지된 언어별 도구(ruff/black/gofmt)가 대상 외 파일
+    # (예: 문서 repo에 `pyproject.toml`만 있고 커밋은 README만)을 파싱하다 실패해 commit을
+    # 차단하는 문제를 차단. 사용자가 `--set`으로 등록한 임의 커맨드는 필터 없이 그대로
+    # 전달 (사용자 책임 + 매칭 패턴 예측 불가).
+    FILTER_RE=''
+    case "$LINT_CMD" in
+        ruff*|*' ruff '*|black*|*' black '*) FILTER_RE='\.pyi?$' ;;
+        gofmt*|*' gofmt '*)                  FILTER_RE='\.go$' ;;
+    esac
+
+    FILTERED=()
     for f in "${STAGED[@]}"; do
-        case "$f" in
-            ./*|/*) SAFE_STAGED+=("$f") ;;
-            *)      SAFE_STAGED+=("./$f") ;;
-        esac
+        if [ -n "$FILTER_RE" ]; then
+            [[ "$f" =~ $FILTER_RE ]] || continue
+        fi
+        FILTERED+=("$f")
     done
-    bash -c "$LINT_CMD \"\$@\"" _ "${SAFE_STAGED[@]}"
-    LINT_RC=$?
+
+    # 필터 후 아무것도 없으면 lint 스킵 — commit 통과.
+    # (예: Python repo에서 Markdown만 수정한 커밋)
+    if [ "${#FILTERED[@]}" -eq 0 ]; then
+        LINT_RC=0
+    else
+        # 파일명이 '--foo' 같은 옵션으로 해석되는 것을 방지하기 위해 './' prefix.
+        # gofmt는 `--` 구분자를 지원하지 않으므로 경로 정규화가 가장 범용적.
+        SAFE_STAGED=()
+        for f in "${FILTERED[@]}"; do
+            case "$f" in
+                ./*|/*) SAFE_STAGED+=("$f") ;;
+                *)      SAFE_STAGED+=("./$f") ;;
+            esac
+        done
+        bash -c "$LINT_CMD \"\$@\"" _ "${SAFE_STAGED[@]}"
+        LINT_RC=$?
+    fi
 else
     bash -c "$LINT_CMD"
     LINT_RC=$?
