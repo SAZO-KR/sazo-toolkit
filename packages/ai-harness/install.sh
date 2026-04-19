@@ -155,6 +155,39 @@ link_files "$HARNESS_DIR/skills" "$HOME/.claude/skills"
 echo "Agents:"
 link_files "$HARNESS_DIR/agents" "$HOME/.claude/agents"
 
+# --- Cleanup: old agent names from pre-rename versions ---
+# These names existed briefly in early feat/ai-harness-subagents commits and in
+# legacy ~/.claude/agents installs. After the rename we prompt the user once
+# (interactive only — auto-update.sh never prompts and skips this block).
+OLD_AGENT_NAMES=(
+    sisyphus prometheus metis momus atlas oracle
+    librarian explore multimodal-looker document-writer frontend-engineer
+)
+ORPHANS=()
+for name in "${OLD_AGENT_NAMES[@]}"; do
+    f="$HOME/.claude/agents/$name.md"
+    if [ -L "$f" ] || [ -e "$f" ]; then
+        ORPHANS+=("$f")
+    fi
+done
+
+if [ ${#ORPHANS[@]} -gt 0 ]; then
+    echo ""
+    echo "Legacy agent files detected (renamed or removed in this package):"
+    for f in "${ORPHANS[@]}"; do
+        echo "  - $f"
+    done
+    echo ""
+    # Use ask_yes_no helper — it handles curl|bash (stdin EOF) via /dev/tty fallback
+    # and returns a safe default instead of aborting under `set -euo pipefail`.
+    if ask_yes_no "기존 에이전트 파일이 남아있으면 이름이 바뀐 새 에이전트를 가릴 수 있습니다. 삭제할까요?" n; then
+        rm -f "${ORPHANS[@]}"
+        echo "  제거 완료 (${#ORPHANS[@]}개)"
+    else
+        echo "  건너뜀. 구 이름('oracle', 'explore' 등)으로 호출 시 stale 프롬프트가 노출될 수 있음."
+    fi
+fi
+
 OPENCODE_COMMANDS_LINKED=0
 link_opencode_commands() {
     if [ "$OPENCODE_COMMANDS_LINKED" -eq 1 ]; then return; fi

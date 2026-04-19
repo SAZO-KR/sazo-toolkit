@@ -322,7 +322,7 @@ fi
 
    - **Preferred:** use the `/review-work` command. ALL reviewers must PASS to proceed.
    - **Fallback 1:** follow the `review` skill (`~/.claude/skills/review/SKILL.md`), which launches 5 independent agents (correctness / architecture / security / performance / test quality) under the same PASS/FAIL gate.
-   - **Fallback 2 (last resort):** consult an Oracle agent with the full `git diff`, then apply the same PASS/FAIL criteria manually.
+   - **Fallback 2 (last resort):** consult the `architect-advisor` subagent with the full `git diff`, then apply the same PASS/FAIL criteria manually.
 
    **Do NOT proceed to push/PR creation while any reviewer reports a correctness, security, or behavioral-regression FAIL.** Minor style/preference suggestions may be deferred at your discretion, but known bugs, security issues, behavioral regressions, or CLAUDE.md / AGENTS.md rule violations MUST be fixed (or explicitly escalated to the user) before Step 7.
 
@@ -372,7 +372,11 @@ git push
 
 **Why push before CI check:** `gh pr checks` reads the remote PR HEAD. If you merge locally but don't push, step 10 will report CI status for the OLD PR HEAD (possibly passing) while your local branch has new unreviewed merge content — defeating the purpose of the post-merge CI verification.
 
-**If conflict resolution required substantive code changes** (logic changes, API adjustments, new conditional branches — anything beyond trivial import reordering or whitespace), **re-run Step 6 (self-review)** before proceeding to Step 10. The review gate only covered the pre-merge state; conflict-resolution edits that introduce new logic can harbor regressions or security issues that CI alone may not catch. Trivial mechanical merges (no logic changes) do not require re-review.
+**Step 6 (self-review) re-run trigger** — align with the single source of truth in `CLAUDE.md` §6:
+
+> Step 6은 PR 생성 전 1회만 실행. Step 7의 봇 사이클이 추가 fix를 유발해도 Step 6은 자동 재호출하지 않는다. 봇 피드백이 아키텍처/인터페이스 수준의 변경을 요구한다고 메인 루프가 판단하는 경우에만 사용자 확인 후 Step 6 재호출.
+
+Apply the same criterion here: re-run Step 6 only if conflict resolution **crosses the architectural/interface threshold** defined in CLAUDE.md §6 — new module boundaries, modified public interfaces/exported APIs, or schema/migration changes. Pure logic-level conflict edits that stay inside an existing module's internals do not trigger re-review. Trivial mechanical merges (import reordering, whitespace) obviously do not.
 
 10. Make sure the PR branch CI succeeds.
 

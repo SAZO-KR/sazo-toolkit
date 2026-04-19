@@ -60,6 +60,40 @@ Each agent does NOT receive:
 - Previous fix history
 - Knowledge of what other reviewers are checking
 
+### Prompt-caching discipline (CRITICAL for cost)
+
+All 5 agents share ~90% of their input (diff + CLAUDE.md + requirements + common reviewer instructions). Structure each prompt so this shared payload sits at the **front**, and only the perspective-specific instructions go at the **end**. This lets Anthropic prompt caching (≥1024 tokens shared prefix, 5-min TTL) turn the first call into a cache write (~25% markup) and the remaining 4 into cache reads (~90% discount on input).
+
+Required structure for every review prompt:
+
+```
+[shared prefix — cached]
+1. Common reviewer system instructions (fresh-session discipline, PASS/FAIL criteria,
+   output format — same across all 5 calls)
+2. Project CLAUDE.md / AGENTS.md (verbatim)
+3. Original task requirements
+4. git diff of all changes
+5. List of changed files
+
+[perspective-specific tail — NOT cached, differs per call]
+6. "Perspective: <correctness|architecture|security|performance|test-quality>"
+7. Perspective-specific checklist (the bullets under each Perspective N below)
+```
+
+Launch requirements for caching to hit:
+
+- **Parallel, not sequential** — fire all 5 Task calls in a single assistant turn (single `POST /v1/messages` fan-out). Sequential launches still cache but risk TTL misses on large diffs.
+- **Identical shared prefix byte-for-byte** — do not inject timestamps, UUIDs, or per-call decorations into steps 1–5.
+- **No stale cache reuse across cycles** — when the diff changes (after a fix), steps 4–5 change, so the cache invalidates naturally. Do not try to reuse.
+
+Expected economy (scope-limited):
+
+- The **4 `code-reviewer` invocations** share the same agent system prompt — their user-prompt shared prefix is eligible for cache hits. Savings apply to the user-prompt portion only; agent system prompts and tool schemas are reloaded per subagent (not under the skill's control).
+- The **1 `architect-advisor` invocation** uses a different agent system prompt, so it will NOT cache-hit with the 4 `code-reviewer` calls. Its user-prompt prefix may still cache on re-review cycles within the 5-min TTL.
+- **Assumption**: Claude Code Task subagents issued in the same parent turn share a cache namespace (or at least hit Anthropic's auto-cache heuristic). If that's not the case, the caching benefit degrades to intra-cycle re-review only.
+
+Realistic target: ~50–60% reduction in **user-prompt input tokens** across the 4 `code-reviewer` calls; ~0% on the single `architect-advisor` call; ~0% on system-level payload (agent system prompts + tool schemas) which is out of scope.
+
 ### Perspective 1: Correctness
 
 - Requirements fulfilled? Edge cases handled?
@@ -118,7 +152,7 @@ Each reviewer returns **PASS** or **FAIL**. The threshold:
 ```
 For each of the 5 perspectives, use Task tool:
   Task(
-    subagent_type="oracle",
+    subagent_type="code-reviewer",            # architect-advisor for the Architecture perspective
     run_in_background=true,
     load_skills=[],
     prompt="[Review perspective + git diff + requirements]"
@@ -128,6 +162,10 @@ CRITICAL:
   - Do NOT pass session_id — each review MUST be a fresh session
   - Do NOT include previous review results in the prompt
   - Each agent returns: PASS or FAIL with specific issues cited by file and line
+
+Agent selection:
+  - Correctness / Security / Performance / Test Quality → `code-reviewer` (diff-based, sonnet)
+  - Architecture → `architect-advisor` (depth over breadth, sonnet — escalate to opus only when the main loop identifies architecturally sensitive changes; see CLAUDE.md §0)
 ```
 
 ## Handling Review Results

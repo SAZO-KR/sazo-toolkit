@@ -59,7 +59,23 @@ curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/
 
 ### Agents
 
-(기여 환영!)
+6단계 workflow에 맞춰 역할별로 모델이 선택됨. 메인 루프가 오케스트레이터로 동작하며, 아래 에이전트에게 독립 컨텍스트로 위임한다. 자세한 원칙은 `CLAUDE.md` §0 참고.
+
+| 에이전트 | 역할 | 모델 | 주 사용 단계 |
+|---|---|---|---|
+| `code-searcher` | in-repo 검색/심볼 찾기 | haiku | 2 (리서치) |
+| `docs-researcher` | 외부 docs/OSS 리서치 (context7 MCP 지원) | haiku | 2 (리서치) |
+| `image-analyzer` | 스크린샷/다이어그램/PDF 분석 | haiku | 2 (리서치) |
+| `plan-drafter` | 전략 인터뷰 + 실행 플랜 초안 | opus | 3 (플랜) |
+| `plan-auditor` | 플랜 gap 분석 | sonnet | 3 (플랜) |
+| `plan-critic` | 플랜 최종 게이트 (APPROVE/BLOCK) | sonnet | 3 (플랜) |
+| `plan-executor` | 승인된 플랜 순차 실행 | sonnet | 4 (구현) |
+| `ui-engineer` | 프론트엔드/UI/UX 구현 | sonnet | 4 (구현) |
+| `code-reviewer` | diff 기반 종합 코드리뷰 | sonnet | 6 (리뷰) |
+| `architect-advisor` | 아키텍처/설계 심층 판단, read-only | sonnet (opus 승격 가능) | 6 (리뷰 심층) |
+| `doc-writer` | 기술 문서 작성 | haiku | 7 (마무리) |
+
+**이전 이름에서 바뀐 경우** (2026-04-19 rename): `explore→code-searcher`, `librarian→docs-researcher`, `multimodal-looker→image-analyzer`, `document-writer→doc-writer`, `frontend-engineer→ui-engineer`, `prometheus→plan-drafter`, `metis→plan-auditor`, `momus→plan-critic`, `atlas→plan-executor`, `oracle→architect-advisor`. `sisyphus`는 subagent nesting 제약 때문에 제거됨. `install.sh`는 구 이름 파일 발견 시 삭제 여부를 물어본다.
 
 ---
 

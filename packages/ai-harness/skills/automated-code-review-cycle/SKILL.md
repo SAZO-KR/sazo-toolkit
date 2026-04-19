@@ -366,10 +366,13 @@ fi
 
 ```
 ROUND=0
-MAX_ROUNDS=30
+MAX_ROUNDS=10          # 각 라운드 = (리뷰 polling + fix + push + reply) ≈ 4-6회 LLM 호출.
+                       # 10 라운드면 최대 ~60회 호출 — 비용 상한. 초과 시 사용자에게 에스컬레이트.
 STALE_COUNT=0          # 새 리뷰 없이 같은 review를 재평가한 연속 횟수
 MAX_STALE=2            # 이 횟수 초과 시 리뷰어 무응답으로 판단
 PREV_LATEST_REVIEW=""  # 이전 라운드의 최신 review ID
+WALL_CLOCK_START=now()   # bash 구현 시 now()는 `$(date +%s)`
+WALL_CLOCK_BUDGET=1800   # 30분 — 초과 시 진행 중이라도 사용자 확인 요청
 
 while ROUND < MAX_ROUNDS:
   ROUND++
@@ -414,11 +417,17 @@ while ROUND < MAX_ROUNDS:
 
   fix_commit_push_reply()       # Step 4 — 수정 → 테스트 → 커밋 → push → 답변(commit hash)
   gemini_fallback_if_quota()    # Step 5 — Codex quota 초과 시에만
+
+  # Wall-clock budget check
+  if (now() - WALL_CLOCK_START) > WALL_CLOCK_BUDGET:
+    notify_user("30분 경과. 계속 진행 할까요? (진행 / 중단)")
+    break  # 사용자 응답 대기
 ```
 
 **안전 가드:**
 
-- 최대 라운드 수: 30 (초과 시 사용자에게 알림)
+- 최대 라운드 수: 10 (각 라운드 ~4-6 LLM 호출 → 총 ~60 호출 상한)
+- Wall-clock budget: 30분 — 초과 시 사용자에게 진행 여부 확인
 - 같은 피드백 3회 반복 시: decline하고 다음으로
 - **Stale review**: 2회 연속 같은 리뷰 → Gemini fallback 또는 사용자 알림
 - 총 소요 시간 모니터링 (각 라운드 로그)
