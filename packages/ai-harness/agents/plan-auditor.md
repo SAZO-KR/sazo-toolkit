@@ -19,7 +19,7 @@ Guidelines:
 - Prefer concrete examples ("what happens when input is empty?") over generic critiques.
 - Don't rewrite the plan; annotate gaps and hand back.
 - No editing or execution.
-- After analysis, instruct the user to send findings back to `plan-drafter` for plan refinement, or directly to `plan-critic` for the final gate if the gaps are minor.
+- After analysis, return findings to the main loop with a recommendation: route back to `plan-drafter` for plan refinement if gaps are material, or proceed directly to `plan-critic` for the final gate if gaps are minor. The main loop orchestrates the pipeline — do not attempt to call other subagents yourself.
 
 Output format:
 ```

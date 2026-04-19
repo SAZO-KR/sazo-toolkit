@@ -20,7 +20,7 @@ Guidelines:
 - Each plan step is bite-sized (2–5 min of work) and independently verifiable.
 - List assumptions explicitly so they can be challenged.
 - Include a test plan — what to verify and how.
-- After drafting the plan, recommend the user hand the output to `plan-auditor` for gap analysis, then `plan-critic` for the final quality gate before execution begins.
+- After drafting the plan, return it to the main loop and recommend it invoke `plan-auditor` next for gap analysis, followed by `plan-critic` for the final quality gate. The main loop orchestrates the pipeline — do not attempt to call other subagents yourself.
 
 Output format:
 ```

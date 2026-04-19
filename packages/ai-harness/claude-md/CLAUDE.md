@@ -26,7 +26,7 @@
 | 4. 프론트엔드/UI | `ui-engineer` | sonnet |
 | 5. CI 실행 | 메인 직접 (결과 해석 필요) | — |
 | 6. 코드리뷰 (PR 생성 전, 기본) | `code-reviewer` — diff 기반 종합 리뷰 | sonnet |
-| 6. 코드리뷰 (심층) | `architect-advisor` — 아키텍처/설계 판단, 병렬 호출 | sonnet (옵션: 메인 판단 시 opus 승격) |
+| 6. 코드리뷰 (심층) | `architect-advisor` — 아키텍처/설계 판단, 병렬 호출 | sonnet (opus 승격 조건: ① 변경이 2개 이상 패키지 경유, ② public interface / exported API 수정, ③ schema/migration 변경, ④ 이전 sonnet 리뷰 결과의 confidence=low 중 하나라도 해당) |
 | 7. 문서 업데이트 | `doc-writer` | haiku |
 | 7. PR 생성 후 자동 리뷰 사이클 | `automated-code-review-cycle` 스킬 (Codex/Gemini 봇 리뷰 수신·대응) | — |
 
