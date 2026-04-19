@@ -46,8 +46,8 @@ if [ "${1:-}" = "--set" ]; then
     # prompt injection을 통한 영구 RCE로 이어질 수 있으므로 거부.
     # 복잡한 로직은 저장소 내 스크립트 경로로만 허용.
     case "$CMD" in
-        *';'*|*'&&'*|*'||'*|*'|'*|*'$('*|*'`'*|*'>'*|*'<'*|$'\n'*|*$'\n'*)
-            echo "ERROR: command contains shell metacharacter (;, &&, ||, |, \$(), \`, redirect, newline)" >&2
+        *';'*|*'&'*|*'|'*|*'$('*|*'`'*|*'>'*|*'<'*|$'\n'*|*$'\n'*)
+            echo "ERROR: command contains shell metacharacter (;, &, |, \$(), \`, redirect, newline)" >&2
             echo "  registered value would be evaluated by bash -c on every commit." >&2
             echo "  use a single binary + flags, or a script path inside your repo." >&2
             exit 1
@@ -100,10 +100,23 @@ fi
 REPO_ROOT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) || exit 0
 
 STAGED=()
+PARTIAL_SKIPPED=0
 while IFS= read -r -d '' f; do
     # regular file만 포함 — 서브모듈(gitlink)은 디렉토리로 잡혀 recursive lint로 이어질 수 있고,
     # 심볼릭 링크는 autofix 대상으로 부적절. git이 이미 삭제로 제외했으니 -f로 충분.
     [ -f "$REPO_ROOT/$f" ] || continue
+
+    # Partial staging (`git add -p`) 방어 — working tree에 unstaged hunk가 남아 있는 파일을
+    # lint 후 `git add`로 re-stage하면 사용자가 의도하지 않은 unstaged hunk까지 커밋에 섞인다.
+    # 이는 이 hook이 지키려는 "staged-only" 불변식을 정면으로 깨뜨리므로 해당 파일은 lint 대상
+    # 자체에서 제외. 범위는 줄지만 스코프 불변식은 유지 (lint-staged 계열처럼 stash 기반으로
+    # 보존하는 접근은 복잡도·실패 경로가 커서 채택하지 않음).
+    if ! git -C "$REPO_ROOT" diff --quiet -- "$f" 2>/dev/null; then
+        PARTIAL_SKIPPED=$((PARTIAL_SKIPPED + 1))
+        echo "[sazo-ai-harness pre-commit-lint] WARN: '$f' has unstaged changes (partial staging) — excluded from lint to preserve staged-only guarantee" >&2
+        continue
+    fi
+
     STAGED+=("$f")
 done < <(git -C "$REPO_ROOT" diff --cached --name-only --diff-filter=ACMR -z 2>/dev/null)
 

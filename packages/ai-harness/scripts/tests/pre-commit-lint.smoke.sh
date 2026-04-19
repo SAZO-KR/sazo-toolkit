@@ -378,6 +378,60 @@ assert_eq "exit 2 on real git commit (lint fails)" "2" "$rc"
 
 # ───────────────────────────────────
 echo ""
+echo "Case 19: partial staging (unstaged hunk) 파일은 lint 대상에서 제외 (Codex R3 P1 회귀 방어)"
+CACHE_FILE="$SANDBOX/c19-cache.json"
+REPO="$SANDBOX/c19"
+make_repo "$REPO"
+
+# 초기 상태: v1 커밋 → working tree에 v2 수정 → 부분만 staging → working tree는 v3
+echo "v1" > "$REPO/a.txt"
+git -C "$REPO" add a.txt
+git -C "$REPO" -c user.email=t@t -c user.name=t commit -q -m init
+
+echo "v2" > "$REPO/a.txt"
+git -C "$REPO" add a.txt             # a.txt staged = v2
+echo "v3-UNSTAGED-SECRET" > "$REPO/a.txt"  # working tree = v3 (unstaged hunk)
+
+# fake lint: 인자로 받은 모든 파일명을 log에 기록
+FAKE_LOG="$SANDBOX/c19-args.log"
+FAKE_LINT="$SANDBOX/c19-lint.sh"
+cat > "$FAKE_LINT" <<EOF
+#!/bin/bash
+printf '%s\n' "\$@" > "$FAKE_LOG"
+exit 0
+EOF
+chmod +x "$FAKE_LINT"
+
+(cd "$REPO" && SAZO_LINT_CACHE_FILE="$CACHE_FILE" "$HOOK" --set "$FAKE_LINT" --files-arg >/dev/null)
+out=$(run_hook "$REPO" "git commit -m x" 2>&1); rc=$?
+assert_eq "exit 0 (partial-staged 파일 스킵 후 staged 0개라 no-op)" "0" "$rc"
+
+# FAKE_LOG가 존재하지 않아야 함 (lint 안 돌았음)
+if [ ! -f "$FAKE_LOG" ]; then
+    echo "  OK   lint 실행 안 됨 (partial staged 파일은 제외되어 타겟 없음)"
+else
+    args=$(cat "$FAKE_LOG")
+    echo "  FAIL lint가 partial-staged 파일에 실행됨: $args"
+    FAIL=$((FAIL + 1))
+fi
+
+# staged blob은 v2 그대로 유지 (hook이 re-stage로 덮지 않음)
+staged_content=$(git -C "$REPO" show :a.txt)
+assert_eq "staged blob 보존 (v2 유지, v3-SECRET 안 새어들어감)" "v2" "$staged_content"
+
+# ───────────────────────────────────
+echo ""
+echo "Case 20: --set 에 단일 '&' (background) 거부 (Codex R3 P2 회귀 방어)"
+CACHE_FILE="$SANDBOX/c20-cache.json"
+REPO="$SANDBOX/c20"
+make_repo "$REPO"
+
+(cd "$REPO" && SAZO_LINT_CACHE_FILE="$CACHE_FILE" "$HOOK" --set 'tool --fix & attacker-cmd' >/dev/null 2>&1)
+rc=$?
+assert_eq "exit 1 on bare ampersand" "1" "$rc"
+
+# ───────────────────────────────────
+echo ""
 echo "Case 18: runner/executable 부재 시 감지 miss (Codex R2 P1/P2 회귀 방어)"
 REPO="$SANDBOX/c18"
 mkdir -p "$REPO"
