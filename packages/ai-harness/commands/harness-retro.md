@@ -27,7 +27,7 @@ Claude Code session 로그 구조:
 find ~/.claude/projects -maxdepth 2 -name '*.jsonl' -not -path '*/subagents/*' -mtime -<일수> -size +10k
 ```
 
-- `<일수>` = $1의 숫자 (기본 7)
+- `<일수>` = `$1`에서 `d`/`D` 접미사 제거한 숫자 (기본 7). 예: `7d` → 7, `14d` → 14, `30` → 30. `find -mtime`은 숫자만 받으므로 **접미사 정규화 필수** (`"${1%[dD]}"` 또는 `printf '%d' "${1:-7}" 2>/dev/null || echo 7` 등)
 - mtime 필터로 기간 제한
 - 10KB 미만(진입만 하고 종료) 제외
 - subagents/ 경로 전면 제외 (메인 루프만 대상 — subagent는 짧고 자기완결적이라 signal 신뢰도 낮음)
