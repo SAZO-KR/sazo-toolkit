@@ -142,7 +142,36 @@ fi
 **Polling (push 후):**
 
 ```bash
-PUSH_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# GitHub 서버 권위 시각(ISO8601 UTC). 로컬 `date`는 runner/dev machine의
+# 클록 skew로 reaction `created_at`(서버 시각)과 어긋날 수 있어 승인 false-negative를
+# 유발할 수 있다. push 직후 repo.pushed_at을 조회해 server-authoritative cutoff를
+# 확보한다.
+#
+# 한계 (REST에는 PR-head 단위 push 시각이 없음):
+# - `repo.pushed_at`은 **repo-wide** 최신 push 시각이라, 내 push 직후 타 브랜치로
+#   또 다른 push가 발생하면 cutoff가 그 시각으로 밀린다. 실무적으로는 Codex reaction이
+#   push 수십 초 뒤에 도착하므로 수 초의 cutoff 드리프트는 false-negative를 일으키지
+#   않지만, 고빈도 모노레포에서는 race 가능. GraphQL `pushedDate`는 deprecated되어
+#   신뢰할 수 없음.
+# - 검증 + 재시도 + 최종 실패 시 하드-페일로 빈/null cutoff에서 stale 승인이
+#   통과하는 경로를 차단한다.
+fetch_push_time() {
+  local t
+  for attempt in 1 2 3; do
+    t=$(gh api "repos/$OWNER/$REPO" --jq '.pushed_at' 2>/dev/null)
+    if [ -n "$t" ] && [ "$t" != "null" ]; then
+      printf '%s' "$t"
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+PUSH_TIME=$(fetch_push_time) || {
+  echo "FATAL: Could not obtain server-authoritative PUSH_TIME from repo.pushed_at (3회 재시도 실패)." >&2
+  echo "         빈 cutoff로 진행하면 stale 승인이 통과할 수 있어 사이클을 중단한다." >&2
+  exit 1
+}
 NEW_REVIEW_FOUND=false
 
 # 30초 간격으로 최대 10분 polling
@@ -247,14 +276,38 @@ fi
 
 | 리뷰어 | 통과 기준                                      |
 | ------ | ---------------------------------------------- |
-| Codex  | PR description에 👍 이모지가 있음              |
+| Codex  | PR(issue) 자체에 Codex bot이 `+1`(👍) reaction을 달았음 |
 | Gemini | 최신 리뷰에 하위 코멘트(review comments)가 0건 |
 
+> **Codex 승인 스펙 근거:** Codex 공식 안내 — "If Codex has suggestions, it will comment; otherwise it will react with 👍." 👍 reaction은 **PR(issue) 자체의 reactions 엔드포인트**(`/repos/{o}/{r}/issues/{n}/reactions`)에 `content: "+1"`로 게시된다. PR body(description 텍스트)나 review body에 이모지로 들어가지 않는다.
+
 ```bash
-# Codex 통과 확인
-PR_BODY=$(gh pr view $PR_NUM --json body -q .body)
+# Codex 통과 확인 — PR(issue) reactions에 codex bot의 "+1"이 있는지.
+#
+# 세 가지 위협을 모두 막는다:
+# 1. Stale approval: 이전 라운드의 +1이 새 push 이후에도 남아있어 미검토
+#    코드가 통과로 오판됨.
+#    → 사이클의 PUSH_TIME(GitHub 서버 권위 시각) 이후 reaction만 카운트.
+#    → `committedDate`/`authoredDate`는 commit 메타데이터라 backdate/force-push
+#      시 우회 가능하므로 사용하지 않는다. 로컬 `date -u`는 runner 클록 skew로
+#      reaction `created_at`(서버 시각)과 어긋나 false-negative 유발 가능.
+#      PUSH_TIME은 Step 2에서 `gh api repos/$OWNER/$REPO --jq .pushed_at`으로
+#      push 직후 캡쳐한 서버 권위 시각.
+# 2. Identity spoofing: `test("codex")`는 login에 "codex"를 포함한 임의 사용자
+#    (`codex-foo` 등)도 매칭하므로 public repo에서 우회 가능.
+#    → 공식 Codex bot login 정확 매칭 (`chatgpt-codex-connector[bot]`).
+# 3. 페이지네이션: --paginate는 jq를 페이지마다 독립 실행하므로 `| length`를
+#    --jq 안에 넣으면 bash 숫자 비교가 깨진다.
+#    → 1차 jq는 객체만 emit, 2차 `jq -s`가 전 페이지를 슬럽 + --arg로 안전 필터.
 CODEX_PASSED=false
-if echo "$PR_BODY" | grep -q "👍"; then
+CODEX_BOT_LOGIN="chatgpt-codex-connector[bot]"
+# PUSH_TIME은 Step 2에서 `gh api repos/$OWNER/$REPO --jq .pushed_at`으로
+# 캡쳐한 서버 권위 시각 (reaction.created_at과 동일한 서버 클록).
+CODEX_THUMBS=$(gh api "repos/$OWNER/$REPO/issues/$PR_NUM/reactions" --paginate \
+  --jq '.[] | select(.content == "+1")' \
+  | jq -s --arg bot "$CODEX_BOT_LOGIN" --arg since "$PUSH_TIME" \
+    '[.[] | select(.user.login == $bot and .created_at > $since)] | length')
+if [ "${CODEX_THUMBS:-0}" -gt "0" ]; then
   CODEX_PASSED=true
 fi
 
@@ -470,6 +523,7 @@ PR이 머지 가능한 상태입니다. / 사용자 확인이 필요합니다.
 | 답변을 commit/push 이전에 게시                               | `commit → push → 답변` 순서 엄수. 그러지 않으면 답변 시점 `commit_id`가 수정 이전을 가리켜 검증 불가 |
 | 수정 답변에 commit hash 링크 누락                            | 답변 본문에 `[`short-hash`](commit URL)` 필수 — 리뷰어가 "수정 완료" 주장의 근거 커밋을 1-클릭 추적 |
 | 답변 본문에 regex/glob 특수문자 포함 시 shell 해석 충돌       | URL을 따옴표로 감싸거나 HEREDOC + `--input -` 사용 (bash/zsh 공통). `noglob`은 zsh 전용이므로 범용 기본값으로 쓰지 말 것 |
+| Codex 승인 판정 시 PR body 텍스트에서 👍 이모지 grep           | Codex는 PR(issue) `reactions` 엔드포인트에 `content: "+1"`로 반응. `gh api .../issues/$PR_NUM/reactions`를 codex bot 로그인 + `+1`로 필터 |
 
 ## Related Skills
 
