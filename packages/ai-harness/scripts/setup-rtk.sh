@@ -225,9 +225,11 @@ fi
 # 마커만 있고 hook이 사라진 경우(사용자가 settings.json 리셋) 재등록한다.
 if [ -f "$INIT_DONE_MARKER" ]; then
     if [ ! -f "$SETTINGS" ]; then
-        # settings.json 부재 = hook 확정 부재 → 마커 신뢰 불가, 재등록 경로로 폴백
+        # settings.json 부재 = hook 확정 부재 → 마커 신뢰 불가, 재등록 경로로 폴백.
+        # allowlist 마커도 함께 제거 — settings 재생성 후 inject_rtk_allowlist가
+        # 실행되지 않으면 프롬프트가 다시 튀어나와 이 스크립트의 목적 자체가 무효화됨.
         msg "ℹ️  init 마커는 있지만 $SETTINGS 부재 — hook 재등록 시도"
-        rm -f "$INIT_DONE_MARKER"
+        rm -f "$INIT_DONE_MARKER" "$ALLOWLIST_MARKER"
         # 아래 rtk init 경로로 진행
     elif command -v jq >/dev/null 2>&1; then
         HAS_RTK_HOOK=$(jq '
@@ -240,7 +242,9 @@ if [ -f "$INIT_DONE_MARKER" ]; then
             exit 0
         fi
         msg "ℹ️  init 마커는 있지만 hook이 사라짐 — 재등록 시도"
-        rm -f "$INIT_DONE_MARKER"
+        # hook 소실은 settings.json 리셋을 시사 → allowlist 항목도 지워졌을 가능성.
+        # 마커를 함께 제거해 재주입 경로를 연다 (jq union-merge는 idempotent).
+        rm -f "$INIT_DONE_MARKER" "$ALLOWLIST_MARKER"
         # 아래 rtk init 재실행 경로로 폴백
     else
         # settings.json은 있으나 jq 없어 검증 불가 — 마커를 신뢰하고 skip

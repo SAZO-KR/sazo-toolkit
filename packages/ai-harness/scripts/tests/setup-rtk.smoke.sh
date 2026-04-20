@@ -215,16 +215,25 @@ assert_equal "rtk init called exactly once (marker prevents re-run)" "1" "$call_
 
 # ─── Case 5: rtk stub + init-done 마커 + settings.json 부재 → 재등록 경로 ───
 echo ""
-echo "Case 5: init-done 마커 + settings.json 부재 → 마커 삭제 후 rtk init 재호출"
+echo "Case 5: init-done + allowlist 마커 + settings.json 부재 → 두 마커 삭제 후 allowlist 재주입"
 H="$SANDBOX/c5"
 mkdir -p "$H/.config/sazo-ai-harness" "$H/.claude" "$H/stub-bin"
+# 사용자가 이전에 완전 셋업을 끝낸 상태 — 두 마커 모두 존재
 touch "$H/.config/sazo-ai-harness/.rtk-init-done"
-# settings.json 파일 없음 (삭제된 상태 시뮬레이션)
+touch "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
+# settings.json 파일 없음 (reset/reinstall 시뮬레이션)
 LOG="$H/.rtk-call-log"
 
+# 실제 rtk init처럼 hook 등록된 settings.json을 다시 깔아주는 stub.
+# 이 stub 없으면 inject_rtk_allowlist가 `[ -f $SETTINGS ] || return`으로 skip.
 cat > "$H/stub-bin/rtk" <<'STUBEOF'
 #!/bin/bash
 echo "$@" >> "$HOME/.rtk-call-log"
+if [ "${1:-}" = "init" ]; then
+    cat > "$HOME/.claude/settings.json" <<'FAKE'
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"fake-rtk-rewrite.sh"}]}]}}
+FAKE
+fi
 exit 0
 STUBEOF
 chmod +x "$H/stub-bin/rtk"
@@ -235,6 +244,10 @@ rc=$?
 assert_equal "exit code 0" "0" "$rc"
 assert_file_content "rtk init re-called after settings.json disappeared" "$LOG" "init --auto-patch --global"
 assert_file_present "init-done marker re-created" "$H/.config/sazo-ai-harness/.rtk-init-done"
+# 회귀 방지 (Codex P2): 이전 라운드의 stale allowlist 마커가 재주입을 막지 않아야 한다.
+assert_file_present "allowlist marker re-created (Codex P2 regression guard)" "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
+describe_present=$("$JQ_BIN" -r '.permissions.allow | contains(["Bash(rtk aws * describe-*:*)"])' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "allowlist re-injected into regenerated settings.json" "true" "$describe_present"
 
 # ─── Case 6: hook 이미 등록됨 (마커 없음) → init-done + allowlist 둘 다 생성 ───
 echo ""
