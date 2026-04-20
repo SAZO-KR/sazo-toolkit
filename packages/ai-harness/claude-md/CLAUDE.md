@@ -109,11 +109,8 @@
 - 프로덕션 데이터 변경 금지
 - 보호 브랜치 직접 수정 금지
 - 서드파티 API 변경 금지
-- `as any`, `as unknown as X` 이중 캐스팅, non-null 단언(`!`) 남용, `@ts-ignore`, `@ts-expect-error` 금지
+- `as any`, `@ts-ignore`, `@ts-expect-error` 금지
 - secret·API key·token·password 하드코딩 금지. 항상 환경변수/시크릿 매니저 경유
-- 동일 aggregate에 대한 2건 이상의 DB 쓰기(save/update/delete)는 트랜잭션 경계 내부에서 실행 — 부분 실패 시 불일치 방지
-- null/undefined 의도를 **도메인 의미 없는 임의 기본값**으로 감추는 폴백 금지: `parseFloat('abc')`→NaN 묵시적 통과, `Number(x) || 0`, 정당한 기본값이 없는데 `?? 0`·`?? ''`로 덮는 패턴은 실패를 성공으로 위장. 명시적 검증 후 실패 분기 또는 타입상 `T | null` 유지. 도메인 의미 있는 기본값(`timeout ?? 5000`, `limit ?? DEFAULT_LIMIT`)은 정상 패턴이므로 적용 대상 아님.
-- `await` 누락(floating promise), `new Promise(async (resolve) => ...)` (async executor), 병렬이어야 할 곳의 순차 await 금지
 - 실패하는 테스트를 삭제하거나 구현에 맞춰 변경하여 "통과"시키기 금지 — 테스트가 실패하면 구현이 틀린 것이다. 테스트가 아니라 구현을 수정할 것.
 - 테스트 없이 "수동 확인했다"고 넘어가기 금지
 - 사용자 확인 없이 중요한 의사결정을 자의적으로 내리기 금지

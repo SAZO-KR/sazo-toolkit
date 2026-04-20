@@ -30,7 +30,48 @@ Your job is to examine the *changed* code with fresh eyes and flag issues. You d
    - **Test quality**: tests verify real behavior, not mock behavior; edge cases covered; deterministic
    - **Anti-patterns**: production pollution with test-only hooks, dead code, silent failure
    - **Style/consistency**: only if it affects readability or diverges from project conventions
+   - (Step 3을 수행할 때, 아래 ["High-signal pattern checklist"](#high-signal-pattern-checklist) 섹션의 항목들을 해당 스택이면 함께 점검)
 4. **Verdict**: PASS or FAIL with specific file:line citations.
+
+## High-signal pattern checklist
+
+과거 PR 리뷰에서 수용률이 높았던 지적들. **해당 언어/스택인 경우에만 확인** — 무관한 스택(예: Go/Bash repo에서 TS 항목)은 skip.
+
+**타입 시스템 우회 (TS)**
+- `as any`, `as unknown as X` 이중 캐스팅, non-null 단언(`!`) 남용 → 근본 원인(잘못된 타입 정의/generic 부족)을 고칠 것
+- `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess` 미적용 상태에서 배열 인덱싱 결과를 optional 처리 없이 사용
+
+**실패 은폐 폴백 (JS/TS 범용)**
+- `parseFloat('abc')`, `Number(x) || 0`, 정당한 기본값이 없는데 `?? 0`/`?? ''`로 덮는 패턴 → 명시적 실패 분기 또는 `T | null` 유지
+- 예외: 도메인 의미 있는 기본값(`timeout ?? 5000`, `limit ?? DEFAULT_LIMIT`)은 정상
+
+**동시 상태 변경의 원자성 (DB/분산)**
+- 동일 aggregate/연관 엔티티에 대한 2건 이상 write가 트랜잭션 경계 밖에 있음 → 부분 실패 시 불일치
+- 외부 API 호출이 트랜잭션 내부에서 실행 (long transaction, 커넥션 점유)
+
+**비동기 제어 (JS/TS)**
+- `await` 누락(floating promise), `new Promise(async (resolve) => ...)` (async executor), 병렬 가능한데 순차 `await` 반복
+- `Promise.all` 대신 loop
+
+**HTTP 계층 (NestJS 등)**
+- Controller/Service에서 일반 `throw new Error` → 500 변환됨. `HttpException` 하위 클래스 사용 여부
+- Param UUID/숫자에 pipe 미적용
+
+**입력 검증 / 스키마 일치**
+- DTO ↔ DB 컬럼 ↔ Swagger(OpenAPI) 형상(length/type/required) 3-way 일치
+- class-validator 데코레이터 누락
+
+**금액·고정소수 (범용)**
+- `number`로 금액 연산 → 부동소수 정밀도 손실. `Decimal` 라이브러리 또는 정수(cent) 단위
+- DB `bigint` 컬럼을 `number`로 수신
+
+**Secret / 주입 (범용)**
+- 하드코딩된 API key / token / password → hook(gitleaks 등)이 1차 방어지만 리뷰에서도 확인
+- `child_process.exec` + 문자열 보간 → `execFile` + arg array
+- 민감 필드(token, apiKey, password)를 객체째로 로깅
+
+**리포지토리별 컨벤션**
+- 프로젝트의 `CLAUDE.md` / `AGENTS.md`에 명시된 고유 규칙(네이밍, 표준 메서드, 파일 위치) 준수 여부 — 이 체크리스트보다 프로젝트 파일이 **우선**
 
 ## Guidelines
 
