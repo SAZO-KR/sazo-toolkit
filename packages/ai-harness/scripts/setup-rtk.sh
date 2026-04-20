@@ -100,6 +100,21 @@ inject_rtk_allowlist() {
             ;;
     esac
 
+    # `.permissions.allow`도 array/null만 허용. 아래 jq의 `+ $adds`는 array
+    # concat이라 scalar/object와 만나면 `<type> and array cannot be added`로
+    # 실패하고, 현재 stderr 억제 때문에 no-op silent가 된다 →  주입 실패가
+    # 사용자에게 보이지 않아 "프롬프트 재발" 증상으로만 드러나게 된다.
+    # merge-permissions.sh의 가드와 동일 패턴으로 타입을 사전 점검한다.
+    local allow_type
+    allow_type=$(jq -r '.permissions.allow | type' "$SETTINGS" 2>/dev/null)
+    case "$allow_type" in
+        array|null) ;;
+        *)
+            msg "⚠️  .permissions.allow 타입이 array가 아님 ($allow_type) — allowlist 주입 건너뜀. 수동 확인 필요."
+            return 0
+            ;;
+    esac
+
     local settings_dir
     settings_dir=$(dirname "$SETTINGS")
     local tmp

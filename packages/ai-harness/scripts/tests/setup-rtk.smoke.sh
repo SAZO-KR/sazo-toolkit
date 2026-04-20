@@ -334,6 +334,29 @@ assert_file_absent "rtk NOT invoked (step 4 early-return)" "$H/.rtk-call-log"
 describe_present=$("$JQ_BIN" -r '.permissions.allow | contains(["Bash(rtk aws * describe-*:*)"])' "$H/.claude/settings.json" 2>/dev/null)
 assert_equal "allowlist contains aws describe pattern (step 4 path)" "true" "$describe_present"
 
+# ─── Case 9: .permissions.allow가 비-array(문자열) → 주입 skip, 원본 보존 ───
+echo ""
+echo "Case 9: .permissions.allow 비-array → skip, 침묵 no-op 방지"
+H="$SANDBOX/c9"
+mkdir -p "$H/.config/sazo-ai-harness" "$H/.claude" "$H/stub-bin"
+cat > "$H/.claude/settings.json" <<'WEIRD'
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rtk-rewrite.sh"}]}]},"permissions":{"allow":"not-an-array"}}
+WEIRD
+original_settings=$(cat "$H/.claude/settings.json")
+
+cat > "$H/stub-bin/rtk" <<'STUBEOF'
+#!/bin/bash
+exit 0
+STUBEOF
+chmod +x "$H/stub-bin/rtk"
+
+STUB_PATH="$H/stub-bin:$MIN_PATH"
+out=$(run_setup_quiet "$H" "$STUB_PATH")
+rc=$?
+assert_equal "exit code 0" "0" "$rc"
+assert_file_content "non-array .permissions.allow preserved verbatim" "$H/.claude/settings.json" "$original_settings"
+assert_file_absent "allowlist marker NOT created (type guard)" "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
+
 echo ""
 echo "─────────────────────"
 if [ "$FAIL" -eq 0 ]; then
