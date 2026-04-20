@@ -255,8 +255,12 @@ fi
 ```bash
 # Codex 통과 확인 — PR(issue) reactions에 codex bot의 "+1"이 있는지
 CODEX_PASSED=false
+# --paginate는 페이지별로 jq를 독립 실행한다. `| length`를 --jq 안에 넣으면
+# 페이지당 한 줄 숫자가 출력되어 bash `-gt` 비교에서 "integer expression expected"로 실패.
+# 매칭 객체를 그대로 emit한 뒤 `jq -s 'length'`로 전 페이지를 슬럽해 단일 정수로 집계.
 CODEX_THUMBS=$(gh api "repos/$OWNER/$REPO/issues/$PR_NUM/reactions" --paginate \
-  --jq '[.[] | select(.content == "+1" and (.user.login | test("codex")))] | length')
+  --jq '.[] | select(.content == "+1" and (.user.login | test("codex"; "i")))' \
+  | jq -s 'length')
 if [ "${CODEX_THUMBS:-0}" -gt "0" ]; then
   CODEX_PASSED=true
 fi

@@ -35,9 +35,13 @@ fi
 # SKILL.md Step 3-3에 기술된 판정 로직을 그대로 재현한다.
 check_codex_approval() {
     local pr_num="$1"
+    # --paginate는 페이지별로 jq를 독립 실행하므로 `| length`를 --jq 안에 넣으면
+    # 페이지당 한 줄 숫자가 출력되어 bash `-gt` 비교가 깨진다.
+    # 매칭 객체를 emit한 뒤 `jq -s 'length'`로 전 페이지를 슬럽해 단일 정수로 집계.
     gh api "repos/$OWNER/$REPO/issues/$pr_num/reactions" --paginate \
-        --jq '[.[] | select(.content == "+1" and (.user.login | test("codex")))] | length' \
-        2>/dev/null
+        --jq '.[] | select(.content == "+1" and (.user.login | test("codex"; "i")))' \
+        2>/dev/null \
+        | jq -s 'length'
 }
 
 FAIL=0
