@@ -253,14 +253,27 @@ fi
 > **Codex 승인 스펙 근거:** Codex 공식 안내 — "If Codex has suggestions, it will comment; otherwise it will react with 👍." 👍 reaction은 **PR(issue) 자체의 reactions 엔드포인트**(`/repos/{o}/{r}/issues/{n}/reactions`)에 `content: "+1"`로 게시된다. PR body(description 텍스트)나 review body에 이모지로 들어가지 않는다.
 
 ```bash
-# Codex 통과 확인 — PR(issue) reactions에 codex bot의 "+1"이 있는지
+# Codex 통과 확인 — PR(issue) reactions에 codex bot의 "+1"이 있는지.
+#
+# 두 가지 위협을 모두 막는다:
+# 1. Stale approval (Codex P1): 이전 라운드의 +1이 새 commit 이후에도 남아있어
+#    새로 push된 미검토 코드가 통과로 오판됨.
+#    → 마지막 commit 시각 이후에 달린 reaction만 카운트.
+# 2. Identity spoofing (Codex P1): `test("codex")`는 login에 "codex"를 포함한
+#    임의 사용자(`codex-foo` 등)도 매칭하므로, public repo에서 임의 계정이
+#    +1을 달아 게이트를 우회할 수 있음.
+#    → 공식 Codex bot login 정확 매칭 (`chatgpt-codex-connector[bot]`).
+#
+# 페이지네이션 주의: --paginate는 jq를 페이지마다 독립 실행하므로 `| length`를
+# --jq 안에 넣으면 bash 숫자 비교가 깨진다. 1차 jq는 객체만 emit하고,
+# 2차 `jq -s`가 전 페이지를 슬럽한 뒤 --arg로 안전하게 필터링.
 CODEX_PASSED=false
-# --paginate는 페이지별로 jq를 독립 실행한다. `| length`를 --jq 안에 넣으면
-# 페이지당 한 줄 숫자가 출력되어 bash `-gt` 비교에서 "integer expression expected"로 실패.
-# 매칭 객체를 그대로 emit한 뒤 `jq -s 'length'`로 전 페이지를 슬럽해 단일 정수로 집계.
+CODEX_BOT_LOGIN="chatgpt-codex-connector[bot]"
+LAST_COMMIT_AT=$(gh pr view $PR_NUM --json commits --jq '.commits[-1].committedDate')
 CODEX_THUMBS=$(gh api "repos/$OWNER/$REPO/issues/$PR_NUM/reactions" --paginate \
-  --jq '.[] | select(.content == "+1" and (.user.login | test("codex"; "i")))' \
-  | jq -s 'length')
+  --jq '.[] | select(.content == "+1")' \
+  | jq -s --arg bot "$CODEX_BOT_LOGIN" --arg since "$LAST_COMMIT_AT" \
+    '[.[] | select(.user.login == $bot and .created_at > $since)] | length')
 if [ "${CODEX_THUMBS:-0}" -gt "0" ]; then
   CODEX_PASSED=true
 fi

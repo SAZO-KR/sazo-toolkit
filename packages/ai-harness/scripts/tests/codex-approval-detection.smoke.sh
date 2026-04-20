@@ -33,15 +33,22 @@ if ! gh auth status >/dev/null 2>&1; then
 fi
 
 # SKILL.md Step 3-3에 기술된 판정 로직을 그대로 재현한다.
+CODEX_BOT_LOGIN="chatgpt-codex-connector[bot]"
+
+# SKILL.md Step 3-3의 3중 방어 로직을 그대로 재현:
+# (1) 페이지네이션: 1차 jq emit → 2차 jq -s slurp
+# (2) Stale approval 방지: 마지막 commit 이후에 달린 reaction만 카운트
+# (3) Identity spoofing 방지: Codex bot login 정확 매칭
 check_codex_approval() {
     local pr_num="$1"
-    # --paginate는 페이지별로 jq를 독립 실행하므로 `| length`를 --jq 안에 넣으면
-    # 페이지당 한 줄 숫자가 출력되어 bash `-gt` 비교가 깨진다.
-    # 매칭 객체를 emit한 뒤 `jq -s 'length'`로 전 페이지를 슬럽해 단일 정수로 집계.
+    local last_commit_at
+    last_commit_at=$(gh pr view "$pr_num" --repo "$OWNER/$REPO" --json commits \
+        --jq '.commits[-1].committedDate' 2>/dev/null)
     gh api "repos/$OWNER/$REPO/issues/$pr_num/reactions" --paginate \
-        --jq '.[] | select(.content == "+1" and (.user.login | test("codex"; "i")))' \
+        --jq '.[] | select(.content == "+1")' \
         2>/dev/null \
-        | jq -s 'length'
+        | jq -s --arg bot "$CODEX_BOT_LOGIN" --arg since "$last_commit_at" \
+            '[.[] | select(.user.login == $bot and .created_at > $since)] | length'
 }
 
 FAIL=0
