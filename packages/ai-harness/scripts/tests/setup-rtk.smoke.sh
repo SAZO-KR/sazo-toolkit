@@ -359,7 +359,7 @@ assert_file_absent "allowlist marker NOT created (type guard)" "$H/.config/sazo-
 
 # ─── Case 10: allowlist 마커 있음 + RTK 항목 수동 드롭 → stale 처리, 재주입 ───
 echo ""
-echo "Case 10: 마커 있음 + RTK 항목 유실된 settings → stale 마커 제거 + 재주입"
+echo "Case 10: 마커 있음 + RTK 항목 전부 유실 → 재주입 (gate 없음)"
 H="$SANDBOX/c10"
 mkdir -p "$H/.config/sazo-ai-harness" "$H/.claude" "$H/stub-bin"
 touch "$H/.config/sazo-ai-harness/.rtk-init-done"
@@ -384,6 +384,41 @@ assert_equal "allowlist re-injected after canonical entry drop" "true" "$describ
 user_entry_preserved=$("$JQ_BIN" -r '.permissions.allow | contains(["Bash(ls:*)"])' "$H/.claude/settings.json" 2>/dev/null)
 assert_equal "user's manual entry preserved during re-injection" "true" "$user_entry_preserved"
 assert_file_present "allowlist marker re-created" "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
+
+# ─── Case 11: canonical은 있지만 kubectl 패턴만 부분 드롭 → 자기 회복 ───
+echo ""
+echo "Case 11: canonical 존재 + kubectl 패턴만 드롭 → 자기 회복 (gate-less 재주입)"
+H="$SANDBOX/c11"
+mkdir -p "$H/.config/sazo-ai-harness" "$H/.claude" "$H/stub-bin"
+touch "$H/.config/sazo-ai-harness/.rtk-init-done"
+touch "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
+# canonical(aws describe)은 살아있지만 kubectl 항목은 수동 드롭된 상태.
+# 이전 설계(마커+canonical 1개 검증)에서는 이 케이스가 skip되어 버그 → 자기 회복해야 함.
+cat > "$H/.claude/settings.json" <<'PARTIAL'
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rtk-rewrite.sh"}]}]},"permissions":{"allow":["Bash(rtk aws * describe-*:*)"]}}
+PARTIAL
+
+cat > "$H/stub-bin/rtk" <<'STUBEOF'
+#!/bin/bash
+exit 0
+STUBEOF
+chmod +x "$H/stub-bin/rtk"
+
+STUB_PATH="$H/stub-bin:$MIN_PATH"
+out=$(run_setup_quiet "$H" "$STUB_PATH")
+rc=$?
+assert_equal "exit code 0" "0" "$rc"
+kubectl_restored=$("$JQ_BIN" -r '.permissions.allow | contains(["Bash(rtk kubectl get:*)"])' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "kubectl patterns auto-restored (partial drop recovery)" "true" "$kubectl_restored"
+aws_kept=$("$JQ_BIN" -r '.permissions.allow | contains(["Bash(rtk aws * describe-*:*)"])' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "pre-existing canonical entry retained" "true" "$aws_kept"
+
+# 이번 실행 직후 재호출 시 이미 complete한 상태이므로 settings.json mtime이 바뀌면 안 됨 (no-op mv)
+mtime1=$(stat -f %m "$H/.claude/settings.json" 2>/dev/null || stat -c %Y "$H/.claude/settings.json")
+sleep 1
+run_setup_quiet "$H" "$STUB_PATH" >/dev/null 2>&1
+mtime2=$(stat -f %m "$H/.claude/settings.json" 2>/dev/null || stat -c %Y "$H/.claude/settings.json")
+assert_equal "settings.json mtime unchanged on 2nd run (no-op mv)" "$mtime1" "$mtime2"
 
 echo ""
 echo "─────────────────────"

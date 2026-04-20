@@ -58,22 +58,11 @@ inject_rtk_allowlist() {
     command -v jq >/dev/null 2>&1 || return 0
     [ -f "$SETTINGS" ] || return 0
     jq empty "$SETTINGS" >/dev/null 2>&1 || return 0
-
-    # 마커 단독으로는 "과거에 한 번 주입했다" 까지만 보장한다. 사용자가 이후
-    # settings.json을 수동 편집/머지하며 RTK 항목을 드롭했을 수 있으므로, 마커가
-    # 있어도 **canonical entry 실존 여부**를 함께 확인한다. 둘 중 하나라도
-    # 유실되면 재주입 경로로 진입 (jq union-merge는 idempotent).
-    if [ -f "$ALLOWLIST_MARKER" ]; then
-        local has_canonical
-        has_canonical=$(jq -r '
-            (.permissions.allow // []) | type == "array" and
-            (any(. == "Bash(rtk aws * describe-*:*)"))
-        ' "$SETTINGS" 2>/dev/null)
-        [ "$has_canonical" = "true" ] && return 0
-        # canonical 항목이 사라짐 — 마커를 stale로 간주하고 재주입 진행.
-        msg "ℹ️  allowlist 마커는 있지만 RTK 항목이 유실됨 — 재주입 시도"
-        rm -f "$ALLOWLIST_MARKER"
-    fi
+    # 마커를 "관찰용"으로만 사용한다 (gate 아님). 매 호출마다 union-merge를
+    # 계산하되, jq 결과가 원본과 동일하면 mv 없이 skip → idempotent + 저비용.
+    # 이전 설계(마커로 early return + canonical 1개만 검증)는 사용자가 일부
+    # RTK 항목만 드롭했을 때 재주입이 발동하지 않는 edge case가 있었다.
+    # 항상 union-merge하면 10개 엔트리 중 하나라도 빠졌을 때 자동 회복.
 
     # 의도적으로 `aws * get-*`는 **제외**한다:
     #   - `aws sts get-session-token`, `aws iam get-session-token` → 임시 자격증명 발급
@@ -138,10 +127,16 @@ inject_rtk_allowlist() {
         .permissions = (.permissions // {})
         | .permissions.allow = (((.permissions.allow // []) + $adds) | unique)
     ' "$SETTINGS" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
-        if mv "$tmp" "$SETTINGS"; then
+        # 결과가 원본과 동일하면 설정 파일에 변화 없음 — mv 생략, 마커만 갱신.
+        # (사용자의 다른 편집 시각 메타데이터가 불필요하게 바뀌지 않도록.)
+        if cmp -s "$tmp" "$SETTINGS"; then
+            rm -f "$tmp"
+            mkdir -p "$MARKER_DIR"
+            [ -f "$ALLOWLIST_MARKER" ] || touch "$ALLOWLIST_MARKER"
+        elif mv "$tmp" "$SETTINGS"; then
             mkdir -p "$MARKER_DIR"
             touch "$ALLOWLIST_MARKER"
-            msg "✅ RTK read-only allowlist 주입 완료 (aws/kubectl read ops)"
+            msg "✅ RTK read-only allowlist 주입/보강 완료 (aws/kubectl read ops)"
         else
             rm -f "$tmp"
             msg "⚠️  allowlist 주입 실패: settings.json 교체(mv) 오류 — 원본 보존"
