@@ -247,14 +247,17 @@ fi
 
 | 리뷰어 | 통과 기준                                      |
 | ------ | ---------------------------------------------- |
-| Codex  | PR description에 👍 이모지가 있음              |
+| Codex  | PR(issue) 자체에 Codex bot이 `+1`(👍) reaction을 달았음 |
 | Gemini | 최신 리뷰에 하위 코멘트(review comments)가 0건 |
 
+> **Codex 승인 스펙 근거:** Codex 공식 안내 — "If Codex has suggestions, it will comment; otherwise it will react with 👍." 👍 reaction은 **PR(issue) 자체의 reactions 엔드포인트**(`/repos/{o}/{r}/issues/{n}/reactions`)에 `content: "+1"`로 게시된다. PR body(description 텍스트)나 review body에 이모지로 들어가지 않는다.
+
 ```bash
-# Codex 통과 확인
-PR_BODY=$(gh pr view $PR_NUM --json body -q .body)
+# Codex 통과 확인 — PR(issue) reactions에 codex bot의 "+1"이 있는지
 CODEX_PASSED=false
-if echo "$PR_BODY" | grep -q "👍"; then
+CODEX_THUMBS=$(gh api "repos/$OWNER/$REPO/issues/$PR_NUM/reactions" --paginate \
+  --jq '[.[] | select(.content == "+1" and (.user.login | test("codex")))] | length')
+if [ "${CODEX_THUMBS:-0}" -gt "0" ]; then
   CODEX_PASSED=true
 fi
 
@@ -470,6 +473,7 @@ PR이 머지 가능한 상태입니다. / 사용자 확인이 필요합니다.
 | 답변을 commit/push 이전에 게시                               | `commit → push → 답변` 순서 엄수. 그러지 않으면 답변 시점 `commit_id`가 수정 이전을 가리켜 검증 불가 |
 | 수정 답변에 commit hash 링크 누락                            | 답변 본문에 `[`short-hash`](commit URL)` 필수 — 리뷰어가 "수정 완료" 주장의 근거 커밋을 1-클릭 추적 |
 | 답변 본문에 regex/glob 특수문자 포함 시 shell 해석 충돌       | URL을 따옴표로 감싸거나 HEREDOC + `--input -` 사용 (bash/zsh 공통). `noglob`은 zsh 전용이므로 범용 기본값으로 쓰지 말 것 |
+| Codex 승인 판정 시 PR body 텍스트에서 👍 이모지 grep           | Codex는 PR(issue) `reactions` 엔드포인트에 `content: "+1"`로 반응. `gh api .../issues/$PR_NUM/reactions`를 codex bot 로그인 + `+1`로 필터 |
 
 ## Related Skills
 
