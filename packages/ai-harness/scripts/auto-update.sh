@@ -9,7 +9,11 @@ if [ ! -d "$INSTALL_DIR/.git" ] && [ -d "$HOME/.config/sazo-ai-prompts/.git" ]; 
 fi
 LOG_FILE="$HOME/.claude/logs/ai-harness-update.log"
 
-mkdir -p "$(dirname "$LOG_FILE")"
+# 테스트가 `AUTOUPDATE_LOAD_ONLY=1 source` 로 호출하는 경우엔 사이드 이펙트
+# (log 디렉토리 생성, rotation)을 건너뛴다. 함수 정의만 로드해야 함.
+if [ "${AUTOUPDATE_LOAD_ONLY:-0}" != "1" ]; then
+    mkdir -p "$(dirname "$LOG_FILE")"
+fi
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
@@ -23,7 +27,9 @@ get_mtime() {
     stat -f%m "$1" 2>/dev/null || stat -c%Y "$1" 2>/dev/null || echo "0"
 }
 
-if [ -f "$LOG_FILE" ] && [ "$(get_file_size "$LOG_FILE")" -gt 102400 ]; then
+if [ "${AUTOUPDATE_LOAD_ONLY:-0}" != "1" ] \
+    && [ -f "$LOG_FILE" ] \
+    && [ "$(get_file_size "$LOG_FILE")" -gt 102400 ]; then
     TMP_LOG=$(mktemp)
     tail -n 100 "$LOG_FILE" > "$TMP_LOG" && mv "$TMP_LOG" "$LOG_FILE"
 fi
@@ -122,7 +128,95 @@ sync_sleep_guard() {
     [ "$(uname -s)" = "Darwin" ] || return 0
     [ -f "$HOME/.config/sazo-ai-harness/.sleep-guard-optout" ] && return 0
     "$setup_script" --quiet >>"$LOG_FILE" 2>&1 || true
+    notify_sleep_guard_sudoers_missing
 }
+
+# sudoers 엔트리만 --quiet 경로로 복구할 수 없다 (sudo 비밀번호 필요).
+# init-done 마커는 있는데 sudoers 파일이 사라진 경우(OS 업그레이드 후 /etc
+# 일부 초기화, 수동 삭제 등) watchdog의 `sudo -n pmset`이 silent fail 하면서
+# sleep-guard가 조용히 작동 중단됨. 이 상태를 SessionStart 훅의 stdout으로
+# 사용자에게 알려 복구 명령을 안내. 매 세션마다 알리면 스팸이므로 24시간
+# throttle.
+notify_sleep_guard_sudoers_missing() {
+    [ "$(uname -s)" = "Darwin" ] || return 0
+    local init_done="$HOME/.config/sazo-ai-harness/.sleep-guard-init-done"
+    [ -f "$init_done" ] || return 0
+
+    # sudoers 엔트리 유효성 검사 — 2단계 fallback으로 false alarm 최소화.
+    # 테스트 override: `_SLEEP_GUARD_SUDOERS_CHECK` 환경변수 ("ok" | "missing").
+    #
+    # 1차: `sudo -n -l` 출력에서 두 NOPASSWD 규칙 모두 확인.
+    #      - watchdog은 `pmset -a disablesleep 0`과 `... 1` 양쪽을 호출하므로
+    #        두 엔트리가 모두 있어야 정상. `disablesleep`만 일반 매칭하면 부분
+    #        손상(1개 규칙만 남은 상태)을 ok로 오판.
+    # 2차(fallback): `/etc/sudoers.d/sazo-claude-pmset-$USER` 파일 존재 확인.
+    #      - sudoers `Defaults listpw=all|always` 정책 환경에선 `sudo -n -l`이
+    #        인증을 요구해 실패하므로 false missing이 발생. 이 경우 파일 존재로
+    #        fallback하여 false alarm 방지. macOS 기본 /etc/sudoers.d 퍼미션(0755)
+    #        에서 `test -f`는 일반 사용자도 가능.
+    local status="missing"
+    local user_suffix="${USER:-$(id -un)}"
+    local sudoers_file="/etc/sudoers.d/sazo-claude-pmset-${user_suffix}"
+    if [ -n "${_SLEEP_GUARD_SUDOERS_CHECK:-}" ]; then
+        status="$_SLEEP_GUARD_SUDOERS_CHECK"
+    else
+        local sudo_list sudo_rc
+        sudo_list="$(sudo -n -l 2>/dev/null)"
+        sudo_rc=$?
+        if [ "$sudo_rc" -eq 0 ]; then
+            # `sudo -l` 조회 성공 — 출력만 신뢰. 파일 존재해도 내용/owner/mode
+            # 문제로 sudo가 무시하는 경우가 있으므로 file fallback 금지.
+            if echo "$sudo_list" | grep -qE "NOPASSWD.*pmset -a disablesleep 0" \
+                && echo "$sudo_list" | grep -qE "NOPASSWD.*pmset -a disablesleep 1"; then
+                status="ok"
+            fi
+        else
+            # `sudo -l` 자체 실행 불가(listpw=all|always 정책, sudo daemon 장애,
+            # 일시적 권한 문제 등). 이 케이스에 한해 파일 존재로 fallback.
+            [ -f "$sudoers_file" ] && status="ok"
+        fi
+    fi
+    [ "$status" = "ok" ] && return 0
+
+    local throttle_file="$HOME/.config/sazo-ai-harness/.sleep-guard-notify-throttle"
+    local now last
+    now="$(date +%s)"
+    mkdir -p "$(dirname "$throttle_file")" 2>/dev/null || true
+
+    # 단일 원자 연산으로 throttle 획득 + expired 판정을 한 번에 처리.
+    # `set -C` (O_EXCL) write가 성공하면 = "파일 없었음 → 내가 첫 알림 주자".
+    # 실패하면 = "파일 이미 있음"이므로 expired 여부 확인:
+    #   - 24h 이내 → return 0 (다른 프로세스가 이미 최근 알림)
+    #   - 24h 초과 → 덮어쓰기로 시각 갱신 후 알림. 이 만료 경로에서는 여러
+    #     프로세스가 동시에 여기 도달할 수 있어 이론상 N회 출력 가능하나,
+    #     auto-update는 SessionStart 훅이라 "24h 넘어간 바로 그 순간 동시 세션
+    #     여러 개가 기동"하는 상황은 실질 발생하지 않아 허용 trade-off.
+    # 이 구조는 신규 파일 경로의 `rm`+`set -C` 2단계 race window를 원천 제거한다.
+    if ! ( set -C; echo "$now" > "$throttle_file" ) 2>/dev/null; then
+        last="$(cat "$throttle_file" 2>/dev/null || echo 0)"
+        case "$last" in ''|*[!0-9]*) last=0 ;; esac
+        [ $(( now - last )) -lt 86400 ] && return 0
+        echo "$now" > "$throttle_file"
+    fi
+
+    local setup_script="$HARNESS_DIR/scripts/sleep-guard/setup.sh"
+    # user_suffix와 sudoers_file은 위에서 이미 선언됨.
+    # SessionStart 훅의 stdout은 Claude 세션 컨텍스트에 주입되므로, 사용자가
+    # 다음 프롬프트 응답에서 이 안내를 볼 수 있다.
+    cat <<EOF
+⚠️  [sleep-guard] NOPASSWD sudoers 엔트리(/etc/sudoers.d/sazo-claude-pmset-${user_suffix})가 없거나 잘못되어 pmset 제어가 작동하지 않습니다.
+대화형 터미널에서 아래 명령으로 복구하세요 (sudo 비밀번호 1회 필요):
+  bash $setup_script
+영구 비활성화하려면: touch $HOME/.config/sazo-ai-harness/.sleep-guard-optout
+EOF
+}
+
+# 테스트 전용: `AUTOUPDATE_LOAD_ONLY=1 source auto-update.sh` 로 호출하면 함수
+# 정의만 로드하고 실행 본문은 건너뛴다. smoke test가 shim 복제가 아니라 실제
+# 함수를 호출해 검증하기 위한 훅.
+if [ "${AUTOUPDATE_LOAD_ONLY:-0}" = "1" ]; then
+    return 0 2>/dev/null || exit 0
+fi
 
 if [ ! -d "$INSTALL_DIR/.git" ]; then
     log "SKIP: Not installed at $INSTALL_DIR"
