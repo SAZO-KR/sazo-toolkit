@@ -227,9 +227,12 @@ register_hook() {
     fi
 }
 
-register_hook "UserPromptSubmit" "$HOOK_CAFFEINATE_DST heartbeat" "*"
-register_hook "PostToolUse" "$HOOK_CAFFEINATE_DST heartbeat" "*"
-register_hook "Stop" "$HOOK_CAFFEINATE_DST stop" "*"
+# 하나라도 실패하면 즉시 중단. 이어서 sudoers/plist를 설치하고 init-done 마커를
+# 생성하면, 실제로는 훅이 미등록인데도 "설치됨"으로 오판되어 다음 --quiet 실행이
+# 복구 경로로 진입하지 않는다.
+register_hook "UserPromptSubmit" "$HOOK_CAFFEINATE_DST heartbeat" "*" || exit 1
+register_hook "PostToolUse" "$HOOK_CAFFEINATE_DST heartbeat" "*" || exit 1
+register_hook "Stop" "$HOOK_CAFFEINATE_DST stop" "*" || exit 1
 msg "  ✓ settings.json 훅 등록"
 
 # ─── 9. sudoers 엔트리 설치 ───

@@ -43,9 +43,12 @@ acquire_lock() {
     if mkdir "$LOCK_DIR" 2>/dev/null; then
         return 0
     fi
-    # stale lock 감지 (30초 초과)
+    # stale lock 감지 (30초 초과). GNU stat 비호환 출력은 숫자 검증으로 방어.
     local lock_mtime now age
     lock_mtime="$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)"
+    case "$lock_mtime" in
+        ''|*[!0-9]*) lock_mtime=0 ;;
+    esac
     now="$(date +%s)"
     age=$(( now - lock_mtime ))
     if [ "$age" -gt 30 ]; then
@@ -59,11 +62,23 @@ trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 
 now="$(date +%s)"
 
-# stale 마커 제거
+# GNU stat에서 `stat -f`가 filesystem 옵션으로 해석되어 비숫자 출력을
+# 돌려줄 수 있음. arithmetic 에러 방지를 위해 반드시 숫자 검증.
+read_mtime() {
+    local m
+    m="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0)"
+    case "$m" in
+        ''|*[!0-9]*) echo 0 ;;
+        *) echo "$m" ;;
+    esac
+}
+
+# stale 마커 제거 — 본인 소유 디렉토리만. 다른 사용자의 마커는 각자의 watchdog이
+# 정리해야 하므로 건드리지 않는다 (권한도 없음).
 if [ -d "$AWAKE_DIR" ]; then
     for f in "$AWAKE_DIR"/*; do
         [ -e "$f" ] || continue
-        mtime="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)"
+        mtime="$(read_mtime "$f")"
         age=$(( now - mtime ))
         if [ "$age" -gt "$STALE_SECS" ]; then
             rm -f "$f"
@@ -71,13 +86,18 @@ if [ -d "$AWAKE_DIR" ]; then
     done
 fi
 
-# 활성 마커 수
+# 활성 마커 수 — `pmset -a disablesleep`은 시스템 전역이므로 모든 사용자의
+# 활성 세션을 합산해야 한다. 다른 사용자의 `/tmp/claude-awake-*/` 디렉토리는
+# 권한상 내부 파일 glob이 공개되지 않을 수 있지만, mode가 보통 755여서
+# listing은 가능한 경우가 많다. listing이 막히는 경우(디렉토리가 0700)에는
+# 그 사용자의 세션이 보이지 않는 것을 감수한다 (권한 모델의 trade-off).
 active_count=0
-if [ -d "$AWAKE_DIR" ]; then
-    for f in "$AWAKE_DIR"/*; do
+for dir in /tmp/claude-awake-*; do
+    [ -d "$dir" ] || continue
+    for f in "$dir"/*; do
         [ -e "$f" ] && active_count=$((active_count + 1))
     done
-fi
+done
 
 current_state="off"
 [ -f "$STATE_FILE" ] && current_state="$(cat "$STATE_FILE" 2>/dev/null || echo off)"
