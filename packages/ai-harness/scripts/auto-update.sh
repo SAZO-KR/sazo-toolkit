@@ -142,22 +142,33 @@ notify_sleep_guard_sudoers_missing() {
     local init_done="$HOME/.config/sazo-ai-harness/.sleep-guard-init-done"
     [ -f "$init_done" ] || return 0
 
-    # sudoers 엔트리 유효성 검사.
-    # 테스트 override: `_SLEEP_GUARD_SUDOERS_CHECK` 환경변수로 실제 체크를 우회
-    # 가능 ("ok" | "missing"). 프로덕션에선 unset.
+    # sudoers 엔트리 유효성 검사 — 2단계 fallback으로 false alarm 최소화.
+    # 테스트 override: `_SLEEP_GUARD_SUDOERS_CHECK` 환경변수 ("ok" | "missing").
     #
-    # `sudo -n -l` 출력을 grep으로 파싱해 NOPASSWD + pmset disablesleep 엔트리를
-    # 직접 확인. pmset을 실제로 실행하지 않고 권한 선언만 조회하므로 부작용 없음.
-    # `sudo -n <cmd>` 실행 방식은 NOPASSWD 있으면 실제로 pmset을 호출하는 부작용
-    # 이 있고, `sudo -n -l <cmd>`의 exit code는 구현에 따라 NOPASSWD 필터링이
-    # 모호한 경우가 있어 출력 파싱이 가장 신뢰할 수 있다.
-    local status
+    # 1차: `sudo -n -l` 출력에서 두 NOPASSWD 규칙 모두 확인.
+    #      - watchdog은 `pmset -a disablesleep 0`과 `... 1` 양쪽을 호출하므로
+    #        두 엔트리가 모두 있어야 정상. `disablesleep`만 일반 매칭하면 부분
+    #        손상(1개 규칙만 남은 상태)을 ok로 오판.
+    # 2차(fallback): `/etc/sudoers.d/sazo-claude-pmset-$USER` 파일 존재 확인.
+    #      - sudoers `Defaults listpw=all|always` 정책 환경에선 `sudo -n -l`이
+    #        인증을 요구해 실패하므로 false missing이 발생. 이 경우 파일 존재로
+    #        fallback하여 false alarm 방지. macOS 기본 /etc/sudoers.d 퍼미션(0755)
+    #        에서 `test -f`는 일반 사용자도 가능.
+    local status="missing"
+    local user_suffix="${USER:-$(id -un)}"
+    local sudoers_file="/etc/sudoers.d/sazo-claude-pmset-${user_suffix}"
     if [ -n "${_SLEEP_GUARD_SUDOERS_CHECK:-}" ]; then
         status="$_SLEEP_GUARD_SUDOERS_CHECK"
-    elif sudo -n -l 2>/dev/null | grep -qE "NOPASSWD.*pmset.*disablesleep"; then
-        status="ok"
     else
-        status="missing"
+        local sudo_list
+        sudo_list="$(sudo -n -l 2>/dev/null)"
+        if echo "$sudo_list" | grep -qE "NOPASSWD.*pmset -a disablesleep 0" \
+            && echo "$sudo_list" | grep -qE "NOPASSWD.*pmset -a disablesleep 1"; then
+            status="ok"
+        elif [ -f "$sudoers_file" ]; then
+            # listpw 정책 또는 일시적 sudo daemon 문제로 `-l` 조회가 막힌 경우
+            status="ok"
+        fi
     fi
     [ "$status" = "ok" ] && return 0
 
@@ -183,7 +194,7 @@ notify_sleep_guard_sudoers_missing() {
     fi
 
     local setup_script="$HARNESS_DIR/scripts/sleep-guard/setup.sh"
-    local user_suffix="${USER:-$(id -un)}"
+    # user_suffix와 sudoers_file은 위에서 이미 선언됨.
     # SessionStart 훅의 stdout은 Claude 세션 컨텍스트에 주입되므로, 사용자가
     # 다음 프롬프트 응답에서 이 안내를 볼 수 있다.
     cat <<EOF
