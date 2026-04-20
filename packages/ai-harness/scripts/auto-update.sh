@@ -9,7 +9,11 @@ if [ ! -d "$INSTALL_DIR/.git" ] && [ -d "$HOME/.config/sazo-ai-prompts/.git" ]; 
 fi
 LOG_FILE="$HOME/.claude/logs/ai-harness-update.log"
 
-mkdir -p "$(dirname "$LOG_FILE")"
+# 테스트가 `AUTOUPDATE_LOAD_ONLY=1 source` 로 호출하는 경우엔 사이드 이펙트
+# (log 디렉토리 생성, rotation)을 건너뛴다. 함수 정의만 로드해야 함.
+if [ "${AUTOUPDATE_LOAD_ONLY:-0}" != "1" ]; then
+    mkdir -p "$(dirname "$LOG_FILE")"
+fi
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
@@ -23,7 +27,9 @@ get_mtime() {
     stat -f%m "$1" 2>/dev/null || stat -c%Y "$1" 2>/dev/null || echo "0"
 }
 
-if [ -f "$LOG_FILE" ] && [ "$(get_file_size "$LOG_FILE")" -gt 102400 ]; then
+if [ "${AUTOUPDATE_LOAD_ONLY:-0}" != "1" ] \
+    && [ -f "$LOG_FILE" ] \
+    && [ "$(get_file_size "$LOG_FILE")" -gt 102400 ]; then
     TMP_LOG=$(mktemp)
     tail -n 100 "$LOG_FILE" > "$TMP_LOG" && mv "$TMP_LOG" "$LOG_FILE"
 fi
@@ -122,7 +128,78 @@ sync_sleep_guard() {
     [ "$(uname -s)" = "Darwin" ] || return 0
     [ -f "$HOME/.config/sazo-ai-harness/.sleep-guard-optout" ] && return 0
     "$setup_script" --quiet >>"$LOG_FILE" 2>&1 || true
+    notify_sleep_guard_sudoers_missing
 }
+
+# sudoers 엔트리만 --quiet 경로로 복구할 수 없다 (sudo 비밀번호 필요).
+# init-done 마커는 있는데 sudoers 파일이 사라진 경우(OS 업그레이드 후 /etc
+# 일부 초기화, 수동 삭제 등) watchdog의 `sudo -n pmset`이 silent fail 하면서
+# sleep-guard가 조용히 작동 중단됨. 이 상태를 SessionStart 훅의 stdout으로
+# 사용자에게 알려 복구 명령을 안내. 매 세션마다 알리면 스팸이므로 24시간
+# throttle.
+notify_sleep_guard_sudoers_missing() {
+    [ "$(uname -s)" = "Darwin" ] || return 0
+    local init_done="$HOME/.config/sazo-ai-harness/.sleep-guard-init-done"
+    [ -f "$init_done" ] || return 0
+
+    # sudoers 엔트리 유효성 검사.
+    # 테스트 override: `_SLEEP_GUARD_SUDOERS_CHECK` 환경변수로 실제 체크를 우회
+    # 가능 ("ok" | "missing"). 프로덕션에선 unset.
+    #
+    # `sudo -n -l` 출력을 grep으로 파싱해 NOPASSWD + pmset disablesleep 엔트리를
+    # 직접 확인. pmset을 실제로 실행하지 않고 권한 선언만 조회하므로 부작용 없음.
+    # `sudo -n <cmd>` 실행 방식은 NOPASSWD 있으면 실제로 pmset을 호출하는 부작용
+    # 이 있고, `sudo -n -l <cmd>`의 exit code는 구현에 따라 NOPASSWD 필터링이
+    # 모호한 경우가 있어 출력 파싱이 가장 신뢰할 수 있다.
+    local status
+    if [ -n "${_SLEEP_GUARD_SUDOERS_CHECK:-}" ]; then
+        status="$_SLEEP_GUARD_SUDOERS_CHECK"
+    elif sudo -n -l 2>/dev/null | grep -qE "NOPASSWD.*pmset.*disablesleep"; then
+        status="ok"
+    else
+        status="missing"
+    fi
+    [ "$status" = "ok" ] && return 0
+
+    local throttle_file="$HOME/.config/sazo-ai-harness/.sleep-guard-notify-throttle"
+    local now last
+    now="$(date +%s)"
+    mkdir -p "$(dirname "$throttle_file")" 2>/dev/null || true
+
+    # 단일 원자 연산으로 throttle 획득 + expired 판정을 한 번에 처리.
+    # `set -C` (O_EXCL) write가 성공하면 = "파일 없었음 → 내가 첫 알림 주자".
+    # 실패하면 = "파일 이미 있음"이므로 expired 여부 확인:
+    #   - 24h 이내 → return 0 (다른 프로세스가 이미 최근 알림)
+    #   - 24h 초과 → 덮어쓰기로 시각 갱신 후 알림. 이 만료 경로에서는 여러
+    #     프로세스가 동시에 여기 도달할 수 있어 이론상 N회 출력 가능하나,
+    #     auto-update는 SessionStart 훅이라 "24h 넘어간 바로 그 순간 동시 세션
+    #     여러 개가 기동"하는 상황은 실질 발생하지 않아 허용 trade-off.
+    # 이 구조는 신규 파일 경로의 `rm`+`set -C` 2단계 race window를 원천 제거한다.
+    if ! ( set -C; echo "$now" > "$throttle_file" ) 2>/dev/null; then
+        last="$(cat "$throttle_file" 2>/dev/null || echo 0)"
+        case "$last" in ''|*[!0-9]*) last=0 ;; esac
+        [ $(( now - last )) -lt 86400 ] && return 0
+        echo "$now" > "$throttle_file"
+    fi
+
+    local setup_script="$HARNESS_DIR/scripts/sleep-guard/setup.sh"
+    local user_suffix="${USER:-$(id -un)}"
+    # SessionStart 훅의 stdout은 Claude 세션 컨텍스트에 주입되므로, 사용자가
+    # 다음 프롬프트 응답에서 이 안내를 볼 수 있다.
+    cat <<EOF
+⚠️  [sleep-guard] NOPASSWD sudoers 엔트리(/etc/sudoers.d/sazo-claude-pmset-${user_suffix})가 없거나 잘못되어 pmset 제어가 작동하지 않습니다.
+대화형 터미널에서 아래 명령으로 복구하세요 (sudo 비밀번호 1회 필요):
+  bash $setup_script
+영구 비활성화하려면: touch $HOME/.config/sazo-ai-harness/.sleep-guard-optout
+EOF
+}
+
+# 테스트 전용: `AUTOUPDATE_LOAD_ONLY=1 source auto-update.sh` 로 호출하면 함수
+# 정의만 로드하고 실행 본문은 건너뛴다. smoke test가 shim 복제가 아니라 실제
+# 함수를 호출해 검증하기 위한 훅.
+if [ "${AUTOUPDATE_LOAD_ONLY:-0}" = "1" ]; then
+    return 0 2>/dev/null || exit 0
+fi
 
 if [ ! -d "$INSTALL_DIR/.git" ]; then
     log "SKIP: Not installed at $INSTALL_DIR"
