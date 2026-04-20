@@ -35,19 +35,21 @@ fi
 # SKILL.md Step 3-3에 기술된 판정 로직을 그대로 재현한다.
 CODEX_BOT_LOGIN="chatgpt-codex-connector[bot]"
 
-# SKILL.md Step 3-3의 3중 방어 로직을 그대로 재현:
+# SKILL.md Step 3-3의 3중 방어 로직을 재현:
 # (1) 페이지네이션: 1차 jq emit → 2차 jq -s slurp
-# (2) Stale approval 방지: 마지막 commit 이후에 달린 reaction만 카운트
+# (2) Stale approval 방지: 사이클의 PUSH_TIME 이후 reaction만 카운트
+#     — 프로덕션 SKILL은 push 직후 캡쳐한 PUSH_TIME을 사용하지만, 이 smoke는
+#       고정 픽스처(PR #11/#12)를 쓰므로 Epoch 이후 cutoff로 "시간 필터 경로"만
+#       구조적으로 확인한다 (push 시각 자체의 보안 속성은 프로덕션에서 검증).
 # (3) Identity spoofing 방지: Codex bot login 정확 매칭
 check_codex_approval() {
     local pr_num="$1"
-    local last_commit_at
-    last_commit_at=$(gh pr view "$pr_num" --repo "$OWNER/$REPO" --json commits \
-        --jq '.commits[-1].committedDate' 2>/dev/null)
+    # 픽스처 테스트용 cutoff — PR #11 Codex +1(2026-04-20) 이전이면 충분.
+    local since="2020-01-01T00:00:00Z"
     gh api "repos/$OWNER/$REPO/issues/$pr_num/reactions" --paginate \
         --jq '.[] | select(.content == "+1")' \
         2>/dev/null \
-        | jq -s --arg bot "$CODEX_BOT_LOGIN" --arg since "$last_commit_at" \
+        | jq -s --arg bot "$CODEX_BOT_LOGIN" --arg since "$since" \
             '[.[] | select(.user.login == $bot and .created_at > $since)] | length'
 }
 

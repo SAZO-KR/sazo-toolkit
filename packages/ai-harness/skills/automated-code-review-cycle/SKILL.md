@@ -255,24 +255,25 @@ fi
 ```bash
 # Codex 통과 확인 — PR(issue) reactions에 codex bot의 "+1"이 있는지.
 #
-# 두 가지 위협을 모두 막는다:
-# 1. Stale approval (Codex P1): 이전 라운드의 +1이 새 commit 이후에도 남아있어
-#    새로 push된 미검토 코드가 통과로 오판됨.
-#    → 마지막 commit 시각 이후에 달린 reaction만 카운트.
-# 2. Identity spoofing (Codex P1): `test("codex")`는 login에 "codex"를 포함한
-#    임의 사용자(`codex-foo` 등)도 매칭하므로, public repo에서 임의 계정이
-#    +1을 달아 게이트를 우회할 수 있음.
+# 세 가지 위협을 모두 막는다:
+# 1. Stale approval: 이전 라운드의 +1이 새 push 이후에도 남아있어 미검토
+#    코드가 통과로 오판됨.
+#    → 사이클의 PUSH_TIME(서버 수신 기준 시각) 이후 reaction만 카운트.
+#    → `committedDate`/`authoredDate`는 commit 메타데이터라 backdate/force-push
+#      시 우회 가능하므로 사용하지 않는다. PUSH_TIME은 Step 2에서 `date -u`로
+#      push 직후 캡쳐한 값.
+# 2. Identity spoofing: `test("codex")`는 login에 "codex"를 포함한 임의 사용자
+#    (`codex-foo` 등)도 매칭하므로 public repo에서 우회 가능.
 #    → 공식 Codex bot login 정확 매칭 (`chatgpt-codex-connector[bot]`).
-#
-# 페이지네이션 주의: --paginate는 jq를 페이지마다 독립 실행하므로 `| length`를
-# --jq 안에 넣으면 bash 숫자 비교가 깨진다. 1차 jq는 객체만 emit하고,
-# 2차 `jq -s`가 전 페이지를 슬럽한 뒤 --arg로 안전하게 필터링.
+# 3. 페이지네이션: --paginate는 jq를 페이지마다 독립 실행하므로 `| length`를
+#    --jq 안에 넣으면 bash 숫자 비교가 깨진다.
+#    → 1차 jq는 객체만 emit, 2차 `jq -s`가 전 페이지를 슬럽 + --arg로 안전 필터.
 CODEX_PASSED=false
 CODEX_BOT_LOGIN="chatgpt-codex-connector[bot]"
-LAST_COMMIT_AT=$(gh pr view $PR_NUM --json commits --jq '.commits[-1].committedDate')
+# PUSH_TIME은 Step 2 polling 블록에서 push 직후 캡쳐 (예: PUSH_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")).
 CODEX_THUMBS=$(gh api "repos/$OWNER/$REPO/issues/$PR_NUM/reactions" --paginate \
   --jq '.[] | select(.content == "+1")' \
-  | jq -s --arg bot "$CODEX_BOT_LOGIN" --arg since "$LAST_COMMIT_AT" \
+  | jq -s --arg bot "$CODEX_BOT_LOGIN" --arg since "$PUSH_TIME" \
     '[.[] | select(.user.login == $bot and .created_at > $since)] | length')
 if [ "${CODEX_THUMBS:-0}" -gt "0" ]; then
   CODEX_PASSED=true
