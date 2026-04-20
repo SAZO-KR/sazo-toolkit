@@ -9,7 +9,8 @@
 #   1) ~/.claude/hooks/sazo-caffeinate-session.sh → 이 저장소 스크립트 심볼릭 링크
 #   2) ~/.claude/hooks/sazo-sleep-watchdog.sh     → 심볼릭 링크
 #   3) ~/Library/LaunchAgents/shop.sazo.claude-sleep-guard.plist
-#   4) /etc/sudoers.d/sazo-claude-pmset (pmset disablesleep 0|1 NOPASSWD)
+#   4) /etc/sudoers.d/sazo-claude-pmset-$USER (pmset disablesleep 0|1 NOPASSWD)
+#      (파일명에 $USER 포함 — 공유 머신에서 다른 팀원 sudoers 덮어쓰기 방지)
 #   5) ~/.claude/settings.json 의 UserPromptSubmit / PostToolUse / Stop 훅
 #
 # Marker:
@@ -34,7 +35,9 @@ SETTINGS="$HOME/.claude/settings.json"
 HOOKS_DIR="$HOME/.claude/hooks"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 PLIST_PATH="$LAUNCH_AGENTS_DIR/shop.sazo.claude-sleep-guard.plist"
-SUDOERS_FILE="/etc/sudoers.d/sazo-claude-pmset"
+# 멀티유저/공유 머신에서 다른 사용자가 setup.sh를 돌릴 때 기존 사용자의
+# NOPASSWD 엔트리를 덮어쓰지 않도록 파일명에 $USER를 포함한다.
+SUDOERS_FILE="/etc/sudoers.d/sazo-claude-pmset-${USER:-$(id -un)}"
 
 HOOK_CAFFEINATE_SRC="$SCRIPT_DIR/caffeinate-session.sh"
 HOOK_WATCHDOG_SRC="$SCRIPT_DIR/watchdog.sh"
