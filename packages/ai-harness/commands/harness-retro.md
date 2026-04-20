@@ -17,16 +17,24 @@ argument-hint: [기간, 예: 7d (기본), 14d, 30d]
 
 ## 대상 세션 수집
 
-Claude Code session 로그 위치: `~/.claude/projects/*/` 하위 `*.jsonl` 파일.
+Claude Code session 로그 구조:
+- 메인 세션: `~/.claude/projects/<project-slug>/<uuid>.jsonl` (프로젝트 디렉토리 바로 아래)
+- subagent: `~/.claude/projects/<project-slug>/<uuid>/subagents/agent-*.jsonl` (제외)
 
-수집 조건:
-- mtime이 **$1 기간 내**
-- 10KB 미만 session(진입만 하고 종료한 것)은 제외
-- `subagents/` 하위는 제외 (메인 루프만 대상 — subagent는 짧고 자기완결적이라 signal 신뢰도 낮음)
+메인이 직접 목록 구성:
+
+```bash
+find ~/.claude/projects -maxdepth 2 -name '*.jsonl' -not -path '*/subagents/*' -mtime -<일수> -size +10k
+```
+
+- `<일수>` = $1의 숫자 (기본 7)
+- mtime 필터로 기간 제한
+- 10KB 미만(진입만 하고 종료) 제외
+- subagents/ 경로 전면 제외 (메인 루프만 대상 — subagent는 짧고 자기완결적이라 signal 신뢰도 낮음)
 
 ## 분석 (subagent 위임)
 
-세션 파일 목록을 2~4개 그룹으로 나눠 **`code-searcher` subagent(haiku) 병렬 호출**. 각 subagent에게 다음 지시:
+세션 파일 목록을 2~4개 그룹으로 나눠 **`code-searcher` subagent(haiku) 병렬 호출** (jsonl 파싱을 위한 재활용 — 전용 log-analyzer 에이전트가 없어 일반 검색/grep 능력을 빌려옴). 각 subagent에게 다음 지시:
 
 > 아래 session jsonl 파일들(경로 리스트)을 읽고 다음 **신호**만 추출하라.
 >

@@ -13,7 +13,7 @@
 - 위임하지 말 것: 사용자가 결정해야 하는 스코프/설계, 최종 구현 판단, CI 실행 결과 해석.
 - Subagent는 **1회 호출 → 결과 1회 리턴 → 종료**. 프롬프트는 자기완결적으로 작성한다.
 - 독립적인 subagent 호출은 **병렬로** (단일 메시지에 여러 Task 호출).
-- **Opus급 에이전트의 직접 탐색 금지**: Opus 4.7은 tool call을 아끼고 추론으로 때우는 경향이 있어, 직접 grep/read/lint/type-check를 돌리면 샘플링이 얕아져 정확도가 떨어진다. 메인 루프가 Opus이거나 Opus급 subagent(`plan-drafter`, `architect-advisor` opus 승격 시)를 쓸 때는 탐색·코드 확인·외부 docs 조회를 반드시 `code-searcher`/`docs-researcher`(haiku)에 위임한다. Opus는 "읽을 것을 지시하고, 결과를 해석"하는 역할만 맡는다.
+- **Opus급 에이전트의 직접 탐색 금지**: Opus급 모델(현재 `claude-opus-4-7` 기준)은 tool call을 아끼고 추론으로 때우는 경향이 있어, 직접 grep/read/lint/type-check를 돌리면 샘플링이 얕아져 정확도가 떨어진다. 메인 루프가 Opus이거나 Opus급 subagent(`plan-drafter`, `architect-advisor` opus 승격 시)를 쓸 때는 탐색·코드 확인·외부 docs 조회를 반드시 `code-searcher`/`docs-researcher`(haiku)에 위임한다. Opus는 "읽을 것을 지시하고, 결과를 해석"하는 역할만 맡는다.
 
 단계별 권장 subagent (이름이 곧 역할):
 
@@ -112,7 +112,7 @@
 - `as any`, `as unknown as X` 이중 캐스팅, non-null 단언(`!`) 남용, `@ts-ignore`, `@ts-expect-error` 금지
 - secret·API key·token·password 하드코딩 금지. 항상 환경변수/시크릿 매니저 경유
 - 동일 aggregate에 대한 2건 이상의 DB 쓰기(save/update/delete)는 트랜잭션 경계 내부에서 실행 — 부분 실패 시 불일치 방지
-- null/undefined 의도를 감추는 폴백 금지: `parseFloat('abc')`→NaN, `Number(x) \|\| 0`, `value ?? <임의 기본값>`은 실패를 성공으로 위장. 명시적 검증 후 실패 분기 또는 타입상 `T | null` 유지
+- null/undefined 의도를 **도메인 의미 없는 임의 기본값**으로 감추는 폴백 금지: `parseFloat('abc')`→NaN 묵시적 통과, `Number(x) || 0`, 정당한 기본값이 없는데 `?? 0`·`?? ''`로 덮는 패턴은 실패를 성공으로 위장. 명시적 검증 후 실패 분기 또는 타입상 `T | null` 유지. 도메인 의미 있는 기본값(`timeout ?? 5000`, `limit ?? DEFAULT_LIMIT`)은 정상 패턴이므로 적용 대상 아님.
 - `await` 누락(floating promise), `new Promise(async (resolve) => ...)` (async executor), 병렬이어야 할 곳의 순차 await 금지
 - 실패하는 테스트를 삭제하거나 구현에 맞춰 변경하여 "통과"시키기 금지 — 테스트가 실패하면 구현이 틀린 것이다. 테스트가 아니라 구현을 수정할 것.
 - 테스트 없이 "수동 확인했다"고 넘어가기 금지
