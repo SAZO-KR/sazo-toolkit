@@ -142,7 +142,11 @@ fi
 **Polling (push 후):**
 
 ```bash
-PUSH_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# GitHub 서버 권위 시각(ISO8601 UTC). 로컬 `date`는 runner/dev machine의
+# 클록 skew로 reaction `created_at`(서버 시각)과 어긋나 승인 false-negative를
+#일으킬 수 있으므로, push 직후 repo.pushed_at을 조회해 server-authoritative
+# cutoff를 확보한다. (REST에는 commit별 push 이벤트 시각이 없다.)
+PUSH_TIME=$(gh api "repos/$OWNER/$REPO" --jq '.pushed_at')
 NEW_REVIEW_FOUND=false
 
 # 30초 간격으로 최대 10분 polling
@@ -258,10 +262,12 @@ fi
 # 세 가지 위협을 모두 막는다:
 # 1. Stale approval: 이전 라운드의 +1이 새 push 이후에도 남아있어 미검토
 #    코드가 통과로 오판됨.
-#    → 사이클의 PUSH_TIME(서버 수신 기준 시각) 이후 reaction만 카운트.
+#    → 사이클의 PUSH_TIME(GitHub 서버 권위 시각) 이후 reaction만 카운트.
 #    → `committedDate`/`authoredDate`는 commit 메타데이터라 backdate/force-push
-#      시 우회 가능하므로 사용하지 않는다. PUSH_TIME은 Step 2에서 `date -u`로
-#      push 직후 캡쳐한 값.
+#      시 우회 가능하므로 사용하지 않는다. 로컬 `date -u`는 runner 클록 skew로
+#      reaction `created_at`(서버 시각)과 어긋나 false-negative 유발 가능.
+#      PUSH_TIME은 Step 2에서 `gh api repos/$OWNER/$REPO --jq .pushed_at`으로
+#      push 직후 캡쳐한 서버 권위 시각.
 # 2. Identity spoofing: `test("codex")`는 login에 "codex"를 포함한 임의 사용자
 #    (`codex-foo` 등)도 매칭하므로 public repo에서 우회 가능.
 #    → 공식 Codex bot login 정확 매칭 (`chatgpt-codex-connector[bot]`).
@@ -270,7 +276,8 @@ fi
 #    → 1차 jq는 객체만 emit, 2차 `jq -s`가 전 페이지를 슬럽 + --arg로 안전 필터.
 CODEX_PASSED=false
 CODEX_BOT_LOGIN="chatgpt-codex-connector[bot]"
-# PUSH_TIME은 Step 2 polling 블록에서 push 직후 캡쳐 (예: PUSH_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")).
+# PUSH_TIME은 Step 2에서 `gh api repos/$OWNER/$REPO --jq .pushed_at`으로
+# 캡쳐한 서버 권위 시각 (reaction.created_at과 동일한 서버 클록).
 CODEX_THUMBS=$(gh api "repos/$OWNER/$REPO/issues/$PR_NUM/reactions" --paginate \
   --jq '.[] | select(.content == "+1")' \
   | jq -s --arg bot "$CODEX_BOT_LOGIN" --arg since "$PUSH_TIME" \
