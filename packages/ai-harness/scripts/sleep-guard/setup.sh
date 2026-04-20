@@ -240,9 +240,11 @@ msg "  ✓ settings.json 훅 등록"
 
 # ─── 9. sudoers 엔트리 설치 ───
 install_sudoers() {
+    # set -u + USER unset 환경에서도 unbound variable로 죽지 않도록 폴백.
+    local sudo_user="${USER:-$(id -un)}"
     if [ -f "$SUDOERS_FILE" ]; then
         # 기존 파일이 기대 내용과 같으면 skip
-        local expected="$USER ALL=(ALL) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1"
+        local expected="$sudo_user ALL=(ALL) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1"
         if grep -Fxq "$expected" "$SUDOERS_FILE" 2>/dev/null; then
             msg "  ✓ sudoers 엔트리 이미 설치됨: $SUDOERS_FILE"
             return 0
@@ -257,7 +259,7 @@ install_sudoers() {
     cat > "$tmp" <<EOF
 # sazo ai-harness sleep-guard — Claude Code 세션 활성 중에만 pmset 제어
 # 범위: pmset -a disablesleep 0|1 두 명령만 허용
-$USER ALL=(ALL) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1
+$sudo_user ALL=(ALL) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1
 EOF
 
     # visudo로 문법 검증 먼저

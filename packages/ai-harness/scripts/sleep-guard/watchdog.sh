@@ -43,9 +43,13 @@ acquire_lock() {
     if mkdir "$LOCK_DIR" 2>/dev/null; then
         return 0
     fi
-    # stale lock 감지 (30초 초과). GNU stat 비호환 출력은 숫자 검증으로 방어.
+    # stale lock 감지 (30초 초과). read_mtime과 동일하게 OS별 분기.
     local lock_mtime now age
-    lock_mtime="$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)"
+    if [ "$(uname -s)" = "Darwin" ]; then
+        lock_mtime="$(stat -f %m "$LOCK_DIR" 2>/dev/null)"
+    else
+        lock_mtime="$(stat -c %Y "$LOCK_DIR" 2>/dev/null)"
+    fi
     case "$lock_mtime" in
         ''|*[!0-9]*) lock_mtime=0 ;;
     esac
@@ -62,11 +66,16 @@ trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 
 now="$(date +%s)"
 
-# GNU stat에서 `stat -f`가 filesystem 옵션으로 해석되어 비숫자 출력을
-# 돌려줄 수 있음. arithmetic 에러 방지를 위해 반드시 숫자 검증.
+# BSD(macOS)와 GNU(Linux/CI) stat은 `-f`/`-c` 의미가 달라 `||` chain으로 섞으면
+# 한쪽 성공 stdout이 다른 쪽 출력과 concat될 위험이 있음. OS별로 분기해 명확히
+# 호출하고, 최종 값은 반드시 숫자 검증.
 read_mtime() {
-    local m
-    m="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0)"
+    local m=""
+    if [ "$(uname -s)" = "Darwin" ]; then
+        m="$(stat -f %m "$1" 2>/dev/null)"
+    else
+        m="$(stat -c %Y "$1" 2>/dev/null)"
+    fi
     case "$m" in
         ''|*[!0-9]*) echo 0 ;;
         *) echo "$m" ;;
