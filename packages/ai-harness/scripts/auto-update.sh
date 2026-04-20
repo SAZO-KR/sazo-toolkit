@@ -113,15 +113,27 @@ sync_rtk_setup() {
     "$rtk_setup_script" --quiet >>"$LOG_FILE" 2>&1 || true
 }
 
+# Sleep guard도 install.sh가 대화형으로 초기 등록한다. quiet 모드는 init-done
+# 마커가 이미 있는 경우에만 검증/복구 (settings.json 리셋, symlink/plist 삭제
+# 대응). 아직 opt-in을 안 한 사용자에게 매 세션마다 질문하지 않기 위함.
+sync_sleep_guard() {
+    local setup_script="$HARNESS_DIR/scripts/sleep-guard/setup.sh"
+    [ -f "$setup_script" ] || return 0
+    [ "$(uname -s)" = "Darwin" ] || return 0
+    [ -f "$HOME/.config/sazo-ai-harness/.sleep-guard-optout" ] && return 0
+    "$setup_script" --quiet >>"$LOG_FILE" 2>&1 || true
+}
+
 if [ ! -d "$INSTALL_DIR/.git" ]; then
     log "SKIP: Not installed at $INSTALL_DIR"
     sync_skill_permissions
     sync_rtk_setup
     sync_precommit_lint_hook
+    sync_sleep_guard
     exit 0
 fi
 
-cd "$INSTALL_DIR" || { log "ERROR: Cannot cd to $INSTALL_DIR"; sync_skill_permissions; sync_rtk_setup; sync_precommit_lint_hook; exit 0; }
+cd "$INSTALL_DIR" || { log "ERROR: Cannot cd to $INSTALL_DIR"; sync_skill_permissions; sync_rtk_setup; sync_precommit_lint_hook; sync_sleep_guard; exit 0; }
 
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 if [ "$CURRENT_BRANCH" != "main" ]; then
@@ -129,6 +141,7 @@ if [ "$CURRENT_BRANCH" != "main" ]; then
     sync_skill_permissions
     sync_rtk_setup
     sync_precommit_lint_hook
+    sync_sleep_guard
     exit 0
 fi
 
@@ -137,6 +150,7 @@ if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; th
     sync_skill_permissions
     sync_rtk_setup
     sync_precommit_lint_hook
+    sync_sleep_guard
     exit 0
 fi
 
@@ -149,7 +163,8 @@ if [ -f "$LAST_FETCH_FILE" ]; then
         # Rate-limited from fetching, but auxiliary syncs still run.
         sync_skill_permissions
         sync_rtk_setup
-    sync_precommit_lint_hook
+        sync_precommit_lint_hook
+        sync_sleep_guard
         exit 0
     fi
 fi
@@ -223,6 +238,7 @@ fi
 # RTK hook in sync on sessions with no upstream changes.
 sync_skill_permissions
 sync_rtk_setup
-    sync_precommit_lint_hook
+sync_precommit_lint_hook
+sync_sleep_guard
 
 exit 0
