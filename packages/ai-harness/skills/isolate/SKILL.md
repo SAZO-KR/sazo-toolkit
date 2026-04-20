@@ -209,8 +209,11 @@ else
       git worktree add "$WT_PATH/$BRANCH_NAME" -b "$BRANCH_NAME" "origin/$BRANCH_NAME"
       ;;
     2)
-      # Remote confirmed the branch does not exist — create new from HEAD
-      git worktree add "$WT_PATH/$BRANCH_NAME" -b "$BRANCH_NAME"
+      # Remote confirmed the branch does not exist — create new from HEAD.
+      # `--no-track` is REQUIRED: with `branch.autoSetupMerge=inherit` (git 2.37+)
+      # the new branch would otherwise inherit HEAD's upstream (typically
+      # `origin/main`), causing later `git push` to target the wrong ref.
+      git worktree add "$WT_PATH/$BRANCH_NAME" -b "$BRANCH_NAME" --no-track
       ;;
     *)
       echo "Error: git ls-remote failed (exit $ls_remote_rc) — cannot determine whether '$BRANCH_NAME' exists on origin. Check network/credentials and retry, or create the worktree manually." >&2
@@ -227,6 +230,23 @@ fi
 **Why handle `ls-remote` exit codes specifically:** `git ls-remote --exit-code` returns `0` for "found", `2` for "not found", and other non-zero values for transport/auth failures. Treating every non-zero as "not found" — the common bug — would silently create a fresh branch on network outages and later break pushes. The case block above escalates unknown failures instead.
 
 - cd into the worktree path: `cd "$EXISTING_WT"` (reuse case) or `cd "$WT_PATH/$BRANCH_NAME"` (new worktree case)
+
+- **Verify upstream tracking.** Regardless of which scenario above ran, confirm the branch's upstream is either unset or points at its own remote ref — never at `origin/main` (or any other unrelated branch). This catches:
+  - `branch.autoSetupMerge=inherit` inheriting `origin/main` from HEAD on new branches
+  - Local branches reused from prior sessions that were originally created with the wrong upstream
+  - Any future regression in the tracking-selection logic above
+
+  ```bash
+  # Skip for detached worktrees (no branch to check)
+  CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  if [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" != "HEAD" ]; then
+    UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name "@{upstream}" 2>/dev/null || true)
+    if [ -n "$UPSTREAM" ] && [ "$UPSTREAM" != "origin/$CURRENT_BRANCH" ]; then
+      echo "Warning: branch '$CURRENT_BRANCH' was tracking '$UPSTREAM' — clearing upstream to prevent accidental push to the wrong ref. It will be set on first push via 'git push -u'." >&2
+      git branch --unset-upstream
+    fi
+  fi
+  ```
 
 4. Auto-detect and run project setup.
 
