@@ -176,10 +176,13 @@ msg "  ✓ hooks 심볼릭 링크: $HOOK_CAFFEINATE_DST, $HOOK_WATCHDOG_DST"
 # 환경변수가 있으면 그 값, 없으면 900(15분) 기본.
 mkdir -p "$LAUNCH_AGENTS_DIR"
 plist_stale_secs="${CLAUDE_AWAKE_STALE_SECS:-900}"
+# $USER가 unset인 --quiet 컨텍스트(set -u)에서 unbound variable로 죽지 않도록
+# watchdog.sh와 동일한 fallback 적용.
+plist_user="${USER:-$(id -un)}"
 sed \
     -e "s|__WATCHDOG__|$HOOK_WATCHDOG_DST|g" \
     -e "s|__STALE_SECS__|$plist_stale_secs|g" \
-    -e "s|__USER__|$USER|g" \
+    -e "s|__USER__|$plist_user|g" \
     "$PLIST_TEMPLATE" > "$PLIST_PATH"
 msg "  ✓ launchd plist: $PLIST_PATH"
 

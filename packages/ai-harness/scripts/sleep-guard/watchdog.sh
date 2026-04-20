@@ -87,15 +87,18 @@ if [ -d "$AWAKE_DIR" ]; then
 fi
 
 # 활성 마커 수 — `pmset -a disablesleep`은 시스템 전역이므로 모든 사용자의
-# 활성 세션을 합산해야 한다. 다른 사용자의 `/tmp/claude-awake-*/` 디렉토리는
-# 권한상 내부 파일 glob이 공개되지 않을 수 있지만, mode가 보통 755여서
-# listing은 가능한 경우가 많다. listing이 막히는 경우(디렉토리가 0700)에는
-# 그 사용자의 세션이 보이지 않는 것을 감수한다 (권한 모델의 trade-off).
+# 활성 세션을 합산해야 한다. 다만 다른 사용자의 stale 마커는 우리가 지울 수
+# 없으므로 (권한) active 판정 시 mtime으로 제외: 자신/타인 무관하게 STALE_SECS
+# 이내 heartbeat가 있는 마커만 active로 센다. 이러지 않으면 다른 사용자가
+# 로그아웃/크래시 후 stale 마커가 남아 있어 pmset=1이 기계 전역에 stuck.
 active_count=0
 for dir in /tmp/claude-awake-*; do
     [ -d "$dir" ] || continue
     for f in "$dir"/*; do
-        [ -e "$f" ] && active_count=$((active_count + 1))
+        [ -e "$f" ] || continue
+        mtime="$(read_mtime "$f")"
+        age=$(( now - mtime ))
+        [ "$age" -le "$STALE_SECS" ] && active_count=$((active_count + 1))
     done
 done
 
