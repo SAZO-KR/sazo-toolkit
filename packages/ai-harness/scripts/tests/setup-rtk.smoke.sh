@@ -179,12 +179,35 @@ rc=$?
 assert_equal "exit code 0" "0" "$rc"
 assert_file_content "rtk init called with correct args" "$LOG" "init --auto-patch --global"
 assert_file_present "init-done marker created" "$H/.config/sazo-ai-harness/.rtk-init-done"
+assert_file_present "allowlist marker created" "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
+
+# allowlist 실제로 주입되었는지 내용 확인 (대표 패턴 2종 present).
+# rtk 스텁이 덮어쓴 settings.json에 union-merge로 추가되어야 한다.
+aws_present=$("$JQ_BIN" -r '.permissions.allow | contains(["Bash(rtk aws * describe-*:*)"])' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "allowlist contains aws describe pattern" "true" "$aws_present"
+kubectl_present=$("$JQ_BIN" -r '.permissions.allow | contains(["Bash(rtk kubectl get:*)"])' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "allowlist contains kubectl get pattern" "true" "$kubectl_present"
+
+# 민감/mutation 접두사는 allowlist에 **없어야** 한다 — 과도한 범위 회귀 방지
+# (aws get-*는 sts get-session-token / secretsmanager get-secret-value 등 자격증명 발급
+# 위험이 있어 의도적으로 제외됨. kubectl config view도 토큰 노출 위험.)
+get_absent=$("$JQ_BIN" -r '.permissions.allow | any(. == "Bash(rtk aws * get-*:*)")' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "allowlist does NOT include aws get-* (credential exposure risk)" "false" "$get_absent"
+delete_absent=$("$JQ_BIN" -r '.permissions.allow | any(. == "Bash(rtk aws * delete-*:*)")' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "allowlist does NOT include aws delete-*" "false" "$delete_absent"
+kubecfg_absent=$("$JQ_BIN" -r '.permissions.allow | any(. == "Bash(rtk kubectl config view:*)")' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "allowlist does NOT include kubectl config view (token exposure)" "false" "$kubecfg_absent"
+ls_absent=$("$JQ_BIN" -r '.permissions.allow | any(. == "Bash(rtk aws * ls:*)")' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "allowlist does NOT include aws ls (pattern scoping uncertain)" "false" "$ls_absent"
 
 # Case 4 멱등성: 2회 연속 호출 후 state 불변
 snap1=$(snapshot "$H/.config/sazo-ai-harness")
+settings_snap1=$(cat "$H/.claude/settings.json")
 run_setup_quiet "$H" "$STUB_PATH" >/dev/null 2>&1
 snap2=$(snapshot "$H/.config/sazo-ai-harness")
+settings_snap2=$(cat "$H/.claude/settings.json")
 assert_equal "idempotent: config dir state unchanged after 2nd run" "$snap1" "$snap2"
+assert_equal "idempotent: settings.json unchanged after 2nd run (marker prevents re-inject)" "$settings_snap1" "$settings_snap2"
 
 # rtk init은 정확히 1회만 호출되어야 (마커 덕분에 2회차는 skip)
 call_count=$(wc -l < "$LOG" | tr -d ' ')
@@ -192,13 +215,52 @@ assert_equal "rtk init called exactly once (marker prevents re-run)" "1" "$call_
 
 # ─── Case 5: rtk stub + init-done 마커 + settings.json 부재 → 재등록 경로 ───
 echo ""
-echo "Case 5: init-done 마커 + settings.json 부재 → 마커 삭제 후 rtk init 재호출"
+echo "Case 5: init-done + allowlist 마커 + settings.json 부재 → 두 마커 삭제 후 allowlist 재주입"
 H="$SANDBOX/c5"
 mkdir -p "$H/.config/sazo-ai-harness" "$H/.claude" "$H/stub-bin"
+# 사용자가 이전에 완전 셋업을 끝낸 상태 — 두 마커 모두 존재
 touch "$H/.config/sazo-ai-harness/.rtk-init-done"
-# settings.json 파일 없음 (삭제된 상태 시뮬레이션)
+touch "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
+# settings.json 파일 없음 (reset/reinstall 시뮬레이션)
 LOG="$H/.rtk-call-log"
 
+# 실제 rtk init처럼 hook 등록된 settings.json을 다시 깔아주는 stub.
+# 이 stub 없으면 inject_rtk_allowlist가 `[ -f $SETTINGS ] || return`으로 skip.
+cat > "$H/stub-bin/rtk" <<'STUBEOF'
+#!/bin/bash
+echo "$@" >> "$HOME/.rtk-call-log"
+if [ "${1:-}" = "init" ]; then
+    cat > "$HOME/.claude/settings.json" <<'FAKE'
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"fake-rtk-rewrite.sh"}]}]}}
+FAKE
+fi
+exit 0
+STUBEOF
+chmod +x "$H/stub-bin/rtk"
+
+STUB_PATH="$H/stub-bin:$MIN_PATH"
+out=$(run_setup_quiet "$H" "$STUB_PATH")
+rc=$?
+assert_equal "exit code 0" "0" "$rc"
+assert_file_content "rtk init re-called after settings.json disappeared" "$LOG" "init --auto-patch --global"
+assert_file_present "init-done marker re-created" "$H/.config/sazo-ai-harness/.rtk-init-done"
+# 회귀 방지 (Codex P2): 이전 라운드의 stale allowlist 마커가 재주입을 막지 않아야 한다.
+assert_file_present "allowlist marker re-created (Codex P2 regression guard)" "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
+describe_present=$("$JQ_BIN" -r '.permissions.allow | contains(["Bash(rtk aws * describe-*:*)"])' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "allowlist re-injected into regenerated settings.json" "true" "$describe_present"
+
+# ─── Case 6: hook 이미 등록됨 (마커 없음) → init-done + allowlist 둘 다 생성 ───
+echo ""
+echo "Case 6: hook 이미 등록된 상태(마커 없음) → 마커 생성 + allowlist 주입"
+H="$SANDBOX/c6"
+mkdir -p "$H/.config/sazo-ai-harness" "$H/.claude" "$H/stub-bin"
+# rtk hook 이미 등록된 settings.json — rtk init이 깐 상태를 재현
+cat > "$H/.claude/settings.json" <<'HOOKED'
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rtk-rewrite.sh"}]}]}}
+HOOKED
+
+# rtk 바이너리는 PATH에 있어야 step 3를 통과하지만, init은 불려서는 안 된다 (step 5에서 early return).
+LOG="$H/.rtk-call-log"
 cat > "$H/stub-bin/rtk" <<'STUBEOF'
 #!/bin/bash
 echo "$@" >> "$HOME/.rtk-call-log"
@@ -210,8 +272,153 @@ STUB_PATH="$H/stub-bin:$MIN_PATH"
 out=$(run_setup_quiet "$H" "$STUB_PATH")
 rc=$?
 assert_equal "exit code 0" "0" "$rc"
-assert_file_content "rtk init re-called after settings.json disappeared" "$LOG" "init --auto-patch --global"
-assert_file_present "init-done marker re-created" "$H/.config/sazo-ai-harness/.rtk-init-done"
+assert_file_present "init-done marker created" "$H/.config/sazo-ai-harness/.rtk-init-done"
+assert_file_present "allowlist marker created" "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
+assert_file_absent "rtk init NOT called (hook already present)" "$LOG"
+
+aws_present=$("$JQ_BIN" -r '.permissions.allow | contains(["Bash(rtk aws * list-*:*)"])' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "allowlist contains aws list pattern" "true" "$aws_present"
+
+# 기존 hook 정의는 보존되어야 한다 (union만, 덮어쓰기 금지)
+hook_preserved=$("$JQ_BIN" -r '.hooks.PreToolUse[0].hooks[0].command' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "existing hook preserved (not overwritten)" "rtk-rewrite.sh" "$hook_preserved"
+
+# ─── Case 7: .permissions가 비표준 타입(문자열) → 주입 skip, 원본 보존 ───
+echo ""
+echo "Case 7: .permissions 비-object → 조용히 skip, settings.json 손상 없음"
+H="$SANDBOX/c7"
+mkdir -p "$H/.config/sazo-ai-harness" "$H/.claude" "$H/stub-bin"
+# hook은 이미 있지만 .permissions가 문자열인 비표준 상태
+cat > "$H/.claude/settings.json" <<'WEIRD'
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rtk-rewrite.sh"}]}]},"permissions":"disabled"}
+WEIRD
+original_settings=$(cat "$H/.claude/settings.json")
+
+cat > "$H/stub-bin/rtk" <<'STUBEOF'
+#!/bin/bash
+exit 0
+STUBEOF
+chmod +x "$H/stub-bin/rtk"
+
+STUB_PATH="$H/stub-bin:$MIN_PATH"
+out=$(run_setup_quiet "$H" "$STUB_PATH")
+rc=$?
+assert_equal "exit code 0" "0" "$rc"
+assert_file_content "non-object .permissions preserved verbatim" "$H/.claude/settings.json" "$original_settings"
+assert_file_absent "allowlist marker NOT created (skipped)" "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
+
+# ─── Case 8: init-done 마커 + hook 모두 존재 → step 4 allowlist 주입 경로 ───
+echo ""
+echo "Case 8: init-done + hook 있음 (step 4 경로) → allowlist 주입"
+H="$SANDBOX/c8"
+mkdir -p "$H/.config/sazo-ai-harness" "$H/.claude" "$H/stub-bin"
+touch "$H/.config/sazo-ai-harness/.rtk-init-done"
+cat > "$H/.claude/settings.json" <<'HOOKED'
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rtk-rewrite.sh"}]}]}}
+HOOKED
+
+cat > "$H/stub-bin/rtk" <<'STUBEOF'
+#!/bin/bash
+# step 4에서 rtk 호출 없어야 정상
+echo "$@" >> "$HOME/.rtk-call-log"
+exit 0
+STUBEOF
+chmod +x "$H/stub-bin/rtk"
+
+STUB_PATH="$H/stub-bin:$MIN_PATH"
+out=$(run_setup_quiet "$H" "$STUB_PATH")
+rc=$?
+assert_equal "exit code 0" "0" "$rc"
+assert_file_present "allowlist marker created via step 4" "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
+assert_file_absent "rtk NOT invoked (step 4 early-return)" "$H/.rtk-call-log"
+describe_present=$("$JQ_BIN" -r '.permissions.allow | contains(["Bash(rtk aws * describe-*:*)"])' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "allowlist contains aws describe pattern (step 4 path)" "true" "$describe_present"
+
+# ─── Case 9: .permissions.allow가 비-array(문자열) → 주입 skip, 원본 보존 ───
+echo ""
+echo "Case 9: .permissions.allow 비-array → skip, 침묵 no-op 방지"
+H="$SANDBOX/c9"
+mkdir -p "$H/.config/sazo-ai-harness" "$H/.claude" "$H/stub-bin"
+cat > "$H/.claude/settings.json" <<'WEIRD'
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rtk-rewrite.sh"}]}]},"permissions":{"allow":"not-an-array"}}
+WEIRD
+original_settings=$(cat "$H/.claude/settings.json")
+
+cat > "$H/stub-bin/rtk" <<'STUBEOF'
+#!/bin/bash
+exit 0
+STUBEOF
+chmod +x "$H/stub-bin/rtk"
+
+STUB_PATH="$H/stub-bin:$MIN_PATH"
+out=$(run_setup_quiet "$H" "$STUB_PATH")
+rc=$?
+assert_equal "exit code 0" "0" "$rc"
+assert_file_content "non-array .permissions.allow preserved verbatim" "$H/.claude/settings.json" "$original_settings"
+assert_file_absent "allowlist marker NOT created (type guard)" "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
+
+# ─── Case 10: allowlist 마커 있음 + RTK 항목 수동 드롭 → stale 처리, 재주입 ───
+echo ""
+echo "Case 10: 마커 있음 + RTK 항목 전부 유실 → 재주입 (gate 없음)"
+H="$SANDBOX/c10"
+mkdir -p "$H/.config/sazo-ai-harness" "$H/.claude" "$H/stub-bin"
+touch "$H/.config/sazo-ai-harness/.rtk-init-done"
+touch "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
+# 사용자가 수동으로 RTK 항목을 드롭한 상태. hook은 보존.
+cat > "$H/.claude/settings.json" <<'DROPPED'
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rtk-rewrite.sh"}]}]},"permissions":{"allow":["Bash(ls:*)"]}}
+DROPPED
+
+cat > "$H/stub-bin/rtk" <<'STUBEOF'
+#!/bin/bash
+exit 0
+STUBEOF
+chmod +x "$H/stub-bin/rtk"
+
+STUB_PATH="$H/stub-bin:$MIN_PATH"
+out=$(run_setup_quiet "$H" "$STUB_PATH")
+rc=$?
+assert_equal "exit code 0" "0" "$rc"
+describe_present=$("$JQ_BIN" -r '.permissions.allow | contains(["Bash(rtk aws * describe-*:*)"])' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "allowlist re-injected after canonical entry drop" "true" "$describe_present"
+user_entry_preserved=$("$JQ_BIN" -r '.permissions.allow | contains(["Bash(ls:*)"])' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "user's manual entry preserved during re-injection" "true" "$user_entry_preserved"
+assert_file_present "allowlist marker re-created" "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
+
+# ─── Case 11: canonical은 있지만 kubectl 패턴만 부분 드롭 → 자기 회복 ───
+echo ""
+echo "Case 11: canonical 존재 + kubectl 패턴만 드롭 → 자기 회복 (gate-less 재주입)"
+H="$SANDBOX/c11"
+mkdir -p "$H/.config/sazo-ai-harness" "$H/.claude" "$H/stub-bin"
+touch "$H/.config/sazo-ai-harness/.rtk-init-done"
+touch "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
+# canonical(aws describe)은 살아있지만 kubectl 항목은 수동 드롭된 상태.
+# 이전 설계(마커+canonical 1개 검증)에서는 이 케이스가 skip되어 버그 → 자기 회복해야 함.
+cat > "$H/.claude/settings.json" <<'PARTIAL'
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rtk-rewrite.sh"}]}]},"permissions":{"allow":["Bash(rtk aws * describe-*:*)"]}}
+PARTIAL
+
+cat > "$H/stub-bin/rtk" <<'STUBEOF'
+#!/bin/bash
+exit 0
+STUBEOF
+chmod +x "$H/stub-bin/rtk"
+
+STUB_PATH="$H/stub-bin:$MIN_PATH"
+out=$(run_setup_quiet "$H" "$STUB_PATH")
+rc=$?
+assert_equal "exit code 0" "0" "$rc"
+kubectl_restored=$("$JQ_BIN" -r '.permissions.allow | contains(["Bash(rtk kubectl get:*)"])' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "kubectl patterns auto-restored (partial drop recovery)" "true" "$kubectl_restored"
+aws_kept=$("$JQ_BIN" -r '.permissions.allow | contains(["Bash(rtk aws * describe-*:*)"])' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "pre-existing canonical entry retained" "true" "$aws_kept"
+
+# 이번 실행 직후 재호출 시 이미 complete한 상태이므로 settings.json mtime이 바뀌면 안 됨 (no-op mv)
+mtime1=$(stat -f %m "$H/.claude/settings.json" 2>/dev/null || stat -c %Y "$H/.claude/settings.json")
+sleep 1
+run_setup_quiet "$H" "$STUB_PATH" >/dev/null 2>&1
+mtime2=$(stat -f %m "$H/.claude/settings.json" 2>/dev/null || stat -c %Y "$H/.claude/settings.json")
+assert_equal "settings.json mtime unchanged on 2nd run (no-op mv)" "$mtime1" "$mtime2"
 
 echo ""
 echo "─────────────────────"
