@@ -10,8 +10,9 @@
 #   2) 남은 마커 수에 따라 `sudo -n pmset -a disablesleep 0|1` 호출
 #      (NOPASSWD sudoers 엔트리 필요 — setup.sh가 설치)
 #
-# 상태 파일 /tmp/claude-awake-$USER.pmset-state — 현재 적용된 on/off 캐시.
-# pmset 호출 최소화 (매 틱마다 호출하지 않음).
+# pmset은 매 sync마다 호출 (캐시 없음). pmset -a는 시스템 전역이고
+# idempotent & 저비용이라, 사용자별 state 캐시는 cross-user short-circuit
+# 버그를 유발할 수 있어 제거함.
 #
 # STALE_SECS 기본 900초(15분):
 #   - 단일 tool이 15분 넘게 실행되는 동안 중간 tool 경계(heartbeat)가 없으면
@@ -30,7 +31,6 @@ MODE="${1:-}"
 # $USER가 비어 있으면(일부 launchd 컨텍스트) UID로 폴백.
 USER_SUFFIX="${USER:-$(id -u)}"
 AWAKE_DIR="/tmp/claude-awake-${USER_SUFFIX}"
-STATE_FILE="/tmp/claude-awake-${USER_SUFFIX}.pmset-state"
 LOCK_DIR="/tmp/claude-awake-${USER_SUFFIX}.lock.d"
 STALE_SECS="${CLAUDE_AWAKE_STALE_SECS:-900}"
 
@@ -111,25 +111,15 @@ for dir in /tmp/claude-awake-*; do
     done
 done
 
-current_state="off"
-[ -f "$STATE_FILE" ] && current_state="$(cat "$STATE_FILE" 2>/dev/null || echo off)"
-
-desired_state="off"
-[ "$active_count" -gt 0 ] && desired_state="on"
-
-if [ "$desired_state" = "$current_state" ]; then
-    exit 0
-fi
-
-# pmset 실행 — NOPASSWD가 없으면 실패해도 조용히 넘어감 (state 파일 안 씀 → 재시도 유지)
-if [ "$desired_state" = "on" ]; then
-    if sudo -n /usr/bin/pmset -a disablesleep 1 >/dev/null 2>&1; then
-        echo "on" > "$STATE_FILE"
-    fi
+# pmset 호출 — 캐시 없이 매 sync마다 desired_state로 동기화.
+# 이전 설계는 per-user state cache를 뒀으나, pmset -a는 시스템 전역이라
+# user A가 on 설정 후 watchdog을 중단하면 user B의 watchdog이 "내 캐시 off
+# == desired_state off"로 short-circuit해서 on이 stuck되는 문제가 있음.
+# pmset -a disablesleep 0|1 은 idempotent & 저비용이라 매번 호출해도 무해.
+if [ "$active_count" -gt 0 ]; then
+    sudo -n /usr/bin/pmset -a disablesleep 1 >/dev/null 2>&1 || true
 else
-    if sudo -n /usr/bin/pmset -a disablesleep 0 >/dev/null 2>&1; then
-        echo "off" > "$STATE_FILE"
-    fi
+    sudo -n /usr/bin/pmset -a disablesleep 0 >/dev/null 2>&1 || true
 fi
 
 exit 0

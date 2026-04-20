@@ -59,7 +59,8 @@ else pass "placeholder 제거 확인"; fi
 if command -v plutil >/dev/null 2>&1; then
     TMP=$(mktemp)
     echo "$RENDERED" > "$TMP"
-    if plutil -lint "$TMP" >/dev/null 2>&1; then pass "plist 구조 유효"
+    # `--`로 file-arg separator 명시 — 일부 plutil 대체 구현은 분리자 없으면 "No files specified" 반환
+    if plutil -lint -- "$TMP" >/dev/null 2>&1; then pass "plist 구조 유효"
     else fail "plist 구조 무효"; fi
     rm -f "$TMP"
 fi
