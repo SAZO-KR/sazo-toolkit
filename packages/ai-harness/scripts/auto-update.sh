@@ -160,14 +160,20 @@ notify_sleep_guard_sudoers_missing() {
     if [ -n "${_SLEEP_GUARD_SUDOERS_CHECK:-}" ]; then
         status="$_SLEEP_GUARD_SUDOERS_CHECK"
     else
-        local sudo_list
+        local sudo_list sudo_rc
         sudo_list="$(sudo -n -l 2>/dev/null)"
-        if echo "$sudo_list" | grep -qE "NOPASSWD.*pmset -a disablesleep 0" \
-            && echo "$sudo_list" | grep -qE "NOPASSWD.*pmset -a disablesleep 1"; then
-            status="ok"
-        elif [ -f "$sudoers_file" ]; then
-            # listpw 정책 또는 일시적 sudo daemon 문제로 `-l` 조회가 막힌 경우
-            status="ok"
+        sudo_rc=$?
+        if [ "$sudo_rc" -eq 0 ]; then
+            # `sudo -l` 조회 성공 — 출력만 신뢰. 파일 존재해도 내용/owner/mode
+            # 문제로 sudo가 무시하는 경우가 있으므로 file fallback 금지.
+            if echo "$sudo_list" | grep -qE "NOPASSWD.*pmset -a disablesleep 0" \
+                && echo "$sudo_list" | grep -qE "NOPASSWD.*pmset -a disablesleep 1"; then
+                status="ok"
+            fi
+        else
+            # `sudo -l` 자체 실행 불가(listpw=all|always 정책, sudo daemon 장애,
+            # 일시적 권한 문제 등). 이 케이스에 한해 파일 존재로 fallback.
+            [ -f "$sudoers_file" ] && status="ok"
         fi
     fi
     [ "$status" = "ok" ] && return 0
