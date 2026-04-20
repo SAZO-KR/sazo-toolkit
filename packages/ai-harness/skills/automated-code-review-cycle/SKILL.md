@@ -143,10 +143,35 @@ fi
 
 ```bash
 # GitHub 서버 권위 시각(ISO8601 UTC). 로컬 `date`는 runner/dev machine의
-# 클록 skew로 reaction `created_at`(서버 시각)과 어긋나 승인 false-negative를
-#일으킬 수 있으므로, push 직후 repo.pushed_at을 조회해 server-authoritative
-# cutoff를 확보한다. (REST에는 commit별 push 이벤트 시각이 없다.)
-PUSH_TIME=$(gh api "repos/$OWNER/$REPO" --jq '.pushed_at')
+# 클록 skew로 reaction `created_at`(서버 시각)과 어긋날 수 있어 승인 false-negative를
+# 유발할 수 있다. push 직후 repo.pushed_at을 조회해 server-authoritative cutoff를
+# 확보한다.
+#
+# 한계 (REST에는 PR-head 단위 push 시각이 없음):
+# - `repo.pushed_at`은 **repo-wide** 최신 push 시각이라, 내 push 직후 타 브랜치로
+#   또 다른 push가 발생하면 cutoff가 그 시각으로 밀린다. 실무적으로는 Codex reaction이
+#   push 수십 초 뒤에 도착하므로 수 초의 cutoff 드리프트는 false-negative를 일으키지
+#   않지만, 고빈도 모노레포에서는 race 가능. GraphQL `pushedDate`는 deprecated되어
+#   신뢰할 수 없음.
+# - 검증 + 재시도 + 최종 실패 시 하드-페일로 빈/null cutoff에서 stale 승인이
+#   통과하는 경로를 차단한다.
+fetch_push_time() {
+  local t
+  for attempt in 1 2 3; do
+    t=$(gh api "repos/$OWNER/$REPO" --jq '.pushed_at' 2>/dev/null)
+    if [ -n "$t" ] && [ "$t" != "null" ]; then
+      printf '%s' "$t"
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+PUSH_TIME=$(fetch_push_time) || {
+  echo "FATAL: Could not obtain server-authoritative PUSH_TIME from repo.pushed_at (3회 재시도 실패)." >&2
+  echo "         빈 cutoff로 진행하면 stale 승인이 통과할 수 있어 사이클을 중단한다." >&2
+  exit 1
+}
 NEW_REVIEW_FOUND=false
 
 # 30초 간격으로 최대 10분 polling
