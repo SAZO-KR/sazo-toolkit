@@ -402,6 +402,19 @@ if [ -f "$RTK_SETUP_SCRIPT" ]; then
     "$RTK_SETUP_SCRIPT" || true
 fi
 
+# --- Sleep Guard (macOS, optional) ---
+#
+# Claude Code 세션이 응답 생성/툴 실행 중일 때만 노트북 뚜껑 닫아도 sleep 되지
+# 않도록 막는 기능. macOS 전용, opt-in. 첫 실행 시 질문, 이후 멱등 검증.
+# 자세한 동작은 scripts/sleep-guard/setup.sh 상단 주석 참조.
+
+SLEEP_GUARD_SETUP="$HARNESS_DIR/scripts/sleep-guard/setup.sh"
+
+if [ -f "$SLEEP_GUARD_SETUP" ] && [ "$(uname -s)" = "Darwin" ]; then
+    chmod +x "$SLEEP_GUARD_SETUP"
+    "$SLEEP_GUARD_SETUP" || true
+fi
+
 # --- OpenCode agent config ---
 
 OPENCODE_AGENTS_TEMPLATE="$HARNESS_DIR/opencode/agents.json"

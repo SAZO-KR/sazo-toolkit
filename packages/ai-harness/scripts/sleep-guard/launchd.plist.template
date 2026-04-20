@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTD/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>shop.sazo.claude-sleep-guard</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__WATCHDOG__</string>
+        <string>sync</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>10</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- launchd는 사용자 쉘 프로파일을 상속하지 않으므로 STALE_SECS를 조정하려면
+         여기서 명시적으로 덮어쓴다. 값을 비워두면 watchdog.sh가 기본값(900초) 사용. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CLAUDE_AWAKE_STALE_SECS</key>
+        <string>__STALE_SECS__</string>
+        <key>USER</key>
+        <string>__USER__</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-sleep-guard-__USER__.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-sleep-guard-__USER__.err.log</string>
+</dict>
+</plist>
