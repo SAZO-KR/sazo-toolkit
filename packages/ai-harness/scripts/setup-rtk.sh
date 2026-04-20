@@ -55,10 +55,25 @@ msg() { [ "$QUIET" -eq 0 ] && echo "$@"; }
 # - exit-0(auto-allow) rewrite는 hook 자체가 permissionDecision=allow를 주므로
 #   allowlist에 넣어도 중복일 뿐. 여기서는 ask 경로만 다룬다.
 inject_rtk_allowlist() {
-    [ -f "$ALLOWLIST_MARKER" ] && return 0
     command -v jq >/dev/null 2>&1 || return 0
     [ -f "$SETTINGS" ] || return 0
     jq empty "$SETTINGS" >/dev/null 2>&1 || return 0
+
+    # 마커 단독으로는 "과거에 한 번 주입했다" 까지만 보장한다. 사용자가 이후
+    # settings.json을 수동 편집/머지하며 RTK 항목을 드롭했을 수 있으므로, 마커가
+    # 있어도 **canonical entry 실존 여부**를 함께 확인한다. 둘 중 하나라도
+    # 유실되면 재주입 경로로 진입 (jq union-merge는 idempotent).
+    if [ -f "$ALLOWLIST_MARKER" ]; then
+        local has_canonical
+        has_canonical=$(jq -r '
+            (.permissions.allow // []) | type == "array" and
+            (any(. == "Bash(rtk aws * describe-*:*)"))
+        ' "$SETTINGS" 2>/dev/null)
+        [ "$has_canonical" = "true" ] && return 0
+        # canonical 항목이 사라짐 — 마커를 stale로 간주하고 재주입 진행.
+        msg "ℹ️  allowlist 마커는 있지만 RTK 항목이 유실됨 — 재주입 시도"
+        rm -f "$ALLOWLIST_MARKER"
+    fi
 
     # 의도적으로 `aws * get-*`는 **제외**한다:
     #   - `aws sts get-session-token`, `aws iam get-session-token` → 임시 자격증명 발급

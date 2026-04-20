@@ -357,6 +357,34 @@ assert_equal "exit code 0" "0" "$rc"
 assert_file_content "non-array .permissions.allow preserved verbatim" "$H/.claude/settings.json" "$original_settings"
 assert_file_absent "allowlist marker NOT created (type guard)" "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
 
+# ─── Case 10: allowlist 마커 있음 + RTK 항목 수동 드롭 → stale 처리, 재주입 ───
+echo ""
+echo "Case 10: 마커 있음 + RTK 항목 유실된 settings → stale 마커 제거 + 재주입"
+H="$SANDBOX/c10"
+mkdir -p "$H/.config/sazo-ai-harness" "$H/.claude" "$H/stub-bin"
+touch "$H/.config/sazo-ai-harness/.rtk-init-done"
+touch "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
+# 사용자가 수동으로 RTK 항목을 드롭한 상태. hook은 보존.
+cat > "$H/.claude/settings.json" <<'DROPPED'
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rtk-rewrite.sh"}]}]},"permissions":{"allow":["Bash(ls:*)"]}}
+DROPPED
+
+cat > "$H/stub-bin/rtk" <<'STUBEOF'
+#!/bin/bash
+exit 0
+STUBEOF
+chmod +x "$H/stub-bin/rtk"
+
+STUB_PATH="$H/stub-bin:$MIN_PATH"
+out=$(run_setup_quiet "$H" "$STUB_PATH")
+rc=$?
+assert_equal "exit code 0" "0" "$rc"
+describe_present=$("$JQ_BIN" -r '.permissions.allow | contains(["Bash(rtk aws * describe-*:*)"])' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "allowlist re-injected after canonical entry drop" "true" "$describe_present"
+user_entry_preserved=$("$JQ_BIN" -r '.permissions.allow | contains(["Bash(ls:*)"])' "$H/.claude/settings.json" 2>/dev/null)
+assert_equal "user's manual entry preserved during re-injection" "true" "$user_entry_preserved"
+assert_file_present "allowlist marker re-created" "$H/.config/sazo-ai-harness/.rtk-allowlist-done"
+
 echo ""
 echo "─────────────────────"
 if [ "$FAIL" -eq 0 ]; then
