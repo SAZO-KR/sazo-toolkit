@@ -76,7 +76,7 @@
 - 전체 프로젝트 lint:fix (인자 없는 `yarn lint:fix` 등) **금지** — 스코프 외 drift 원인 (cf. `SAZO-KR/integrator` PR #622).
 - Claude Code: PreToolUse hook `pre-commit-lint.sh`가 `Bash(git commit:*)`에 자동 발동. `--amend`/`--no-verify` 포함 모든 `git commit` 커버. `--no-verify`로 스킵 **불가** (git layer가 아닌 Claude Code layer).
 - OpenCode 등 hook 미지원 환경: `git diff --cached --name-only --diff-filter=ACMR`로 staged 목록 뽑아 해당 파일에만 autofix → `git add <files>` → commit.
-- 자동 감지 실패 시 hook이 stderr로 안내하며 해당 커밋은 lint 없이 통과. 등록 방법·감지 우선순위·캐시 운영 상세는 `packages/ai-harness/README.md` "Pre-commit lint autofix hook" 섹션 참조.
+- 자동 감지 실패 시 hook이 stderr로 안내하며 해당 커밋은 lint 없이 통과. 등록 방법·감지 우선순위·캐시 운영 상세는 `~/.config/sazo-ai-harness/packages/ai-harness/README.md` "Pre-commit lint autofix hook" 섹션 참조 (설치된 절대 경로 — `~/.claude/CLAUDE.md`가 임의 프로젝트에서 로드되는 맥락에서도 resolve 가능).
 
 ## 5. 검증 (CI Gate)
 
