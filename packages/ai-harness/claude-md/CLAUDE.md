@@ -69,6 +69,39 @@
 - 테스트 유형은 과제 특성에 따라 unit / integration / combination 중 판단 (스킬 내 Decision Gate 참조)
 - UI/프론트엔드 작업은 `ui-engineer` subagent 활용. 순수한 플랜 실행은 `plan-executor` 고려.
 
+### 커밋 규율 (lint autofix 강제)
+
+- `git commit` 직전, **staged 파일만** lint autofix를 돌리고 수정된 결과를 다시 staging한 뒤 커밋한다.
+- 전체 프로젝트 lint:fix 실행(`yarn lint:fix`를 인자 없이 호출 등)은 **금지** — 스코프 외 파일 drift가 PR에 섞이는 원인이 된다 (cf. `SAZO-KR/integrator` PR #622).
+- Claude Code 환경에서는 PreToolUse hook `pre-commit-lint.sh`가 matcher `Bash(git commit:*)`로 자동 발동 — 별도 지시 없이 실행됨.
+- matcher는 `git commit`으로 시작하는 모든 호출(`-m`, `--amend`, `--no-verify` 포함)을 커버한다. AI가 hook을 미리 수동 실행할 필요 없이 `git commit`을 그대로 호출하면 된다.
+- OpenCode 등 PreToolUse hook이 없는 환경에서는 매 커밋 전에 같은 규칙을 수동 적용 — `git diff --cached --name-only --diff-filter=ACMR`로 staged 목록을 뽑아 해당 파일들에만 autofix 실행 → `git add <files>` → commit.
+
+**자동 감지 우선순위** (`lint-autofix-detect.sh`):
+
+1. 전역 캐시 `~/.config/sazo-ai-harness/lint-fix-cache.json` (repo root 경로 sha256 키)
+2. `package.json`에 `lint-staged` 의존성 존재 → `{yarn|pnpm|npx} lint-staged` (파일 인자 불필요)
+3. `pyproject.toml`에 `[tool.ruff]` → `ruff check --fix <files>`
+4. `pyproject.toml`에 `[tool.black]` → `black <files>`
+5. `go.mod` → `gofmt -w <files>`
+6. 위 전부 실패 → hook이 stderr로 안내하고 **이번 커밋은 lint 없이 통과**시킨다. AI는 사용자에게 다음 템플릿으로 질문한다:
+
+   > "이 저장소에서 **staged 파일만** autofix하는 정확한 커맨드가 뭔가요? 예: `npx lint-staged`, `yarn lint --fix`, 직접 만든 스크립트 등. 그 커맨드가 파일 경로를 인자로 받아 실행하는 형태인지도 알려주세요 (예: `black <files>`는 인자 받음, `npx lint-staged`는 안 받음)."
+
+   답변을 받으면 아래 명령으로 전역 캐시에 등록:
+
+   ```bash
+   ~/.config/sazo-ai-harness/packages/ai-harness/scripts/pre-commit-lint.sh --set '<command>' [--files-arg]
+   ```
+
+   `--files-arg`는 **커맨드 뒤에 staged 파일 경로를 공백 구분으로 붙여 실행해야 하는 경우에만** 추가. lint-staged처럼 내부에서 staged를 스스로 감지하는 도구는 붙이지 않는다. **잘못 선택하면 전 프로젝트 lint로 확장되어 정확히 이 hook이 막으려는 스코프 유출이 발생**하므로 확신이 없으면 사용자에게 재확인.
+
+   커맨드는 **단일 바이너리 + flag 형태**로 등록 권장. 쉘 체인(`&&`, 파이프, 세미콜론), 중첩 따옴표 포함 시 동작이 불안정하므로, 복잡한 로직이 필요하면 저장소에 스크립트를 하나 만들어 그 경로를 등록한다.
+
+   등록 후 다음 커밋부터 자동 적용. 캐시 키가 `git rev-parse --show-toplevel` 기반이라 worktree 경로가 다르면 worktree별 재등록이 필요할 수 있다.
+
+- 이 hook은 git layer가 아닌 Claude Code PreToolUse layer라 `git commit --no-verify`로 스킵되지 않는다(= git의 `.husky/pre-commit`만 `--no-verify`가 우회). 의도적 우회 시도는 전역 "금지 사항: hook 건너뛰기 금지"로 이미 커버됨.
+
 ## 5. 검증 (CI Gate)
 
 구현 완료 후 반드시 실행:

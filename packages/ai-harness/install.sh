@@ -338,6 +338,51 @@ else
     echo "  Claude Code: registered SessionStart hook (matcher: $DESIRED_MATCHER)"
 fi
 
+# --- Pre-commit lint autofix hook (PreToolUse, matcher: Bash(git commit:*)) ---
+#
+# `git commit` 직전에 스테이징된 파일에만 lint autofix를 실행.
+# 기존 SessionStart 주입과 같은 idempotent jq 패턴.
+
+PRECOMMIT_HOOK_SCRIPT="$HARNESS_DIR/scripts/pre-commit-lint.sh"
+PRECOMMIT_MATCHER="Bash(git commit:*)"
+
+if [ -f "$PRECOMMIT_HOOK_SCRIPT" ]; then
+    chmod +x "$PRECOMMIT_HOOK_SCRIPT"
+    # lint-autofix-detect.sh도 source되므로 함께 실행권 부여
+    [ -f "$HARNESS_DIR/scripts/lint-autofix-detect.sh" ] && chmod +x "$HARNESS_DIR/scripts/lint-autofix-detect.sh"
+
+    PRECOMMIT_EXISTING=$(jq --arg cmd "$PRECOMMIT_HOOK_SCRIPT" '
+      (.hooks.PreToolUse // []) | map(select(.hooks // [] | any(.command == $cmd))) | length
+    ' "$SETTINGS_FILE")
+
+    if [ "$PRECOMMIT_EXISTING" -gt 0 ]; then
+        PRECOMMIT_CUR=$(jq -r --arg cmd "$PRECOMMIT_HOOK_SCRIPT" '
+          (.hooks.PreToolUse // []) | map(select(.hooks // [] | any(.command == $cmd))) | .[0].matcher // ""
+        ' "$SETTINGS_FILE")
+        if [ "$PRECOMMIT_CUR" = "$PRECOMMIT_MATCHER" ]; then
+            echo "  Pre-commit lint hook: already registered"
+        else
+            TMP_FILE=$(mktemp)
+            jq --arg cmd "$PRECOMMIT_HOOK_SCRIPT" --arg m "$PRECOMMIT_MATCHER" '
+              .hooks.PreToolUse = ((.hooks.PreToolUse // []) | map(
+                if (.hooks // [] | any(.command == $cmd)) then .matcher = $m else . end
+              ))
+            ' "$SETTINGS_FILE" > "$TMP_FILE"
+            mv "$TMP_FILE" "$SETTINGS_FILE"
+            echo "  Pre-commit lint hook: matcher migrated '$PRECOMMIT_CUR' → '$PRECOMMIT_MATCHER'"
+        fi
+    else
+        NEW_HOOK=$(jq -n --arg cmd "$PRECOMMIT_HOOK_SCRIPT" --arg m "$PRECOMMIT_MATCHER" '{
+            "matcher": $m,
+            "hooks": [{"type": "command", "command": $cmd}]
+        }')
+        TMP_FILE=$(mktemp)
+        jq --argjson entry "$NEW_HOOK" '.hooks.PreToolUse = (.hooks.PreToolUse // []) + [$entry]' "$SETTINGS_FILE" > "$TMP_FILE"
+        mv "$TMP_FILE" "$SETTINGS_FILE"
+        echo "  Pre-commit lint hook: registered PreToolUse (matcher: $PRECOMMIT_MATCHER)"
+    fi
+fi
+
 # --- RTK Token-Saving Proxy (Claude Code 전용, optional) ---
 #
 # RTK은 Claude Code의 bash 출력을 압축해 LLM 토큰을 60-90% 절감해주는

@@ -24,6 +24,7 @@ curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/
 | Skills          | `~/.claude/skills/*/`     |
 | Agents          | `~/.claude/agents/*.md`   |
 | Auto-update     | SessionStart hook         |
+| Pre-commit lint | PreToolUse hook `Bash(git commit:*)` |
 
 ### OpenCode (선택)
 
@@ -34,6 +35,56 @@ curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/
 | Provider Models    | Antigravity Gemini 커스텀 모델 정의            |
 | claude-sync        | Claude CLI → OpenCode 토큰 자동 동기화 (15분)  |
 | claude-sync-notify | 토큰 만료 시 macOS 알림                        |
+
+## Pre-commit lint autofix hook
+
+`git commit` 직전에 **스테이징된 파일만** 대상으로 lint autofix를 자동 실행한다. 스코프 외 파일 drift가 PR에 섞이는 문제(cf. integrator PR #622)를 차단하는 용도.
+
+- **위치**: `~/.claude/settings.json`의 `hooks.PreToolUse`, matcher `Bash(git commit:*)`
+- **스크립트**: `~/.config/sazo-ai-harness/packages/ai-harness/scripts/pre-commit-lint.sh`
+- **등록 시점**: `install.sh`가 최초 등록(idempotent). 이미 `install.sh`를 돌려본 기존 사용자는 `auto-update.sh`(매 SessionStart)가 hook 미등록 감지 시 자동 추가.
+- **적용 범위**: Claude Code Bash tool을 통한 `git commit` 호출만. 사용자가 터미널에서 직접 치는 `git commit`은 영향 없음 (git의 pre-commit hook과 별개 layer).
+- **실패 시**: lint autofix가 exit != 0이면 PreToolUse hook이 exit 2로 `git commit`을 **차단**. 에러를 stderr로 Claude에게 피드백.
+- **성공 시**: 원래 staged였던 파일을 re-stage(autofix가 내용을 바꿨을 수 있음). autofix가 파일을 삭제한 경우 skip. staged 아닌 파일은 건드리지 않음(스코프 유출 방지).
+- **파일 인자 안전성**: `supports_files_arg=true` 경로는 staged 파일명 앞에 `./` prefix를 붙여 lint 커맨드에 전달 — `--foo=x` 같은 이름이 옵션으로 해석되는 것을 방지.
+
+### 자동 감지
+
+감지 우선순위 (`scripts/lint-autofix-detect.sh`):
+
+1. 전역 캐시 `~/.config/sazo-ai-harness/lint-fix-cache.json`
+2. `package.json`에 `lint-staged` 의존성 존재 → `{yarn|pnpm|npx} lint-staged` (파일 인자 불필요, lint-staged가 내부에서 staged 감지)
+3. `pyproject.toml`의 `[tool.ruff]` → `ruff check --fix <files>` (파일 인자 필요)
+4. `pyproject.toml`의 `[tool.black]` → `black <files>` (파일 인자 필요)
+5. `go.mod` → `gofmt -w <files>` (파일 인자 필요)
+6. 없음 → hook이 stderr로 안내 + 해당 커밋은 lint 없이 통과
+
+### 감지 실패 시 캐시 등록
+
+hook stderr 안내에 따라 사용자에게 정확한 커맨드를 물어본 뒤:
+
+```bash
+# repo 루트에서
+~/.config/sazo-ai-harness/packages/ai-harness/scripts/pre-commit-lint.sh --set 'npx lint-staged'
+
+# 파일 인자를 받는 커맨드면
+~/.config/sazo-ai-harness/packages/ai-harness/scripts/pre-commit-lint.sh --set 'yarn lint --fix' --files-arg
+
+# 등록 해제
+~/.config/sazo-ai-harness/packages/ai-harness/scripts/pre-commit-lint.sh --unset
+```
+
+캐시 키는 `git rev-parse --show-toplevel` 경로의 sha256. repo별 독립이며, **worktree 경로가 다르면 worktree마다 재등록 필요**.
+
+**⚠️ `--set`의 커맨드는 이후 매 커밋마다 `bash -c`로 평가된다.** `$(...)`, `` ` ``, `;`, `&&`, 파이프 등이 포함되면 실행됨. 신뢰할 수 있는 단일 바이너리 + flag 형태로만 등록하고, 복잡한 로직은 저장소 내 스크립트로 빼서 경로만 등록하는 것이 안전.
+
+### 한계
+
+- **Claude Code 전용**. OpenCode 등 다른 AI는 PreToolUse hook이 없어 적용 불가 — 해당 환경에선 `claude-md/CLAUDE.md`의 "커밋 규율" 지시 기반으로만 작동.
+- **사용자 터미널 직접 `git commit`은 커버하지 않는다**. 이 hook은 Claude Code tool call layer에서만 발동하므로 사람 commit에는 영향 없음 — AI 작업의 전역 기본 방어막 성격. 더 강건한 방어가 필요한 저장소는 자체 Husky + lint-staged 도입 권장 (cf. sazo-ko-admin 하네스 1차 강화 PR #256). ai-harness는 프로젝트 Husky를 대체하지 않고 보완하는 레이어.
+- **`--no-verify`는 우회 수단 아님**. 이 hook은 git이 아니라 Claude Code 레벨이라 `--no-verify`로 스킵되지 않음. 정당한 사유로도 우회 escape hatch는 제공하지 않는다. hook이 과도하게 느리거나 부적절하면 repo의 lint 설정 자체를 고쳐야 한다.
+- **lint 실행이 60초 초과하면 stderr 경고**, 차단은 안 함.
+- **신뢰할 수 있는 저장소 전제**. 악성 `package.json`에 `lint-staged` 의존성이 선언돼 있으면 hook이 `npx lint-staged`를 자동 실행하며, lint-staged의 config는 임의 쉘 명령을 허용한다. 이는 본 hook만의 이슈가 아니라 Claude Code에서 신뢰 없는 저장소를 여는 일반적 위협 — 신뢰할 수 없는 repo에서는 Claude Code 사용 자체를 재고해야 한다.
 
 ## 자동 업데이트
 
