@@ -174,15 +174,36 @@ PUSH_TIME=$(fetch_push_time) || {
 }
 NEW_REVIEW_FOUND=false
 
+# Bot 로그인 정확 매칭 상수 (Step 3-3과 동일한 identity spoofing 가드).
+# substring 매칭(`test("codex|gemini")`)은 login에 "codex"/"gemini"를 포함한
+# 임의 사용자(`fake-codex`, PR author 이름 등)를 허용해 조기 탈출을 유발할 수 있다.
+CODEX_BOT_LOGIN="chatgpt-codex-connector[bot]"
+GEMINI_BOT_LOGIN="gemini-code-assist[bot]"
+
 # 30초 간격으로 최대 10분 polling
+#
+# CRITICAL: 본인(PR author) 리뷰 댓글·답변은 "리뷰"가 아니다. `gh api .../reviews`는
+# Step 4의 reply 게시(body 없는 review payload)도 카운트하므로 단순 submitted_at
+# 필터는 즉시 true가 되어 polling을 조기 종료시킨다. bot 로그인만 **정확 매칭**한다.
 for i in $(seq 1 20); do
   sleep 30
 
-  # PUSH_TIME 이후에 제출된 리뷰 확인 (--paginate 필수)
+  # PUSH_TIME 이후에 제출된 **bot** 리뷰만 확인 (--paginate 필수).
+  # `gh api --jq`는 단일 문자열만 받고 `--arg` 지원 안 함 → bash 변수 expansion으로
+  # 봇 로그인을 jq 문자열 리터럴에 직접 삽입. bot login에 `[bot]` 브래킷이 있어도
+  # jq 문자열 == 비교이므로 정규식 특수문자 이슈 없음.
   NEW_REVIEWS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews --paginate \
-    --jq "[.[] | select(.submitted_at > \"$PUSH_TIME\")] | length")
+    --jq "[.[] | select(.submitted_at > \"$PUSH_TIME\" and (.user.login == \"$CODEX_BOT_LOGIN\" or .user.login == \"$GEMINI_BOT_LOGIN\"))] | length")
 
-  if [ "$NEW_REVIEWS" -gt "0" ]; then
+  # Codex는 리뷰를 submit하지 않고 reaction만 업데이트할 때가 많다. eyes(리뷰 중)
+  # 또는 +1(승인) 변화도 "진전 있음"으로 감지해 polling을 조기 종료.
+  CODEX_REACTION=$(gh api "repos/$OWNER/$REPO/issues/$PR_NUM/reactions" --paginate \
+    --jq '.[] | {content: .content, created_at: .created_at, login: .user.login}' \
+    | jq -rs --arg bot "$CODEX_BOT_LOGIN" --arg since "$PUSH_TIME" \
+      '[.[] | select(.login == $bot and .created_at > $since)]
+       | sort_by(.created_at) | last.content // "none"')
+
+  if [ "$NEW_REVIEWS" -gt "0" ] || [ "$CODEX_REACTION" != "none" ]; then
     NEW_REVIEW_FOUND=true
     break
   fi
@@ -274,42 +295,56 @@ fi
 
 ### 3-3. 통과 조건
 
-| 리뷰어 | 통과 기준                                      |
-| ------ | ---------------------------------------------- |
-| Codex  | PR(issue) 자체에 Codex bot이 `+1`(👍) reaction을 달았음 |
-| Gemini | 최신 리뷰에 하위 코멘트(review comments)가 0건 |
+| 리뷰어 | 상태 | 판정 근거 |
+| ------ | ---- | ---------- |
+| Codex  | **approved** (통과) | PR(issue) reactions에 Codex bot의 최신 reaction이 `+1`(👍) |
+| Codex  | **reviewing** (리뷰 중) | 최신 reaction이 `eyes`(👀) — polling 계속, stale 카운트 증가 안 함 |
+| Codex  | **pending** (반응 없음) | PUSH_TIME 이후 Codex reaction 없음 — stale 대상 |
+| Gemini | **passed** | 최신 리뷰에 하위 코멘트(review comments)가 0건 |
 
-> **Codex 승인 스펙 근거:** Codex 공식 안내 — "If Codex has suggestions, it will comment; otherwise it will react with 👍." 👍 reaction은 **PR(issue) 자체의 reactions 엔드포인트**(`/repos/{o}/{r}/issues/{n}/reactions`)에 `content: "+1"`로 게시된다. PR body(description 텍스트)나 review body에 이모지로 들어가지 않는다.
+> **Codex 승인 스펙 근거:** Codex는 PR(issue)의 `reactions` 엔드포인트(`/repos/{o}/{r}/issues/{n}/reactions`)에 **단일 활성 reaction**으로 상태를 표시한다:
+> - 👀 (`content: "eyes"`) — **리뷰 진행 중**. 새 push나 초기 PR 생성 직후 부착.
+> - 👍 (`content: "+1"`) — **승인/추가 지적 없음**. 리뷰 완료 후 eyes → +1로 전환.
+>
+> 즉 fix push 직후 Codex가 re-scan 중이라면 이전 +1이 eyes로 되돌아갔다가 재승인 시 다시 +1로 돌아온다. 단일 시점의 reaction 존재 여부가 아닌 **최신 reaction의 content**를 봐야 현재 상태를 정확히 판정할 수 있다. Codex 공식 안내: "If Codex has suggestions, it will comment; otherwise it will react with 👍."
 
 ```bash
-# Codex 통과 확인 — PR(issue) reactions에 codex bot의 "+1"이 있는지.
+# Codex 상태 판정 — PR(issue) reactions의 최신 Codex bot reaction content.
 #
-# 세 가지 위협을 모두 막는다:
+# 네 가지 위협을 모두 막는다:
 # 1. Stale approval: 이전 라운드의 +1이 새 push 이후에도 남아있어 미검토
 #    코드가 통과로 오판됨.
-#    → 사이클의 PUSH_TIME(GitHub 서버 권위 시각) 이후 reaction만 카운트.
-#    → `committedDate`/`authoredDate`는 commit 메타데이터라 backdate/force-push
-#      시 우회 가능하므로 사용하지 않는다. 로컬 `date -u`는 runner 클록 skew로
-#      reaction `created_at`(서버 시각)과 어긋나 false-negative 유발 가능.
-#      PUSH_TIME은 Step 2에서 `gh api repos/$OWNER/$REPO --jq .pushed_at`으로
-#      push 직후 캡쳐한 서버 권위 시각.
+#    → PUSH_TIME 이후의 reaction만 고려. 이전 라운드 +1은 PUSH_TIME 이전이라
+#      자동 제외됨.
 # 2. Identity spoofing: `test("codex")`는 login에 "codex"를 포함한 임의 사용자
 #    (`codex-foo` 등)도 매칭하므로 public repo에서 우회 가능.
 #    → 공식 Codex bot login 정확 매칭 (`chatgpt-codex-connector[bot]`).
-# 3. 페이지네이션: --paginate는 jq를 페이지마다 독립 실행하므로 `| length`를
-#    --jq 안에 넣으면 bash 숫자 비교가 깨진다.
-#    → 1차 jq는 객체만 emit, 2차 `jq -s`가 전 페이지를 슬럽 + --arg로 안전 필터.
-CODEX_PASSED=false
-CODEX_BOT_LOGIN="chatgpt-codex-connector[bot]"
+# 3. 페이지네이션: --paginate는 jq를 페이지마다 독립 실행하므로 복합 연산
+#    (sort_by, last 등)이 페이지별로 끊긴다.
+#    → 1차 jq는 raw 객체만 emit, 2차 `jq -s`가 전 페이지를 슬럽 후 단일 연산.
+# 4. 리뷰 중 false-negative: 이전 설계(단순 `+1 개수 > 0`)는 Codex가 새 push에
+#    대해 아직 reviewing(👀) 상태면 approved 아님을 정확히 구분 못 했음. 단순
+#    "pending(무반응)"과 "reviewing(활발히 검토)"을 합쳐 stale로 처리해
+#    불필요한 Gemini fallback 또는 user escalation이 발생.
+#    → 최신 reaction의 content를 읽어 approved/reviewing/pending 3-state 분기.
+# CODEX_BOT_LOGIN / GEMINI_BOT_LOGIN은 Step 2에서 이미 정의됨. 여기서 재사용.
 # PUSH_TIME은 Step 2에서 `gh api repos/$OWNER/$REPO --jq .pushed_at`으로
 # 캡쳐한 서버 권위 시각 (reaction.created_at과 동일한 서버 클록).
-CODEX_THUMBS=$(gh api "repos/$OWNER/$REPO/issues/$PR_NUM/reactions" --paginate \
-  --jq '.[] | select(.content == "+1")' \
-  | jq -s --arg bot "$CODEX_BOT_LOGIN" --arg since "$PUSH_TIME" \
-    '[.[] | select(.user.login == $bot and .created_at > $since)] | length')
-if [ "${CODEX_THUMBS:-0}" -gt "0" ]; then
-  CODEX_PASSED=true
-fi
+CODEX_LATEST=$(gh api "repos/$OWNER/$REPO/issues/$PR_NUM/reactions" --paginate \
+  --jq '.[] | {content: .content, created_at: .created_at, login: .user.login}' \
+  | jq -rs --arg bot "$CODEX_BOT_LOGIN" --arg since "$PUSH_TIME" \
+    '[.[] | select(.login == $bot and .created_at > $since)]
+     | sort_by(.created_at) | last.content // "none"')
+
+CODEX_STATE="pending"
+case "$CODEX_LATEST" in
+  "+1")  CODEX_STATE="approved" ;;
+  eyes)  CODEX_STATE="reviewing" ;;
+  *)     CODEX_STATE="pending" ;;
+esac
+
+CODEX_PASSED=false
+[ "$CODEX_STATE" = "approved" ] && CODEX_PASSED=true
 
 # Gemini 통과 확인 (활성 시에만 평가, 미설정 시 자동 통과)
 if [ "$GEMINI_ENABLED" = true ]; then
@@ -327,6 +362,11 @@ if [ "$CODEX_PASSED" = true ] && [ "$GEMINI_PASSED" = true ]; then
   ALL_PASSED=true
 fi
 ```
+
+**CODEX_STATE 활용:**
+- `approved` → 통과 조건 충족. Step 7로.
+- `reviewing` → Codex가 아직 평가 중. Step 6의 stale counter를 증가시키지 말고 polling 계속.
+- `pending` → PUSH_TIME 이후 Codex 반응 자체가 없음. 트리거가 실패했거나 Codex가 아직 도달하지 못함. Step 6의 stale counter 대상.
 
 **미답변 피드백이 있으면 → Step 4로.**
 **미답변 피드백 0건이면 → 통과 확인 후 Step 7로.**
@@ -442,11 +482,20 @@ while ROUND < MAX_ROUNDS:
     break
 
   # ── Stale review 감지 ──
-  # polling 타임아웃 시 (NEW_REVIEW_FOUND=false), 최신 review ID가 동일하면 stale
+  # CODEX_STATE를 먼저 평가해 "활발히 리뷰 중(eyes)"와 "실제 무응답(pending)"을 구분.
+  # reviewing 상태는 stale 아님 → polling 계속, STALE_COUNT 증가 유보.
+  # pending 상태이거나 최신 review ID가 동일(= bot 진전 없음)일 때만 stale 증가.
+  #
+  # NOTE: CODEX_STATE는 Step 3-3에서 갱신된다. 이 stale 판정 시점에는 이전 라운드의
+  # 값을 참조한다. Step 2 polling이 reaction 변화를 감지하면 NEW_REVIEW_FOUND=true로
+  # break하므로 `not NEW_REVIEW_FOUND` 가드가 이전 CODEX_STATE 값에 의한 오판을
+  # 차단한다 (Step 2 → Step 6 → Step 3 순서로 방어 계층화). CODEX_STATE 참조를
+  # 이동하거나 Step 3-3을 stale 판정 앞으로 당기면 이 의존이 깨지므로 주의.
   current_latest_review = get_latest_codex_review_id()
-  if not NEW_REVIEW_FOUND and current_latest_review == PREV_LATEST_REVIEW:
+  codex_progressed = (CODEX_STATE in {"reviewing", "approved"})
+  if not NEW_REVIEW_FOUND and current_latest_review == PREV_LATEST_REVIEW and not codex_progressed:
     STALE_COUNT++
-    log("리뷰어 무응답 (stale #{STALE_COUNT}/{MAX_STALE})")
+    log("리뷰어 무응답 (stale #{STALE_COUNT}/{MAX_STALE}, CODEX_STATE=${CODEX_STATE})")
     if STALE_COUNT > MAX_STALE:
       if GEMINI_ENABLED:
         log("Codex 무응답 → Gemini fallback")
@@ -457,7 +506,9 @@ while ROUND < MAX_ROUNDS:
         notify_user("Codex가 ${MAX_STALE}회 연속 무응답. 수동 확인 필요.")
         break
   else:
-    STALE_COUNT = 0        # 새 리뷰가 왔으면 카운트 리셋
+    STALE_COUNT = 0        # 새 리뷰가 왔거나 Codex가 reviewing/approved로 진전
+    if CODEX_STATE == "reviewing":
+      log("Codex 리뷰 진행 중 (👀) — polling 계속")
   PREV_LATEST_REVIEW = current_latest_review
 
   fetch_review_feedback()       # Step 3 — review → review comments 구조로 조회
@@ -524,6 +575,9 @@ PR이 머지 가능한 상태입니다. / 사용자 확인이 필요합니다.
 | 수정 답변에 commit hash 링크 누락                            | 답변 본문에 `[`short-hash`](commit URL)` 필수 — 리뷰어가 "수정 완료" 주장의 근거 커밋을 1-클릭 추적 |
 | 답변 본문에 regex/glob 특수문자 포함 시 shell 해석 충돌       | URL을 따옴표로 감싸거나 HEREDOC + `--input -` 사용 (bash/zsh 공통). `noglob`은 zsh 전용이므로 범용 기본값으로 쓰지 말 것 |
 | Codex 승인 판정 시 PR body 텍스트에서 👍 이모지 grep           | Codex는 PR(issue) `reactions` 엔드포인트에 `content: "+1"`로 반응. `gh api .../issues/$PR_NUM/reactions`를 codex bot 로그인 + `+1`로 필터 |
+| Codex가 `eyes`(👀) 반응인 상태를 "무응답"으로 오인해 stale 카운트 증가 | `eyes`는 "리뷰 진행 중" 상태 — polling 계속. 최신 reaction content를 `approved`(+1) / `reviewing`(eyes) / `pending`(없음)으로 분기 |
+| fix push 후 Codex 재리뷰가 완료되기 전에 이전 라운드의 `+1`만 보고 통과 판정 | PUSH_TIME 이후의 **최신** reaction content를 봐야 현재 코드 상태의 승인 여부 판정 가능. 새 push는 `+1`을 `eyes`로 되돌림 |
+| Step 2 polling에서 PR 작성자의 리뷰 reply도 "새 리뷰"로 카운트 | `gh api .../reviews`에 bot 로그인 **정확 매칭** 필수 (`select(.user.login == $codex or .user.login == $gemini)`). substring `test("codex\|gemini")`는 identity spoofing 위험 있음 — Step 3-3의 가드와 일관되게 exact match 사용 |
 
 ## Related Skills
 
