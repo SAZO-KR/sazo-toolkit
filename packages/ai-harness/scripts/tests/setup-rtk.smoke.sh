@@ -420,6 +420,144 @@ run_setup_quiet "$H" "$STUB_PATH" >/dev/null 2>&1
 mtime2=$(stat -f %m "$H/.claude/settings.json" 2>/dev/null || stat -c %Y "$H/.claude/settings.json")
 assert_equal "settings.json mtime unchanged on 2nd run (no-op mv)" "$mtime1" "$mtime2"
 
+# ─── Case 12: BG upgrade — rtk+brew 있음 + quiet + 마커 없음 → 마커 생성 ───
+echo ""
+echo "Case 12: BG upgrade 최초 트리거 → .rtk-last-upgrade 마커 현재 시각으로 생성"
+H="$SANDBOX/c12"
+mkdir -p "$H/.config/sazo-ai-harness" "$H/.claude" "$H/stub-bin"
+echo '{"permissions":{"allow":[]}}' > "$H/.claude/settings.json"
+
+# rtk stub: init 호출 시 fake hook 주입 (기존 Case 4 패턴)
+cat > "$H/stub-bin/rtk" <<'STUBEOF'
+#!/bin/bash
+if [ "${1:-}" = "init" ]; then
+    cat > "$HOME/.claude/settings.json" <<'FAKE'
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"fake-rtk-rewrite.sh"}]}]}}
+FAKE
+fi
+exit 0
+STUBEOF
+chmod +x "$H/stub-bin/rtk"
+
+# brew stub: 호출 기록. BG 실행이므로 즉시 반환하지 않으면 test가 멈출 수 있음.
+cat > "$H/stub-bin/brew" <<'BREWEOF'
+#!/bin/bash
+echo "$@" >> "$HOME/.brew-call-log"
+exit 0
+BREWEOF
+chmod +x "$H/stub-bin/brew"
+
+STUB_PATH="$H/stub-bin:$MIN_PATH"
+before=$(date +%s)
+out=$(run_setup_quiet "$H" "$STUB_PATH")
+rc=$?
+after=$(date +%s)
+assert_equal "exit code 0" "0" "$rc"
+assert_file_present "upgrade marker created" "$H/.config/sazo-ai-harness/.rtk-last-upgrade"
+
+# 마커 값이 숫자이고 테스트 실행 시각 범위 내인지 검증
+stamp=$(cat "$H/.config/sazo-ai-harness/.rtk-last-upgrade" 2>/dev/null || echo "")
+if [[ "$stamp" =~ ^[0-9]+$ ]] && [ "$stamp" -ge "$before" ] && [ "$stamp" -le "$after" ]; then
+    echo "  OK   upgrade marker timestamp in valid range"
+else
+    echo "  FAIL upgrade marker timestamp invalid: $stamp (expected $before..$after)"
+    FAIL=$((FAIL + 1))
+fi
+
+# ─── Case 13: BG upgrade throttle — 최근(<24h) 마커 있음 → skip, 마커 불변 ───
+echo ""
+echo "Case 13: 24h 이내 마커 존재 → BG upgrade skip (마커 timestamp 불변)"
+H="$SANDBOX/c13"
+mkdir -p "$H/.config/sazo-ai-harness" "$H/.claude" "$H/stub-bin"
+echo '{"permissions":{"allow":[]}}' > "$H/.claude/settings.json"
+
+# rtk/brew stub 동일하게 세팅
+cat > "$H/stub-bin/rtk" <<'STUBEOF'
+#!/bin/bash
+exit 0
+STUBEOF
+chmod +x "$H/stub-bin/rtk"
+cat > "$H/stub-bin/brew" <<'BREWEOF'
+#!/bin/bash
+exit 0
+BREWEOF
+chmod +x "$H/stub-bin/brew"
+
+# hook이 이미 등록된 상태로 설정 — 그래야 setup-rtk.sh가 빨리 종료
+echo '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rtk-rewrite.sh"}]}]},"permissions":{"allow":[]}}' > "$H/.claude/settings.json"
+
+# 30분 전으로 마커 설정 — 24h throttle 내
+recent=$(($(date +%s) - 1800))
+echo "$recent" > "$H/.config/sazo-ai-harness/.rtk-last-upgrade"
+
+STUB_PATH="$H/stub-bin:$MIN_PATH"
+out=$(run_setup_quiet "$H" "$STUB_PATH")
+rc=$?
+assert_equal "exit code 0" "0" "$rc"
+actual=$(cat "$H/.config/sazo-ai-harness/.rtk-last-upgrade" 2>/dev/null || echo "")
+assert_equal "throttle 내 — 마커 불변" "$recent" "$actual"
+
+# ─── Case 14: BG upgrade throttle — 오래된(>24h) 마커 → 갱신 ───
+echo ""
+echo "Case 14: 24h 초과 마커 존재 → BG upgrade 재트리거, 마커 갱신"
+H="$SANDBOX/c14"
+mkdir -p "$H/.config/sazo-ai-harness" "$H/.claude" "$H/stub-bin"
+
+cat > "$H/stub-bin/rtk" <<'STUBEOF'
+#!/bin/bash
+exit 0
+STUBEOF
+chmod +x "$H/stub-bin/rtk"
+cat > "$H/stub-bin/brew" <<'BREWEOF'
+#!/bin/bash
+exit 0
+BREWEOF
+chmod +x "$H/stub-bin/brew"
+
+echo '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rtk-rewrite.sh"}]}]},"permissions":{"allow":[]}}' > "$H/.claude/settings.json"
+
+# 2일 전으로 마커 설정
+stale=$(($(date +%s) - 172800))
+echo "$stale" > "$H/.config/sazo-ai-harness/.rtk-last-upgrade"
+
+STUB_PATH="$H/stub-bin:$MIN_PATH"
+before=$(date +%s)
+out=$(run_setup_quiet "$H" "$STUB_PATH")
+rc=$?
+after=$(date +%s)
+assert_equal "exit code 0" "0" "$rc"
+actual=$(cat "$H/.config/sazo-ai-harness/.rtk-last-upgrade" 2>/dev/null || echo "")
+if [[ "$actual" =~ ^[0-9]+$ ]] && [ "$actual" -ge "$before" ] && [ "$actual" -le "$after" ]; then
+    echo "  OK   throttle 초과 — 마커 갱신"
+else
+    echo "  FAIL 마커 갱신 실패: $actual (expected $before..$after, was $stale)"
+    FAIL=$((FAIL + 1))
+fi
+
+# ─── Case 15: BG upgrade — opt-out 상태면 마커 생성 안 됨 ───
+echo ""
+echo "Case 15: opt-out 마커 존재 → BG upgrade skip (opt-out이 최우선)"
+H="$SANDBOX/c15"
+mkdir -p "$H/.config/sazo-ai-harness" "$H/.claude" "$H/stub-bin"
+touch "$H/.config/sazo-ai-harness/.rtk-optout"
+
+cat > "$H/stub-bin/rtk" <<'STUBEOF'
+#!/bin/bash
+exit 0
+STUBEOF
+chmod +x "$H/stub-bin/rtk"
+cat > "$H/stub-bin/brew" <<'BREWEOF'
+#!/bin/bash
+exit 0
+BREWEOF
+chmod +x "$H/stub-bin/brew"
+
+STUB_PATH="$H/stub-bin:$MIN_PATH"
+out=$(run_setup_quiet "$H" "$STUB_PATH")
+rc=$?
+assert_equal "exit code 0" "0" "$rc"
+assert_file_absent "opt-out 상태 — upgrade 마커 생성 안 됨" "$H/.config/sazo-ai-harness/.rtk-last-upgrade"
+
 echo ""
 echo "─────────────────────"
 if [ "$FAIL" -eq 0 ]; then

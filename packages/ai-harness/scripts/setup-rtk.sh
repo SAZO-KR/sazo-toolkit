@@ -38,9 +38,51 @@ MARKER_DIR="$HOME/.config/sazo-ai-harness"
 OPTOUT_MARKER="$MARKER_DIR/.rtk-optout"
 INIT_DONE_MARKER="$MARKER_DIR/.rtk-init-done"
 ALLOWLIST_MARKER="$MARKER_DIR/.rtk-allowlist-done"
+UPGRADE_MARKER="$MARKER_DIR/.rtk-last-upgrade"
 SETTINGS="$HOME/.claude/settings.json"
 
+# BG 업그레이드 throttle: 24h. 너무 자주 brew update 돌리면 tap metadata 받느라 네트워크
+# I/O 오버헤드 + rate limit 리스크. 주 1회는 너무 긴 주기라 hotfix 지연 우려.
+UPGRADE_THROTTLE_SECS=86400
+
 msg() { [ "$QUIET" -eq 0 ] && echo "$@"; }
+
+# ─── BG brew upgrade (quiet 모드 전용, 24h throttle) ───
+# auto-update.sh가 세션 시작 시 호출하는 quiet 경로에서만 동작. rtk와 brew가 모두 있고
+# 마지막 시도로부터 24시간 경과했을 때, brew update + brew upgrade rtk를 백그라운드로
+# detach하여 실행. 새 버전은 **다음 세션**부터 반영 (현 세션 진입을 블로킹하지 않음).
+#
+# 마커는 BG 실행 **전에** 즉시 갱신 — 동시에 시작된 여러 세션이 중복 brew를 돌리지
+# 않도록. brew 실패(네트워크/lock)는 조용히 무시, 다음 24h 사이클에 재시도.
+#
+# 알려진 잔여 race (비블로킹): 두 세션이 정확히 같은 초(date +%s)에 진입하고 모두
+# 마커 존재 여부 체크를 통과한 뒤 동시 마커 갱신 + 동시 BG brew fork가 가능. 이 창은
+# 약 1초이며 24h에 한 번만 발생. worst case는 중복 brew upgrade 호출인데 brew 자체
+# 파일 락(locks/)이 serialize하므로 데이터 손상 없음. bash로 완전 atomic CAS를
+# 구현하는 복잡도 대비 이득이 없어 의도적으로 수용.
+rtk_bg_upgrade() {
+    [ "$QUIET" -eq 1 ] || return 0
+    [ -f "$OPTOUT_MARKER" ] && return 0
+    command -v rtk >/dev/null 2>&1 || return 0
+    command -v brew >/dev/null 2>&1 || return 0
+
+    local now last=0
+    now=$(date +%s)
+    if [ -f "$UPGRADE_MARKER" ]; then
+        last=$(cat "$UPGRADE_MARKER" 2>/dev/null || echo 0)
+        case "$last" in *[!0-9]*|'') last=0 ;; esac
+    fi
+    [ $((now - last)) -lt "$UPGRADE_THROTTLE_SECS" ] && return 0
+
+    mkdir -p "$MARKER_DIR"
+    echo "$now" > "$UPGRADE_MARKER"
+
+    (
+        brew update >/dev/null 2>&1 || true
+        brew upgrade rtk >/dev/null 2>&1 || true
+    ) </dev/null >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+}
 
 # RTK 재작성 hook이 깔린 뒤 Claude Code의 permission allow 리스트에 read-only RTK
 # 호출 패턴을 union-merge 한다. 목적은 `rtk rewrite`가 exit 3(ask)으로 돌려보내는
@@ -151,6 +193,11 @@ if [ -f "$OPTOUT_MARKER" ]; then
     msg "⏭️  RTK 셋업 opt-out (마커: $OPTOUT_MARKER)"
     exit 0
 fi
+
+# ─── 1b. quiet 모드에서 BG brew upgrade 시도 (24h throttle) ───
+# opt-out이 아닌 경우에만 진입. 이미 설치된 rtk를 배경에서 최신화. 설치 자체는 유도하지
+# 않음 (해당 책임은 대화형 경로).
+rtk_bg_upgrade
 
 # ─── 2. settings.json 손상 방어 ───
 # 유효한 JSON이 아니면 이후 모든 분기가 위험해짐 — 건드리지 않고 종료.
