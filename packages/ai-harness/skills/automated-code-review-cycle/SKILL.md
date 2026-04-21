@@ -188,10 +188,12 @@ GEMINI_BOT_LOGIN="gemini-code-assist[bot]"
 for i in $(seq 1 20); do
   sleep 30
 
-  # PUSH_TIME 이후에 제출된 **bot** 리뷰만 확인 (--paginate 필수)
+  # PUSH_TIME 이후에 제출된 **bot** 리뷰만 확인 (--paginate 필수).
+  # `gh api --jq`는 단일 문자열만 받고 `--arg` 지원 안 함 → bash 변수 expansion으로
+  # 봇 로그인을 jq 문자열 리터럴에 직접 삽입. bot login에 `[bot]` 브래킷이 있어도
+  # jq 문자열 == 비교이므로 정규식 특수문자 이슈 없음.
   NEW_REVIEWS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews --paginate \
-    --jq --arg codex "$CODEX_BOT_LOGIN" --arg gemini "$GEMINI_BOT_LOGIN" \
-      "[.[] | select(.submitted_at > \"$PUSH_TIME\" and (.user.login == \$codex or .user.login == \$gemini))] | length")
+    --jq "[.[] | select(.submitted_at > \"$PUSH_TIME\" and (.user.login == \"$CODEX_BOT_LOGIN\" or .user.login == \"$GEMINI_BOT_LOGIN\"))] | length")
 
   # Codex는 리뷰를 submit하지 않고 reaction만 업데이트할 때가 많다. eyes(리뷰 중)
   # 또는 +1(승인) 변화도 "진전 있음"으로 감지해 polling을 조기 종료.
