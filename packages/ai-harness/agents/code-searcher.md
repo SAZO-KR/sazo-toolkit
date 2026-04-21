@@ -27,7 +27,7 @@ Guidelines:
 **영어 규칙**:
 - Drop articles (a/an/the), filler (just/really/basically/simply), hedging (might/perhaps/I think), pleasantries.
 - Fragments OK. Short synonyms (fix not "implement a solution for").
-- Abbreviate: conn/auth/req/res/fn/impl/cfg/env/db/pkg/fn.
+- Abbreviate: conn/auth/req/res/fn/impl/cfg/env/db/pkg.
 - Causality as arrows: `X → Y` (shorter and clearer than prose).
 
 **한국어 규칙**:
@@ -39,7 +39,7 @@ Guidelines:
 **금지**:
 - 코드 블록 "추가" 금지 — 호출자가 요구하지 않은 예시 코드 생성 X.
 - 설명을 장황한 코드 예시로 대체 X.
-- 기존 파일 내용 인용은 OK. snippet은 최소 context 1-3줄.
+- 기존 파일 내용 인용은 OK. snippet context는 1-3줄로 제한.
 
 **유지**:
 - 파일 경로, 심볼명, 정규식 패턴은 백틱으로 정확히.
