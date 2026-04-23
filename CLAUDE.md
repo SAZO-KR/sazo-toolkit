@@ -19,7 +19,7 @@ packages/
 
 | 패키지                                                | 검증 방법                                                          |
 | ----------------------------------------------------- | ------------------------------------------------------------------ |
-| ai-harness                                            | `bash -n scripts/auto-update.sh && bash -n install.sh && bash -n scripts/setup-rtk.sh && bash -n scripts/sleep-guard/setup.sh && bash scripts/tests/setup-rtk.smoke.sh && bash scripts/tests/sleep-guard.smoke.sh && bash scripts/tests/sleep-guard-notify.smoke.sh` |
+| ai-harness                                            | `bash -n scripts/auto-update.sh && bash -n install.sh && bash -n scripts/setup-rtk.sh && bash -n scripts/sleep-guard/setup.sh && bash scripts/tests/setup-rtk.smoke.sh && bash scripts/tests/sleep-guard.smoke.sh && bash scripts/tests/sleep-guard-notify.smoke.sh && bash scripts/tests/workflow-hooks.smoke.sh` |
 | Go 패키지 (translate-bot, bamboo-forest, shuffle-bot) | `cd packages/{name} && go build ./...`                             |
 | 셸 스크립트 (claude-notify)                           | `bash -n scripts/*.sh`                                             |
 

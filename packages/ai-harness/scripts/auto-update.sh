@@ -109,6 +109,17 @@ sync_precommit_lint_hook() {
     fi
 }
 
+sync_workflow_hooks() {
+    local register_script="$HARNESS_DIR/scripts/register-workflow-hooks.sh"
+    local settings="$HOME/.claude/settings.json"
+    [ -f "$register_script" ] || return 0
+    [ -f "$settings" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    # shellcheck disable=SC1090
+    source "$register_script"
+    register_workflow_hooks "$HARNESS_DIR" "$settings" >>"$LOG_FILE" 2>&1 || true
+}
+
 sync_rtk_setup() {
     local rtk_setup_script="$HARNESS_DIR/scripts/setup-rtk.sh"
     [ -f "$rtk_setup_script" ] || return 0
@@ -223,11 +234,12 @@ if [ ! -d "$INSTALL_DIR/.git" ]; then
     sync_skill_permissions
     sync_rtk_setup
     sync_precommit_lint_hook
+    sync_workflow_hooks
     sync_sleep_guard
     exit 0
 fi
 
-cd "$INSTALL_DIR" || { log "ERROR: Cannot cd to $INSTALL_DIR"; sync_skill_permissions; sync_rtk_setup; sync_precommit_lint_hook; sync_sleep_guard; exit 0; }
+cd "$INSTALL_DIR" || { log "ERROR: Cannot cd to $INSTALL_DIR"; sync_skill_permissions; sync_rtk_setup; sync_precommit_lint_hook; sync_workflow_hooks; sync_sleep_guard; exit 0; }
 
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 if [ "$CURRENT_BRANCH" != "main" ]; then
@@ -235,6 +247,7 @@ if [ "$CURRENT_BRANCH" != "main" ]; then
     sync_skill_permissions
     sync_rtk_setup
     sync_precommit_lint_hook
+    sync_workflow_hooks
     sync_sleep_guard
     exit 0
 fi
@@ -244,6 +257,7 @@ if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; th
     sync_skill_permissions
     sync_rtk_setup
     sync_precommit_lint_hook
+    sync_workflow_hooks
     sync_sleep_guard
     exit 0
 fi
@@ -258,6 +272,7 @@ if [ -f "$LAST_FETCH_FILE" ]; then
         sync_skill_permissions
         sync_rtk_setup
         sync_precommit_lint_hook
+        sync_workflow_hooks
         sync_sleep_guard
         exit 0
     fi
@@ -333,6 +348,7 @@ fi
 sync_skill_permissions
 sync_rtk_setup
 sync_precommit_lint_hook
+sync_workflow_hooks
 sync_sleep_guard
 
 exit 0
