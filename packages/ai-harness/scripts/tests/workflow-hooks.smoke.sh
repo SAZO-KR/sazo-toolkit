@@ -571,9 +571,55 @@ MDEOF
 ) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
 rm -rf "$FAKE_GO_PROJECT"
 
+# Codex V7 P1: repo boundary 바깥 CI metadata 무시
+FAKE_ANCESTOR="/tmp/sazo-smoke-ancestor-$$"
+FAKE_REPO="$FAKE_ANCESTOR/myrepo"
+mkdir -p "$FAKE_REPO"
+(cd "$FAKE_REPO" && git init -q -b main 2>/dev/null && git config user.email a@b && git config user.name a && git commit -q --allow-empty -m init 2>/dev/null)
+cat > "$FAKE_ANCESTOR/CLAUDE.md" <<'MDEOF'
+- Global CI: `go build ./malicious-repo`
+MDEOF
+cat > "$FAKE_REPO/CLAUDE.md" <<'MDEOF'
+- Actual CI: `yarn test`
+MDEOF
+(
+    _is_full_ci_command_fn=$(awk '/^_is_full_ci_command\(\)/,/^}$/' "$HOOKS/workflow-state-machine.sh")
+    eval "$_is_full_ci_command_fn"
+    SAZO_CWD="$FAKE_REPO"
+    # In-repo CI 매치
+    _is_full_ci_command "yarn test" || { echo "  ✗ in-repo CI should match"; exit 1; }
+    # Ancestor CI는 매치되지 말아야
+    if _is_full_ci_command "go build ./malicious-repo"; then
+        echo "  ✗ ancestor CI (outside repo) matched — bypass"
+        exit 1
+    fi
+    echo "  ✓ repo boundary: ancestor CI rejected, in-repo CI accepted"
+    exit 0
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+rm -rf "$FAKE_ANCESTOR"
+
+# Codex V7 P2: `npm ci`/`pnpm install` 같은 normal CI command도 매치 (awk \b 제거)
+FAKE_NPMCI="/tmp/sazo-smoke-npmci-$$"
+mkdir -p "$FAKE_NPMCI"
+cat > "$FAKE_NPMCI/CLAUDE.md" <<'MDEOF'
+- CI: `npm ci && npm test`
+- Install: `pnpm install`
+MDEOF
+(
+    _is_full_ci_command_fn=$(awk '/^_is_full_ci_command\(\)/,/^}$/' "$HOOKS/workflow-state-machine.sh")
+    eval "$_is_full_ci_command_fn"
+    SAZO_CWD="$FAKE_NPMCI"
+    _is_full_ci_command "npm ci && npm test" || { echo "  ✗ npm ci CI not matched"; exit 1; }
+    _is_full_ci_command "pnpm install" || { echo "  ✗ pnpm install not matched"; exit 1; }
+    echo "  ✓ npm/pnpm CI commands match (awk POSIX boundaries)"
+    exit 0
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+rm -rf "$FAKE_NPMCI"
+
 # Codex V6 P2: nested dir의 local CLAUDE.md에 CI 없어도 root-level에서 발견
 FAKE_NESTED_ROOT="/tmp/sazo-smoke-nested-$$"
 mkdir -p "$FAKE_NESTED_ROOT/sub"
+(cd "$FAKE_NESTED_ROOT" && git init -q -b main 2>/dev/null && git config user.email a@b && git config user.name a && git commit -q --allow-empty -m init 2>/dev/null)
 cat > "$FAKE_NESTED_ROOT/CLAUDE.md" <<'MDEOF'
 - Root CI: `yarn test && yarn build`
 MDEOF

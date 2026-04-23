@@ -158,14 +158,18 @@ _is_full_ci_command() {
     local cmd="$1"
     local proj_md=""
 
-    # 1) SAZO_CWD부터 git root까지 upward walk. 각 level에서 CLAUDE.md와 AGENTS.md
-    # 둘 다 수집 (Codex V4 P2). 경로에 공백 포함 가능 — newline-delimited로
-    # 수집 후 while read로 iterate (Codex V5 P2).
-    # Walk 계속 조건: 첫 file 발견한 레벨에서 break하지 않고 root까지 전부 수집
-    # — 서브디렉토리 CLAUDE.md에 CI 없어도 repo-level CI 후보 확보 (Codex V6 P2).
+    # 1) SAZO_CWD부터 **repo root까지만** upward walk. filesystem `/`까지 올라가면
+    # $HOME/.claude/CLAUDE.md 같은 global metadata의 CI snippet이 매치돼 다른
+    # repo에서 실행한 명령이 현재 repo ci stage 통과시키는 bypass 발생 (Codex V7 P1).
+    # git rev-parse는 realpath 반환하므로 SAZO_CWD도 normalize 필요 (macOS /tmp =
+    # /private/tmp symlink 등 불일치 회피).
+    local cwd_real repo_root
+    cwd_real=$(cd "$SAZO_CWD" 2>/dev/null && pwd -P)
+    cwd_real="${cwd_real:-$SAZO_CWD}"
+    repo_root=$(git -C "$cwd_real" rev-parse --show-toplevel 2>/dev/null)
     local proj_mds=""
-    local dir="$SAZO_CWD"
-    while [ -n "$dir" ] && [ "$dir" != "/" ]; do
+    local dir="$cwd_real"
+    while [ -n "$dir" ]; do
         for candidate in "$dir/CLAUDE.md" "$dir/AGENTS.md" "$dir/.claude/CLAUDE.md"; do
             if [ -f "$candidate" ]; then
                 if [ -z "$proj_mds" ]; then
@@ -176,6 +180,14 @@ $candidate"
                 fi
             fi
         done
+        # repo boundary 도달 시 중단. repo_root 미감지(non-git)면 $SAZO_CWD 에서만
+        # 조회 후 중단 — ancestor 디렉토리 traverse 금지.
+        if [ -n "$repo_root" ] && [ "$dir" = "$repo_root" ]; then
+            break
+        fi
+        if [ -z "$repo_root" ]; then
+            break
+        fi
         local parent
         parent=$(dirname "$dir")
         [ "$parent" = "$dir" ] && break
@@ -192,13 +204,16 @@ $candidate"
     while IFS= read -r md; do
         [ -z "$md" ] && continue
         local md_cmds
+        # awk ERE는 `\b` 미지원 — POSIX-safe (^|[^a-zA-Z0-9_]) 경계 사용 (Codex V7 P2).
+        # 이전 \b 패턴은 awk에서 literal b로 해석돼 매치 실패 → `npm ci`/`pnpm install`
+        # 같은 정상 CI command가 candidate에서 누락됐음.
         md_cmds=$(grep -oE '`[^`]+`' "$md" 2>/dev/null | sed 's/^`//;s/`$//' | awk '
             /&&/ { print; next }
-            /(^|[[:space:]])(test|build|lint|type-check|typecheck|check|validate|verify|tsc|pytest)([[:space:]]|$)/ { print; next }
-            /\b(go|cargo)[[:space:]]+(test|build|vet|check)\b/ { print; next }
-            /\b(yarn|npm|pnpm|npx)[[:space:]]+/ { print; next }
-            /\bmake[[:space:]]+/ { print; next }
-            /\bbash[[:space:]]+-n\b/ { print; next }
+            /(^|[^a-zA-Z0-9_])(test|build|lint|type-check|typecheck|check|validate|verify|tsc|pytest)([^a-zA-Z0-9_]|$)/ { print; next }
+            /(^|[^a-zA-Z0-9_])(go|cargo)[[:space:]]+(test|build|vet|check)([^a-zA-Z0-9_]|$)/ { print; next }
+            /(^|[^a-zA-Z0-9_])(yarn|npm|pnpm|npx)[[:space:]]+/ { print; next }
+            /(^|[^a-zA-Z0-9_])make[[:space:]]+/ { print; next }
+            /(^|[^a-zA-Z0-9_])bash[[:space:]]+-n([^a-zA-Z0-9_]|$)/ { print; next }
         ')
         [ -n "$md_cmds" ] && ci_cmds="$ci_cmds
 $md_cmds"
