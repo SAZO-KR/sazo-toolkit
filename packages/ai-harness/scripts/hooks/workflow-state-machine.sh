@@ -160,7 +160,9 @@ _is_full_ci_command() {
 
     # 1) SAZO_CWD부터 git root까지 upward walk. 각 level에서 CLAUDE.md와 AGENTS.md
     # 둘 다 수집 (Codex V4 P2). 경로에 공백 포함 가능 — newline-delimited로
-    # 수집 후 while read로 iterate (Codex V5 P2: shell word-split 방지).
+    # 수집 후 while read로 iterate (Codex V5 P2).
+    # Walk 계속 조건: 첫 file 발견한 레벨에서 break하지 않고 root까지 전부 수집
+    # — 서브디렉토리 CLAUDE.md에 CI 없어도 repo-level CI 후보 확보 (Codex V6 P2).
     local proj_mds=""
     local dir="$SAZO_CWD"
     while [ -n "$dir" ] && [ "$dir" != "/" ]; do
@@ -174,8 +176,10 @@ $candidate"
                 fi
             fi
         done
-        [ -n "$proj_mds" ] && break
-        dir=$(dirname "$dir")
+        local parent
+        parent=$(dirname "$dir")
+        [ "$parent" = "$dir" ] && break
+        dir="$parent"
     done
     [ -z "$proj_mds" ] && return 1
 

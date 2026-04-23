@@ -146,6 +146,20 @@ rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
     "{\"session_id\":\"w_append\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo foo >> tracked.txt\"}}")
 assert_exit 2 "$rc" "append redirection (>>) on main → block"
 
+# Codex V6 P1: git tag v1.2.3 (인자 있음)은 mutating
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w_tag1\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git tag v1.2.3\"}}")
+assert_exit 2 "$rc" "git tag v1.2.3 on main → block"
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w_tag2\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git tag -a foo -m bar\"}}")
+assert_exit 2 "$rc" "git tag -a (annotate) on main → block"
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w_tag3\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git tag -l\"}}")
+assert_exit 0 "$rc" "git tag -l (list) on main → pass (read-only)"
+
 # Codex V4 P2: stdout fd(1) redirect도 mutating
 rm -rf "$SAZO_STATE_DIR"
 rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
@@ -556,6 +570,28 @@ MDEOF
     [ "$rc" = "0" ]
 ) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
 rm -rf "$FAKE_GO_PROJECT"
+
+# Codex V6 P2: nested dir의 local CLAUDE.md에 CI 없어도 root-level에서 발견
+FAKE_NESTED_ROOT="/tmp/sazo-smoke-nested-$$"
+mkdir -p "$FAKE_NESTED_ROOT/sub"
+cat > "$FAKE_NESTED_ROOT/CLAUDE.md" <<'MDEOF'
+- Root CI: `yarn test && yarn build`
+MDEOF
+cat > "$FAKE_NESTED_ROOT/sub/CLAUDE.md" <<'MDEOF'
+# Subdirectory metadata — no CI entries
+MDEOF
+(
+    _is_full_ci_command_fn=$(awk '/^_is_full_ci_command\(\)/,/^}$/' "$HOOKS/workflow-state-machine.sh")
+    eval "$_is_full_ci_command_fn"
+    SAZO_CWD="$FAKE_NESTED_ROOT/sub"
+    if _is_full_ci_command "yarn test && yarn build"; then
+        echo "  ✓ upward walk continues past empty local metadata"
+        exit 0
+    fi
+    echo "  ✗ CI not found in root-level CLAUDE.md despite empty local"
+    exit 1
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+rm -rf "$FAKE_NESTED_ROOT"
 
 # Codex V5 P2: 경로에 공백 있어도 CI 매치
 FAKE_SPACE_PROJECT="/tmp/sazo smoke proj-$$"

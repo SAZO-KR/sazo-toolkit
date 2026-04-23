@@ -47,7 +47,15 @@ if [ "$SAZO_TOOL_NAME" = "Bash" ]; then
     cmd=$(echo "$SAZO_TOOL_INPUT" | jq -r '.command // ""')
     is_mutating=0
     # git mutating subcommands (word-bounded).
-    if echo "$cmd" | grep -qE '\bgit[[:space:]]+(commit|add|push|merge|rebase|reset|cherry-pick|stash|branch|restore|tag[[:space:]]+-|worktree[[:space:]]+(add|remove))'; then
+    if echo "$cmd" | grep -qE '\bgit[[:space:]]+(commit|add|push|merge|rebase|reset|cherry-pick|stash|branch|restore|worktree[[:space:]]+(add|remove))'; then
+        is_mutating=1
+    fi
+    # git tag: `git tag <name>` (non-dash arg → create) 및 `-a`/`-d`/`-f` 옵션은
+    # mutating. `git tag` 단독 / `-l` / `--list`는 read-only (Codex V6 P1).
+    if echo "$cmd" | grep -qE '\bgit[[:space:]]+tag[[:space:]]+[^-[:space:]]'; then
+        is_mutating=1
+    fi
+    if echo "$cmd" | grep -qE '\bgit[[:space:]]+tag[[:space:]]+-[adf]'; then
         is_mutating=1
     fi
     # switch/checkout: compound `&&|||;`로 split, **각 segment 독립 평가**.
