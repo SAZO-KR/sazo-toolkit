@@ -557,6 +557,53 @@ MDEOF
 ) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
 rm -rf "$FAKE_GO_PROJECT"
 
+# Codex V5 P2: 경로에 공백 있어도 CI 매치
+FAKE_SPACE_PROJECT="/tmp/sazo smoke proj-$$"
+mkdir -p "$FAKE_SPACE_PROJECT"
+cat > "$FAKE_SPACE_PROJECT/CLAUDE.md" <<'MDEOF'
+- CI: `yarn test && yarn build`
+MDEOF
+(
+    _is_full_ci_command_fn=$(awk '/^_is_full_ci_command\(\)/,/^}$/' "$HOOKS/workflow-state-machine.sh")
+    eval "$_is_full_ci_command_fn"
+    SAZO_CWD="$FAKE_SPACE_PROJECT"
+    if _is_full_ci_command "yarn test && yarn build"; then
+        echo "  ✓ CI match works with spaces in path"
+        exit 0
+    fi
+    echo "  ✗ CI match failed for path with spaces"
+    exit 1
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+rm -rf "$FAKE_SPACE_PROJECT"
+
+# Codex V5 P1: failed Task는 stage 마킹 안 함
+rm -rf "$SAZO_STATE_DIR"
+rc=$(echo '{"session_id":"task_fail","cwd":"/tmp","tool_name":"Task","tool_input":{"subagent_type":"code-reviewer"},"tool_response":{"is_error":true}}' \
+    | bash "$HOOKS/workflow-state-machine.sh" post >/dev/null 2>&1; echo $?)
+(
+    source "$HOOKS/lib/session-state.sh"
+    if stage_is_passed "task_fail" "review" "/tmp"; then
+        echo "  ✗ failed Task should NOT mark review stage"
+        exit 1
+    fi
+    echo "  ✓ failed Task (is_error=true) → stage not marked"
+    exit 0
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+
+# 성공 Task는 마킹
+rm -rf "$SAZO_STATE_DIR"
+echo '{"session_id":"task_ok","cwd":"/tmp","tool_name":"Task","tool_input":{"subagent_type":"code-reviewer"},"tool_response":{}}' \
+    | bash "$HOOKS/workflow-state-machine.sh" post >/dev/null 2>&1
+(
+    source "$HOOKS/lib/session-state.sh"
+    if stage_is_passed "task_ok" "review" "/tmp"; then
+        echo "  ✓ successful Task → stage marked"
+        exit 0
+    fi
+    echo "  ✗ successful Task should mark review stage"
+    exit 1
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+
 # Codex V4 P2: AGENTS.md-only repo CI 매치
 FAKE_AGENTS_PROJECT="/tmp/sazo-smoke-agents-$$"
 mkdir -p "$FAKE_AGENTS_PROJECT"

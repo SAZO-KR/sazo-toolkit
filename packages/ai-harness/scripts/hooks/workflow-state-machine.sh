@@ -93,6 +93,17 @@ EOF
 handle_post() {
     case "$SAZO_TOOL_NAME" in
         Task)
+            # Task 성공 여부 확인 — failed task는 stage 마킹 안 함 (Codex V5 P1).
+            # Claude Code PostToolUse payload의 tool_response에 is_error 또는
+            # interrupted=true면 실패. 둘 다 없는 경우(이전 스키마) subagent_type만
+            # 보고 진행.
+            local task_error task_interrupted
+            task_error=$(echo "$SAZO_TOOL_RESPONSE" | jq -r '.is_error // false' 2>/dev/null)
+            task_interrupted=$(echo "$SAZO_TOOL_RESPONSE" | jq -r '.interrupted // false' 2>/dev/null)
+            if [ "$task_error" = "true" ] || [ "$task_interrupted" = "true" ]; then
+                echo "[workflow] Task failed/interrupted — stage not marked" >&2
+                exit 0
+            fi
             local subagent_type
             subagent_type=$(echo "$SAZO_TOOL_INPUT" | jq -r '.subagent_type // ""')
             case "$subagent_type" in
@@ -148,16 +159,21 @@ _is_full_ci_command() {
     local proj_md=""
 
     # 1) SAZO_CWD부터 git root까지 upward walk. 각 level에서 CLAUDE.md와 AGENTS.md
-    # 둘 다 수집 (Codex V4 P2: 이전엔 break 2로 CLAUDE.md만 확인해 AGENTS.md-only repo
-    # false negative). 첫 hit에 break하지 않고 발견된 파일 전부 후보로.
+    # 둘 다 수집 (Codex V4 P2). 경로에 공백 포함 가능 — newline-delimited로
+    # 수집 후 while read로 iterate (Codex V5 P2: shell word-split 방지).
     local proj_mds=""
     local dir="$SAZO_CWD"
     while [ -n "$dir" ] && [ "$dir" != "/" ]; do
         for candidate in "$dir/CLAUDE.md" "$dir/AGENTS.md" "$dir/.claude/CLAUDE.md"; do
-            [ -f "$candidate" ] && proj_mds="$proj_mds $candidate"
+            if [ -f "$candidate" ]; then
+                if [ -z "$proj_mds" ]; then
+                    proj_mds="$candidate"
+                else
+                    proj_mds="$proj_mds
+$candidate"
+                fi
+            fi
         done
-        # upward walk는 root까지 계속 (서브디렉토리 CLAUDE.md + repo-level AGENTS.md
-        # 조합 커버). 다만 동일 레벨 둘 다 발견되면 둘 다 수집 후 진행.
         [ -n "$proj_mds" ] && break
         dir=$(dirname "$dir")
     done
@@ -167,7 +183,10 @@ _is_full_ci_command() {
     # 모든 백틱 토큰 허용 시 CLAUDE.md 본문의 `date`, `echo`, 파일 경로 등이
     # candidate가 되어 ci bypass 가능 (Codex round2 P1).
     local ci_cmds=""
-    for md in $proj_mds; do
+    # newline-iteration으로 경로 공백 안전. `$proj_mds`를 그대로 iterate하면
+    # shell word-split이 공백 포함 path를 쪼갬 (Codex V5 P2 fix).
+    while IFS= read -r md; do
+        [ -z "$md" ] && continue
         local md_cmds
         md_cmds=$(grep -oE '`[^`]+`' "$md" 2>/dev/null | sed 's/^`//;s/`$//' | awk '
             /&&/ { print; next }
@@ -179,7 +198,7 @@ _is_full_ci_command() {
         ')
         [ -n "$md_cmds" ] && ci_cmds="$ci_cmds
 $md_cmds"
-    done
+    done <<< "$proj_mds"
     ci_cmds=$(printf '%s' "$ci_cmds" | sed '/^$/d')
     [ -z "$ci_cmds" ] && return 1
 
