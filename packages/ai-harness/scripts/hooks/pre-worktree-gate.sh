@@ -28,8 +28,11 @@ fi
 
 state_init "$SAZO_SESSION_ID" "$SAZO_CWD" "$SAZO_MODEL"
 
-# 이미 worktree stage 통과/스킵됐으면 pass
-if stage_is_passed "$SAZO_SESSION_ID" "worktree"; then
+# 사용자 명시 skip (/skip worktree ...)만 early return. 자동 completed는 검사 반복 —
+# 한 번 pass 후 session 중 main으로 checkout해서 mutating tool 쓸 여지 차단.
+# (Codex V1 P1: early return이 session·cwd 단위 gate를 영구 disable)
+if stage_is_passed "$SAZO_SESSION_ID" "worktree" \
+   && [ "$(state_get "$SAZO_SESSION_ID" '[.history[] | select(.stage == "worktree")] | last.status')" = "skipped" ]; then
     exit 0
 fi
 
@@ -69,8 +72,10 @@ if [ "$SAZO_TOOL_NAME" = "Bash" ]; then
     if echo "$cmd" | grep -qE '\b(go|cargo)[[:space:]]+build\b'; then
         is_mutating=1
     fi
-    # shell redirection (write/append) — heuristic
-    if echo "$cmd" | grep -qE '[^<>&|]>[^>&]'; then
+    # shell redirection (write/append) — heuristic. `>`, `>>` 모두 match.
+    # Exclusion: `2>`, `&>`, fd redirect `N>` 등은 실제 write이지만 stderr 리디렉션이
+    # 더 흔해 false positive 회피 위해 앞 문자가 word character면 mutating 아님.
+    if echo "$cmd" | grep -qE '(^|[^<>&|0-9])>>?[^>&]'; then
         is_mutating=1
     fi
     # destructive fs ops

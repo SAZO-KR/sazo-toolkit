@@ -141,21 +141,27 @@ handle_post() {
     exit 0
 }
 
-# 프로젝트 CI 커맨드 정확 매치 검사. CLAUDE.md/AGENTS.md 표 안의 코드 펜스에서
-# 가장 긴 chained 커맨드를 추출해 비교. 부분 일치는 거부.
+# 프로젝트 CI 커맨드 정확 매치 검사. CLAUDE.md/AGENTS.md의 백틱 fenced 모든
+# 커맨드를 후보로 수집해 정확 매치 여부 판정.
 _is_full_ci_command() {
     local cmd="$1"
-    local proj_md
-    for candidate in "$SAZO_CWD/CLAUDE.md" "$SAZO_CWD/AGENTS.md" "$SAZO_CWD/.claude/CLAUDE.md"; do
-        [ -f "$candidate" ] && proj_md="$candidate" && break
-    done
-    [ -z "${proj_md:-}" ] && return 1
+    local proj_md=""
 
-    # CLAUDE.md backtick fenced 명령 중 `&&`가 ≥1개 들어있는 chained command 추출.
-    # (이전 V3는 ≥3 요구해 Go 패키지의 `cd dir && go build ./...` 같은 단일 && CI를
-    # 영구 false negative — V3 reviewer #4).
+    # 1) SAZO_CWD부터 git root까지 upward walk — subdirectory 실행 시 repo-level
+    # CI 정의를 찾도록 (Codex P2: CI matching only looks under SAZO_CWD).
+    local dir="$SAZO_CWD"
+    while [ -n "$dir" ] && [ "$dir" != "/" ]; do
+        for candidate in "$dir/CLAUDE.md" "$dir/AGENTS.md" "$dir/.claude/CLAUDE.md"; do
+            [ -f "$candidate" ] && proj_md="$candidate" && break 2
+        done
+        dir=$(dirname "$dir")
+    done
+    [ -z "$proj_md" ] && return 1
+
+    # 2) 백틱 fenced 명령 **모두** 추출 (단일 커맨드 포함). 이전엔 `&&`≥1 요구해
+    # `bash -n scripts/*.sh` 같은 단일 CI를 영구 false negative (Gemini high).
     local ci_cmds
-    ci_cmds=$(grep -oE '`[^`]+&&[^`]+`' "$proj_md" 2>/dev/null | sed 's/^`//;s/`$//')
+    ci_cmds=$(grep -oE '`[^`]+`' "$proj_md" 2>/dev/null | sed 's/^`//;s/`$//')
     [ -z "$ci_cmds" ] && return 1
 
     # 정확 매치만 인정. substring 매치는 `echo 'CHAIN' && malicious` 같은 prefix

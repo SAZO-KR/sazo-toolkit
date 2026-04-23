@@ -35,11 +35,21 @@ workflow_hooks_enabled() {
 
 cwd_hash() {
     local cwd="$1"
-    # short hash to avoid filename length issues; collisions extremely unlikely per session
+    # short hash to avoid filename length issues; collisions extremely unlikely per session.
+    # shasum: macOS. sha1sum: Linux minimal install. md5sum 마지막 fallback.
     if [ -z "$cwd" ]; then
         echo "nocwd"
-    else
+        return
+    fi
+    if command -v shasum >/dev/null 2>&1; then
         printf '%s' "$cwd" | shasum -a 1 | cut -c1-12
+    elif command -v sha1sum >/dev/null 2>&1; then
+        printf '%s' "$cwd" | sha1sum | cut -c1-12
+    elif command -v md5sum >/dev/null 2>&1; then
+        printf '%s' "$cwd" | md5sum | cut -c1-12
+    else
+        # last resort: cwd를 그대로 사용 (slash를 underscore로 replace)
+        printf '%s' "$cwd" | tr '/' '_' | cut -c1-40
     fi
 }
 

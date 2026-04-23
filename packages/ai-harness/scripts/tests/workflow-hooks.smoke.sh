@@ -140,6 +140,29 @@ rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
     "{\"session_id\":\"w10\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git switch -f --detach abc123\"}}")
 assert_exit 0 "$rc" "git switch -f --detach (flags before --detach) → pass"
 
+# Codex P2: append redirection (>>) 도 mutating으로 잡혀야
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w_append\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo foo >> tracked.txt\"}}")
+assert_exit 2 "$rc" "append redirection (>>) on main → block"
+
+# Codex P1: worktree gate auto-completed 이후에도 main branch 재검사
+rm -rf "$SAZO_STATE_DIR"
+# 1회차: non-protected 통과 → state에 worktree completed 기록됨
+FEATURE_WT="/tmp/sazo-smoke-feature-$$"
+git worktree add -b smoke-feature "$FEATURE_WT" >/dev/null 2>&1
+(cd "$FEATURE_WT" && git commit --allow-empty -m feature -q)
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w_recheck\",\"cwd\":\"$FEATURE_WT\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/x\"}}")
+# feature branch에선 pass
+if [ "$rc" = "0" ]; then echo "  (setup: feature write passed)"; fi
+# 2회차: same session, main repo로 이동. stage marker auto-completed 있어도 재검사해야
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w_recheck\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m x\"}}")
+assert_exit 2 "$rc" "recheck after auto-completed: main commit → block"
+# cleanup
+git worktree remove --force "$FEATURE_WT" >/dev/null 2>&1
+
 # V6 reviewer #1: pass 케이스에서 hook stderr 비어 있어야 함 (`local: can only be used in a function` 같은 노이즈 차단)
 rm -rf "$SAZO_STATE_DIR"
 err=$(capture_stderr "$HOOKS/pre-worktree-gate.sh" "" \
