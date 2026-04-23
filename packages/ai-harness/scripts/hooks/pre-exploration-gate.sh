@@ -57,9 +57,20 @@ fi
 
 state_init "$SAZO_SESSION_ID" "$SAZO_CWD" "$SAZO_MODEL"
 
-# 1회 override — 카운트도 증가시키지 않음 (env가 지속될 수 있어 무한 카운트 방지)
+# 1회 override. env는 session 내내 유지되는 문제 있어 state 파일에 consumption
+# 기록 — 사용 후 같은 env 값으로 재호출하면 거부 (Codex V9 P2 one-shot).
+# 다시 override하려면 /skip 경로나 전체 hook 비활성 env 사용.
 if [ "${SAZO_ALLOW_GREP_ONCE:-0}" = "1" ]; then
-    exit 0
+    ONCE_USED=$(state_get "$SAZO_SESSION_ID" '.grep_once_consumed' 2>/dev/null)
+    if [ -z "$ONCE_USED" ] || [ "$ONCE_USED" = "null" ] || [ "$ONCE_USED" = "0" ]; then
+        state_set_json "$SAZO_SESSION_ID" ".grep_once_consumed" "true"
+        exit 0
+    fi
+    cat >&2 <<EOF
+[explore-gate] SAZO_ALLOW_GREP_ONCE 이미 이번 세션에서 사용됨 — one-shot 소진.
+계속 우회하려면 SAZO_SKIP_EXPLORE_GATE=1 (세션 비활성) 고려.
+EOF
+    # 소진됐으므로 normal gate flow로 진행 (exit 하지 않음) — 아래 counter 로직 적용.
 fi
 
 state_increment "$SAZO_SESSION_ID" ".explore_count"

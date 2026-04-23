@@ -235,6 +235,19 @@ for i in 1 2 3 4; do
     fi
 done
 
+# Codex V9 P2: SAZO_ALLOW_GREP_ONCE one-shot 소진
+rm -rf "$SAZO_STATE_DIR"
+for _ in 1 2 3 4; do
+    run_hook "$HOOKS/pre-exploration-gate.sh" "" \
+        '{"session_id":"once","cwd":"/tmp","tool_name":"Grep","tool_input":{"pattern":"foo"},"model":"claude-opus-4-7"}' >/dev/null
+done
+rc=$(SAZO_ALLOW_GREP_ONCE=1 run_hook "$HOOKS/pre-exploration-gate.sh" "" \
+    '{"session_id":"once","cwd":"/tmp","tool_name":"Grep","tool_input":{"pattern":"foo"},"model":"claude-opus-4-7"}')
+assert_exit 0 "$rc" "GREP_ONCE first use → bypass"
+rc=$(SAZO_ALLOW_GREP_ONCE=1 run_hook "$HOOKS/pre-exploration-gate.sh" "" \
+    '{"session_id":"once","cwd":"/tmp","tool_name":"Grep","tool_input":{"pattern":"foo"},"model":"claude-opus-4-7"}')
+assert_exit 2 "$rc" "GREP_ONCE consumed → block (not infinite bypass)"
+
 # git grep should also trigger
 rm -rf "$SAZO_STATE_DIR"
 rc=$(run_hook "$HOOKS/pre-exploration-gate.sh" "" \

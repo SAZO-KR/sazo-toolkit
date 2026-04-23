@@ -283,22 +283,26 @@ handle_pre() {
     local rc
     case "$SAZO_TOOL_NAME" in
         Write|Edit|NotebookEdit)
-            # research — soft warn (3회 후 block)
+            # Gate는 **첫 번째 unmet stage만 평가**. research/plan 동시 counter 증가
+            # 방지 — research 3회 warn 후 research 완료하면 plan도 이미 소진돼 즉시
+            # block되는 staged-recovery 깨짐 (Codex V9 P1).
             if ! stage_is_passed "$SAZO_SESSION_ID" "research"; then
                 soft_warn_or_block "research" "리서치 subagent 위임 권장.
   Task(subagent_type=\"code-searcher\", ...) 또는 Task(subagent_type=\"docs-researcher\", ...)
 파일/라인 직접 지정됐으면: /skip research <reason>"
                 rc=$?
                 [ "$rc" = "2" ] && exit 2
+                exit 0
             fi
 
-            # plan — soft warn (3회 후 block)
+            # plan — soft warn (3회 후 block). research 통과 후에만 평가.
             if ! stage_is_passed "$SAZO_SESSION_ID" "plan"; then
                 soft_warn_or_block "plan" "플랜 제시 권장.
   Task(subagent_type=\"plan-drafter\", ...) 또는 plan 메시지 + 사용자 승인
 ≤5줄 단일파일 typo 수정: /skip plan <reason>"
                 rc=$?
                 [ "$rc" = "2" ] && exit 2
+                exit 0
             fi
 
             # approval — 항상 soft warn (architecturally unenforceable)
