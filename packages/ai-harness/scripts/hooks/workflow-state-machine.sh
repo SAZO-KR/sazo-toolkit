@@ -158,10 +158,20 @@ _is_full_ci_command() {
     done
     [ -z "$proj_md" ] && return 1
 
-    # 2) 백틱 fenced 명령 **모두** 추출 (단일 커맨드 포함). 이전엔 `&&`≥1 요구해
-    # `bash -n scripts/*.sh` 같은 단일 CI를 영구 false negative (Gemini high).
+    # 2) 백틱 fenced 중 CI-verb 포함 or chained command만 후보로 제한.
+    # 모든 백틱 토큰 허용 시 CLAUDE.md 본문의 `date`, `echo`, 파일 경로 등이
+    # candidate가 되어 ci bypass 가능 (Codex round2 P1).
+    # Whitelist verbs: test/build/lint/check/validate/verify/tsc/go/yarn/npm/pnpm/
+    # pytest/cargo/make/bash -n (shell script syntax check).
     local ci_cmds
-    ci_cmds=$(grep -oE '`[^`]+`' "$proj_md" 2>/dev/null | sed 's/^`//;s/`$//')
+    ci_cmds=$(grep -oE '`[^`]+`' "$proj_md" 2>/dev/null | sed 's/^`//;s/`$//' | awk '
+        /&&/ { print; next }
+        /(^|[[:space:]])(test|build|lint|type-check|typecheck|check|validate|verify|tsc|pytest)([[:space:]]|$)/ { print; next }
+        /\b(go|cargo)[[:space:]]+(test|build|vet|check)\b/ { print; next }
+        /\b(yarn|npm|pnpm|npx)[[:space:]]+/ { print; next }
+        /\bmake[[:space:]]+/ { print; next }
+        /\bbash[[:space:]]+-n\b/ { print; next }
+    ')
     [ -z "$ci_cmds" ] && return 1
 
     # 정확 매치만 인정. substring 매치는 `echo 'CHAIN' && malicious` 같은 prefix

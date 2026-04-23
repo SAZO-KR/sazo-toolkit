@@ -481,6 +481,44 @@ rm -rf "$SAZO_STATE_DIR"
 ) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
 
 echo ""
+echo "=== CI command whitelist (Codex round2 P1) ==="
+
+# CLAUDE.md 본문의 non-CI 백틱 토큰(date, echo 등)이 _is_full_ci_command에
+# 매치되면 안 됨. 임시 CLAUDE.md 생성 후 검증.
+FAKE_PROJECT="/tmp/sazo-smoke-proj-$$"
+mkdir -p "$FAKE_PROJECT"
+cat > "$FAKE_PROJECT/CLAUDE.md" <<'MDEOF'
+# Fake project
+
+- 허용된 명령: `date`, `echo`, `/some/path`
+- CI 검증: `bash -n scripts/*.sh && bash -n other.sh`
+- Go 패키지: `go build ./...`
+- Node: `yarn test`
+MDEOF
+
+(
+    _is_full_ci_command_fn=$(awk '/^_is_full_ci_command\(\)/,/^}$/' "$HOOKS/workflow-state-machine.sh")
+    eval "$_is_full_ci_command_fn"
+    SAZO_CWD="$FAKE_PROJECT"
+
+    rc=0
+    _is_full_ci_command "date" && { echo "  ✗ 'date' matched (bypass risk)"; rc=1; }
+    _is_full_ci_command "echo foo" && { echo "  ✗ 'echo foo' matched"; rc=1; }
+    _is_full_ci_command "/some/path" && { echo "  ✗ bare path matched"; rc=1; }
+    [ "$rc" = "0" ] && echo "  ✓ non-CI tokens (date/echo/path) rejected"
+
+    rc2=0
+    _is_full_ci_command "bash -n scripts/*.sh && bash -n other.sh" || { echo "  ✗ chained CI not matched"; rc2=1; }
+    _is_full_ci_command "go build ./..." || { echo "  ✗ go build not matched"; rc2=1; }
+    _is_full_ci_command "yarn test" || { echo "  ✗ yarn test not matched"; rc2=1; }
+    [ "$rc2" = "0" ] && echo "  ✓ whitelisted CI commands accepted"
+
+    [ "$rc" = "0" ] && [ "$rc2" = "0" ]
+) && PASS=$((PASS + 2)) || FAIL=$((FAIL + 2))
+
+rm -rf "$FAKE_PROJECT"
+
+echo ""
 echo "=== register-workflow-hooks idempotency ==="
 
 TMP_SETTINGS=$(mktemp)
