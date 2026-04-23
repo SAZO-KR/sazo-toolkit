@@ -146,6 +146,16 @@ rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
     "{\"session_id\":\"w_append\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo foo >> tracked.txt\"}}")
 assert_exit 2 "$rc" "append redirection (>>) on main → block"
 
+# Codex V8 P1: touch/mkdir/ln 파일 생성은 mutating
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w_touch\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"touch file\"}}")
+assert_exit 2 "$rc" "touch file on main → block"
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w_mkdir\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir newdir\"}}")
+assert_exit 2 "$rc" "mkdir on main → block"
+
 # Codex V6 P1: git tag v1.2.3 (인자 있음)은 mutating
 rm -rf "$SAZO_STATE_DIR"
 rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
@@ -570,6 +580,31 @@ MDEOF
     [ "$rc" = "0" ]
 ) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
 rm -rf "$FAKE_GO_PROJECT"
+
+# Codex V8 P1: monorepo package scope — 다른 package CI는 현재 package 통과시키지 않음
+FAKE_MONO="/tmp/sazo-smoke-mono-$$"
+mkdir -p "$FAKE_MONO/packages/a" "$FAKE_MONO/packages/b"
+(cd "$FAKE_MONO" && git init -q -b main 2>/dev/null && git config user.email a@b && git config user.name a && git commit -q --allow-empty -m init 2>/dev/null)
+cat > "$FAKE_MONO/CLAUDE.md" <<'MDEOF'
+| package | CI |
+|---|---|
+| a | `cd packages/a && yarn test` |
+| b | `cd packages/b && go build ./...` |
+MDEOF
+(
+    _is_full_ci_command_fn=$(awk '/^_is_full_ci_command\(\)/,/^}$/' "$HOOKS/workflow-state-machine.sh")
+    eval "$_is_full_ci_command_fn"
+    # In packages/a: package b의 CI는 거부
+    SAZO_CWD="$FAKE_MONO/packages/a"
+    _is_full_ci_command "cd packages/a && yarn test" || { echo "  ✗ pkg a CI should match from pkg a"; exit 1; }
+    if _is_full_ci_command "cd packages/b && go build ./..."; then
+        echo "  ✗ pkg b CI leaked into pkg a"
+        exit 1
+    fi
+    echo "  ✓ monorepo package scope: other pkg CI rejected"
+    exit 0
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+rm -rf "$FAKE_MONO"
 
 # Codex V7 P1: repo boundary 바깥 CI metadata 무시
 FAKE_ANCESTOR="/tmp/sazo-smoke-ancestor-$$"

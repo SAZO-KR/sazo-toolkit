@@ -221,6 +221,34 @@ $md_cmds"
     ci_cmds=$(printf '%s' "$ci_cmds" | sed '/^$/d')
     [ -z "$ci_cmds" ] && return 1
 
+    # Package scope 필터: SAZO_CWD가 `packages/X/` 내부면 X와 관련된 CI 커맨드만
+    # 후보로. 다른 package의 CI가 현재 package의 ci stage 통과시키는 bypass 차단
+    # (Codex V8 P1: 모노레포 root CLAUDE.md에 package별 CI 여러 개 나열된 케이스).
+    local pkg_name=""
+    case "$cwd_real" in
+        */packages/*)
+            pkg_name=$(printf '%s' "$cwd_real" | sed -E 's|.*/packages/([^/]+).*|\1|')
+            ;;
+    esac
+    if [ -n "$pkg_name" ]; then
+        # 다른 package 경로 (packages/<other>) 포함 cmd 제외. 현재 pkg 경로 포함하거나
+        # 어떤 packages/ 경로도 참조하지 않는 cmd는 유지.
+        local filtered=""
+        while IFS= read -r ci_cmd; do
+            [ -z "$ci_cmd" ] && continue
+            # cmd가 packages/<X>를 참조하는데 현재 pkg이 아니면 제외
+            if echo "$ci_cmd" | grep -qE "packages/[^/[:space:]]+"; then
+                if ! echo "$ci_cmd" | grep -qE "packages/${pkg_name}([/[:space:]&|;]|$)"; then
+                    continue
+                fi
+            fi
+            filtered="$filtered
+$ci_cmd"
+        done <<< "$ci_cmds"
+        ci_cmds=$(printf '%s' "$filtered" | sed '/^$/d')
+        [ -z "$ci_cmds" ] && return 1
+    fi
+
     # 정확 매치 우선. 더불어 `{placeholder}` 템플릿 지원 — 예:
     # `cd packages/{name} && go build ./...` → 실제 호출 `cd packages/translate-bot && go build ./...`
     # 매치 (Codex V3 P2). 단 `{`/`}` 없는 명령은 literal 비교만 유지 (prefix

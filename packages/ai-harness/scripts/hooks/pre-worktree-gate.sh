@@ -93,6 +93,12 @@ if [ "$SAZO_TOOL_NAME" = "Bash" ]; then
     if echo "$cmd" | grep -qE '\b(rm|mv)\b[[:space:]]+(-[a-zA-Z]+[[:space:]]+)*[^[:space:]]'; then
         is_mutating=1
     fi
+    # file creation / mtime 변경 (Codex V8 P1). `touch`, `mkdir`, `ln` 파일/디렉토리/
+    # symlink 생성. 이전엔 read-only 사용 가능성으로 제외했으나 실제 mutating이 맞고
+    # 보호 브랜치에서 이들 사용하는 정당한 read-only 시나리오 없음.
+    if echo "$cmd" | grep -qE '\b(touch|mkdir|ln)\b[[:space:]]+'; then
+        is_mutating=1
+    fi
     [ "$is_mutating" = "0" ] && exit 0
 fi
 
