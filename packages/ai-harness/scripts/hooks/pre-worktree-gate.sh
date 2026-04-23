@@ -75,10 +75,10 @@ if [ "$SAZO_TOOL_NAME" = "Bash" ]; then
     if echo "$cmd" | grep -qE '\b(go|cargo)[[:space:]]+build\b'; then
         is_mutating=1
     fi
-    # shell redirection (write/append) — heuristic. `>`, `>>` 모두 match.
-    # Exclusion: `2>`, `&>`, fd redirect `N>` 등은 실제 write이지만 stderr 리디렉션이
-    # 더 흔해 false positive 회피 위해 앞 문자가 word character면 mutating 아님.
-    if echo "$cmd" | grep -qE '(^|[^<>&|0-9])>>?[^>&]'; then
+    # shell redirection (write/append). `>`, `>>`, `1>`, `1>>` 전부 매치.
+    # stdout fd(1) 명시 redirect도 실제 write (Codex V4 P2). stderr(`2>`) 등 다른
+    # fd는 `2>/dev/null` 흔한 패턴 때문에 제외.
+    if echo "$cmd" | grep -qE '(^|[^<>&|0-9])1?>>?[^>&]'; then
         is_mutating=1
     fi
     # destructive fs ops

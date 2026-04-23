@@ -146,6 +146,22 @@ rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
     "{\"session_id\":\"w_append\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo foo >> tracked.txt\"}}")
 assert_exit 2 "$rc" "append redirection (>>) on main → block"
 
+# Codex V4 P2: stdout fd(1) redirect도 mutating
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w_fd1\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo foo 1>tracked.txt\"}}")
+assert_exit 2 "$rc" "1> redirect on main → block"
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w_fd1a\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"printf x 1>>tracked.txt\"}}")
+assert_exit 2 "$rc" "1>> redirect on main → block"
+
+# stderr fd(2) redirect는 mutating 아님 (2>/dev/null 흔한 패턴)
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w_fd2\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"grep foo bar 2>/dev/null\"}}")
+assert_exit 0 "$rc" "2>/dev/null on main → pass (not mutating)"
+
 # Codex P1: worktree gate auto-completed 이후에도 main branch 재검사
 rm -rf "$SAZO_STATE_DIR"
 # 1회차: non-protected 통과 → state에 worktree completed 기록됨
@@ -540,6 +556,26 @@ MDEOF
     [ "$rc" = "0" ]
 ) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
 rm -rf "$FAKE_GO_PROJECT"
+
+# Codex V4 P2: AGENTS.md-only repo CI 매치
+FAKE_AGENTS_PROJECT="/tmp/sazo-smoke-agents-$$"
+mkdir -p "$FAKE_AGENTS_PROJECT"
+cat > "$FAKE_AGENTS_PROJECT/AGENTS.md" <<'MDEOF'
+# Agents-only project
+- CI: `yarn lint && yarn test`
+MDEOF
+(
+    _is_full_ci_command_fn=$(awk '/^_is_full_ci_command\(\)/,/^}$/' "$HOOKS/workflow-state-machine.sh")
+    eval "$_is_full_ci_command_fn"
+    SAZO_CWD="$FAKE_AGENTS_PROJECT"
+    if _is_full_ci_command "yarn lint && yarn test"; then
+        echo "  ✓ AGENTS.md-only CI matched"
+        exit 0
+    fi
+    echo "  ✗ AGENTS.md-only CI should match"
+    exit 1
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+rm -rf "$FAKE_AGENTS_PROJECT"
 
 # V3 Codex P1: worktree fast-path은 by=user만
 rm -rf "$SAZO_STATE_DIR"

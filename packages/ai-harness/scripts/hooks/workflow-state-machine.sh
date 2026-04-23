@@ -147,31 +147,40 @@ _is_full_ci_command() {
     local cmd="$1"
     local proj_md=""
 
-    # 1) SAZO_CWD부터 git root까지 upward walk — subdirectory 실행 시 repo-level
-    # CI 정의를 찾도록 (Codex P2: CI matching only looks under SAZO_CWD).
+    # 1) SAZO_CWD부터 git root까지 upward walk. 각 level에서 CLAUDE.md와 AGENTS.md
+    # 둘 다 수집 (Codex V4 P2: 이전엔 break 2로 CLAUDE.md만 확인해 AGENTS.md-only repo
+    # false negative). 첫 hit에 break하지 않고 발견된 파일 전부 후보로.
+    local proj_mds=""
     local dir="$SAZO_CWD"
     while [ -n "$dir" ] && [ "$dir" != "/" ]; do
         for candidate in "$dir/CLAUDE.md" "$dir/AGENTS.md" "$dir/.claude/CLAUDE.md"; do
-            [ -f "$candidate" ] && proj_md="$candidate" && break 2
+            [ -f "$candidate" ] && proj_mds="$proj_mds $candidate"
         done
+        # upward walk는 root까지 계속 (서브디렉토리 CLAUDE.md + repo-level AGENTS.md
+        # 조합 커버). 다만 동일 레벨 둘 다 발견되면 둘 다 수집 후 진행.
+        [ -n "$proj_mds" ] && break
         dir=$(dirname "$dir")
     done
-    [ -z "$proj_md" ] && return 1
+    [ -z "$proj_mds" ] && return 1
 
-    # 2) 백틱 fenced 중 CI-verb 포함 or chained command만 후보로 제한.
+    # 2) 수집된 모든 proj_md에서 백틱 fenced 중 CI-verb 포함 or chained command 추출.
     # 모든 백틱 토큰 허용 시 CLAUDE.md 본문의 `date`, `echo`, 파일 경로 등이
     # candidate가 되어 ci bypass 가능 (Codex round2 P1).
-    # Whitelist verbs: test/build/lint/check/validate/verify/tsc/go/yarn/npm/pnpm/
-    # pytest/cargo/make/bash -n (shell script syntax check).
-    local ci_cmds
-    ci_cmds=$(grep -oE '`[^`]+`' "$proj_md" 2>/dev/null | sed 's/^`//;s/`$//' | awk '
-        /&&/ { print; next }
-        /(^|[[:space:]])(test|build|lint|type-check|typecheck|check|validate|verify|tsc|pytest)([[:space:]]|$)/ { print; next }
-        /\b(go|cargo)[[:space:]]+(test|build|vet|check)\b/ { print; next }
-        /\b(yarn|npm|pnpm|npx)[[:space:]]+/ { print; next }
-        /\bmake[[:space:]]+/ { print; next }
-        /\bbash[[:space:]]+-n\b/ { print; next }
-    ')
+    local ci_cmds=""
+    for md in $proj_mds; do
+        local md_cmds
+        md_cmds=$(grep -oE '`[^`]+`' "$md" 2>/dev/null | sed 's/^`//;s/`$//' | awk '
+            /&&/ { print; next }
+            /(^|[[:space:]])(test|build|lint|type-check|typecheck|check|validate|verify|tsc|pytest)([[:space:]]|$)/ { print; next }
+            /\b(go|cargo)[[:space:]]+(test|build|vet|check)\b/ { print; next }
+            /\b(yarn|npm|pnpm|npx)[[:space:]]+/ { print; next }
+            /\bmake[[:space:]]+/ { print; next }
+            /\bbash[[:space:]]+-n\b/ { print; next }
+        ')
+        [ -n "$md_cmds" ] && ci_cmds="$ci_cmds
+$md_cmds"
+    done
+    ci_cmds=$(printf '%s' "$ci_cmds" | sed '/^$/d')
     [ -z "$ci_cmds" ] && return 1
 
     # 정확 매치 우선. 더불어 `{placeholder}` 템플릿 지원 — 예:
