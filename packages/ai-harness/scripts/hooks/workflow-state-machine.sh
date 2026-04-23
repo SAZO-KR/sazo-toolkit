@@ -174,12 +174,29 @@ _is_full_ci_command() {
     ')
     [ -z "$ci_cmds" ] && return 1
 
-    # 정확 매치만 인정. substring 매치는 `echo 'CHAIN' && malicious` 같은 prefix
-    # injection이 가능해 거부 (code-reviewer V2 M3).
+    # 정확 매치 우선. 더불어 `{placeholder}` 템플릿 지원 — 예:
+    # `cd packages/{name} && go build ./...` → 실제 호출 `cd packages/translate-bot && go build ./...`
+    # 매치 (Codex V3 P2). 단 `{`/`}` 없는 명령은 literal 비교만 유지 (prefix
+    # injection 차단 V2 M3 유지).
     while IFS= read -r ci_cmd; do
         [ -z "$ci_cmd" ] && continue
         if [ "$cmd" = "$ci_cmd" ]; then
             return 0
+        fi
+        # 템플릿 포함 시 regex 매치. 각 `{name}` → `[^/[:space:]&|;]+` (단일 토큰).
+        # 순서: placeholder를 임시 마커로 치환 → 다른 regex 메타문자 escape →
+        # 마커를 token class로 복구. placeholder를 먼저 escape하면 `\{` `\}`가 되어
+        # 복구 매치가 실패함.
+        if echo "$ci_cmd" | grep -q '{[^}]*}'; then
+            regex=$(printf '%s' "$ci_cmd" | awk '{
+                gsub(/\{[^}]*\}/, "\001MARK\001")
+                gsub(/[\\.^$*+?()\[\]|]/, "\\\\&")
+                gsub(/\001MARK\001/, "[^/[:space:]\\&|;]+")
+                print
+            }')
+            if echo "$cmd" | grep -qE "^${regex}$"; then
+                return 0
+            fi
         fi
     done <<< "$ci_cmds"
     return 1

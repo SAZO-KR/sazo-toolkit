@@ -516,6 +516,58 @@ MDEOF
     [ "$rc" = "0" ] && [ "$rc2" = "0" ]
 ) && PASS=$((PASS + 2)) || FAIL=$((FAIL + 2))
 
+# V3 Codex P2: {placeholder} 템플릿 CI 매치
+FAKE_GO_PROJECT="/tmp/sazo-smoke-goproj-$$"
+mkdir -p "$FAKE_GO_PROJECT"
+cat > "$FAKE_GO_PROJECT/CLAUDE.md" <<'MDEOF'
+# Go multi-package
+
+| 패키지 | 검증 |
+|---|---|
+| Go packages | `cd packages/{name} && go build ./...` |
+MDEOF
+(
+    _is_full_ci_command_fn=$(awk '/^_is_full_ci_command\(\)/,/^}$/' "$HOOKS/workflow-state-machine.sh")
+    eval "$_is_full_ci_command_fn"
+    SAZO_CWD="$FAKE_GO_PROJECT"
+
+    rc=0
+    _is_full_ci_command "cd packages/translate-bot && go build ./..." || { echo "  ✗ templated CI not matched"; rc=1; }
+    _is_full_ci_command "cd packages/shuffle-bot && go build ./..." || { echo "  ✗ templated (different name) not matched"; rc=1; }
+    # subpath escape 시도 — `/` 포함 → placeholder 매치 차단
+    _is_full_ci_command "cd packages/foo/bar && go build ./..." && { echo "  ✗ subpath escape should fail"; rc=1; }
+    [ "$rc" = "0" ] && echo "  ✓ {placeholder} template CI matching works"
+    [ "$rc" = "0" ]
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+rm -rf "$FAKE_GO_PROJECT"
+
+# V3 Codex P1: worktree fast-path은 by=user만
+rm -rf "$SAZO_STATE_DIR"
+(
+    source "$HOOKS/lib/session-state.sh"
+    state_init "wt_fastpath" "/tmp" "opus"
+    # by=auto skipped (non-git repo 케이스 시뮬)
+    stage_mark "wt_fastpath" "worktree" "skipped" "auto" "not a git repo" "/tmp"
+
+    LAST_WT_STATUS=$(state_get "wt_fastpath" '[.history[] | select(.stage == "worktree")] | last.status' "/tmp")
+    LAST_WT_BY=$(state_get "wt_fastpath" '[.history[] | select(.stage == "worktree")] | last.by' "/tmp")
+    if [ "$LAST_WT_STATUS" = "skipped" ] && [ "$LAST_WT_BY" = "user" ]; then
+        echo "  ✗ by=auto skipped should NOT hit fast-path"
+        exit 1
+    fi
+    echo "  ✓ by=auto skipped rejected for fast-path"
+
+    # by=user skipped → fast-path 적용
+    stage_mark "wt_fastpath2" "worktree" "skipped" "user" "/skip worktree manual" "/tmp"
+    LAST_WT_STATUS=$(state_get "wt_fastpath2" '[.history[] | select(.stage == "worktree")] | last.status' "/tmp")
+    LAST_WT_BY=$(state_get "wt_fastpath2" '[.history[] | select(.stage == "worktree")] | last.by' "/tmp")
+    if [ "$LAST_WT_STATUS" = "skipped" ] && [ "$LAST_WT_BY" = "user" ]; then
+        echo "  ✓ by=user skipped hits fast-path"
+        exit 0
+    fi
+    exit 1
+) && PASS=$((PASS + 2)) || FAIL=$((FAIL + 2))
+
 rm -rf "$FAKE_PROJECT"
 
 echo ""

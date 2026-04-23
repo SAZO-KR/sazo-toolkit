@@ -31,8 +31,11 @@ state_init "$SAZO_SESSION_ID" "$SAZO_CWD" "$SAZO_MODEL"
 # 사용자 명시 skip (/skip worktree ...)만 early return. 자동 completed는 검사 반복 —
 # 한 번 pass 후 session 중 main으로 checkout해서 mutating tool 쓸 여지 차단.
 # (Codex V1 P1: early return이 session·cwd 단위 gate를 영구 disable)
-if stage_is_passed "$SAZO_SESSION_ID" "worktree" \
-   && [ "$(state_get "$SAZO_SESSION_ID" '[.history[] | select(.stage == "worktree")] | last.status')" = "skipped" ]; then
+# 추가 가드: by=auto skip(non-git repo 경로)도 fast-path 대상 아님 — non-git dir에서
+# git init 후 main에서 mutating tool 시 bypass 방지 (Codex V3 P1).
+LAST_WT_STATUS=$(state_get "$SAZO_SESSION_ID" '[.history[] | select(.stage == "worktree")] | last.status')
+LAST_WT_BY=$(state_get "$SAZO_SESSION_ID" '[.history[] | select(.stage == "worktree")] | last.by')
+if [ "$LAST_WT_STATUS" = "skipped" ] && [ "$LAST_WT_BY" = "user" ]; then
     exit 0
 fi
 
