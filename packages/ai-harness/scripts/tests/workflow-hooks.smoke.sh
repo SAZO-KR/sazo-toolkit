@@ -1,0 +1,504 @@
+#!/bin/bash
+# workflow-hooks.smoke.sh — workflow enforcement hooks 통합 smoke test.
+# 격리된 SAZO_STATE_DIR + 임시 git repo로 실 환경 영향 없음.
+
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HARNESS="$(cd "$HERE/../.." && pwd)"
+HOOKS="$HARNESS/scripts/hooks"
+
+# 공통 환경
+export SAZO_WORKFLOW_HOOKS_ENABLED=1   # opt-in으로 hook 활성
+export SAZO_STATE_DIR="/tmp/sazo-workflow-smoke-$$"
+TMP_REPO="/tmp/sazo-smoke-repo-$$"
+TMP_WT="/tmp/sazo-smoke-worktree-$$"
+
+cleanup() {
+    rm -rf "$SAZO_STATE_DIR" "$TMP_REPO" "$TMP_WT"
+}
+trap cleanup EXIT
+
+mkdir -p "$TMP_REPO"
+(
+    cd "$TMP_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    git commit -q --allow-empty -m "init"
+)
+
+FAIL=0
+PASS=0
+
+assert_exit() {
+    local expected="$1" actual="$2" label="$3"
+    if [ "$actual" = "$expected" ]; then
+        PASS=$((PASS + 1))
+        echo "  ✓ $label"
+    else
+        FAIL=$((FAIL + 1))
+        echo "  ✗ $label (expected exit=$expected, got $actual)"
+    fi
+}
+
+run_hook() {
+    local hook_script="$1" mode="${2:-}" payload="$3"
+    local rc
+    if [ -n "$mode" ]; then
+        echo "$payload" | bash "$hook_script" "$mode" >/dev/null 2>&1
+    else
+        echo "$payload" | bash "$hook_script" >/dev/null 2>&1
+    fi
+    rc=$?
+    echo "$rc"
+}
+
+# stderr 캡처 — pass 케이스에서 unexpected error 없는지 검증
+capture_stderr() {
+    local hook_script="$1" mode="${2:-}" payload="$3"
+    if [ -n "$mode" ]; then
+        echo "$payload" | bash "$hook_script" "$mode" 2>&1 >/dev/null
+    else
+        echo "$payload" | bash "$hook_script" 2>&1 >/dev/null
+    fi
+}
+
+# ============================================================
+echo "=== opt-in flag ==="
+
+# Without SAZO_WORKFLOW_HOOKS_ENABLED, all hooks pass
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED= run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"o1\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/x\"}}")
+assert_exit 0 "$rc" "opt-out: pre-worktree-gate passes"
+
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED= run_hook "$HOOKS/workflow-state-machine.sh" "pre" \
+    "{\"session_id\":\"o2\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/x\"}}")
+assert_exit 0 "$rc" "opt-out: state-machine passes"
+
+# ============================================================
+echo ""
+echo "=== pre-worktree-gate ==="
+
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    '{"session_id":"w0","cwd":"/tmp","tool_name":"Write","tool_input":{"file_path":"/tmp/x"}}')
+assert_exit 0 "$rc" "non-git cwd → pass"
+
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w1\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/x\"}}")
+assert_exit 2 "$rc" "main branch Write → block"
+
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w2\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls -la\"}}")
+assert_exit 0 "$rc" "read-only Bash on main → pass"
+
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w3\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cp /tmp/a /tmp/b\"}}")
+assert_exit 0 "$rc" "cp on main → pass (not classified mutating)"
+
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w4\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m foo\"}}")
+assert_exit 2 "$rc" "git commit on main → block"
+
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_SKIP_WORKTREE_GATE=1 run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w5\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/x\"}}")
+assert_exit 0 "$rc" "SAZO_SKIP_WORKTREE_GATE=1 override"
+
+# V4 reviewer #1 regression: --detach in compound with mutating subcommand → must block
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w6\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git switch --detach abc && git push origin main\"}}")
+assert_exit 2 "$rc" "compound (--detach + push) on main → still block (no carve-out hijack)"
+
+# --detach 단독은 carve-out 작동 (read-only HEAD movement)
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w7\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git switch --detach HEAD\"}}")
+assert_exit 0 "$rc" "git switch --detach HEAD alone → pass (read-only)"
+
+# V5 reviewer #1 regression: compound where one segment is --detach but another segment is mutating switch
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w8\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git switch existing-branch && git switch --detach HEAD\"}}")
+assert_exit 2 "$rc" "compound (mutating switch + --detach switch) → block (no carve-out hijack)"
+
+# V5 reviewer #1: same with checkout file (mutating) + --detach
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w9\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git checkout file.txt && git switch --detach HEAD\"}}")
+assert_exit 2 "$rc" "compound (checkout file + --detach) → block"
+
+# V5 reviewer #2: flags between subcommand and --detach should still carve-out
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w10\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git switch -f --detach abc123\"}}")
+assert_exit 0 "$rc" "git switch -f --detach (flags before --detach) → pass"
+
+# V6 reviewer #1: pass 케이스에서 hook stderr 비어 있어야 함 (`local: can only be used in a function` 같은 노이즈 차단)
+rm -rf "$SAZO_STATE_DIR"
+err=$(capture_stderr "$HOOKS/pre-worktree-gate.sh" "" \
+    "{\"session_id\":\"w11\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git switch --detach HEAD\"}}")
+if [ -z "$err" ]; then
+    PASS=$((PASS + 1))
+    echo "  ✓ pre-worktree-gate stderr clean on pass case"
+else
+    FAIL=$((FAIL + 1))
+    echo "  ✗ pre-worktree-gate stderr leaked: $err"
+fi
+
+# ============================================================
+echo ""
+echo "=== pre-exploration-gate ==="
+
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-exploration-gate.sh" "" \
+    '{"session_id":"e1","cwd":"/tmp","tool_name":"Grep","tool_input":{"pattern":"foo"},"model":"claude-sonnet-4-6"}')
+assert_exit 0 "$rc" "sonnet Grep → pass"
+
+rm -rf "$SAZO_STATE_DIR"
+for i in 1 2 3 4; do
+    rc=$(run_hook "$HOOKS/pre-exploration-gate.sh" "" \
+        '{"session_id":"e2","cwd":"/tmp","tool_name":"Grep","tool_input":{"pattern":"foo"},"model":"claude-opus-4-7"}')
+    if [ "$i" -le 2 ]; then
+        assert_exit 0 "$rc" "opus Grep #$i → soft pass"
+    else
+        assert_exit 2 "$rc" "opus Grep #$i → block"
+    fi
+done
+
+# git grep should also trigger
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-exploration-gate.sh" "" \
+    '{"session_id":"e3","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"git grep -r foo"},"model":"claude-opus-4-7"}')
+assert_exit 0 "$rc" "opus git grep #1 → soft pass (counted as exploration)"
+
+# Decay: post-hook Task subagent decrements explore_count
+rm -rf "$SAZO_STATE_DIR"
+for _ in 1 2 3; do
+    run_hook "$HOOKS/pre-exploration-gate.sh" "" \
+        '{"session_id":"e4","cwd":"/tmp","tool_name":"Grep","tool_input":{"pattern":"foo"},"model":"claude-opus-4-7"}' >/dev/null
+done
+# Now blocked. Run code-searcher Task post → decrement
+run_hook "$HOOKS/workflow-state-machine.sh" "post" \
+    '{"session_id":"e4","cwd":"/tmp","tool_name":"Task","tool_input":{"subagent_type":"code-searcher"}}' >/dev/null
+# Next grep should soft-pass (count went from 3→2)
+rc=$(run_hook "$HOOKS/pre-exploration-gate.sh" "" \
+    '{"session_id":"e4","cwd":"/tmp","tool_name":"Grep","tool_input":{"pattern":"foo"},"model":"claude-opus-4-7"}')
+assert_exit 2 "$rc" "after decay: count=3, still over threshold"
+
+# ============================================================
+echo ""
+echo "=== workflow-state-machine (Write/Edit soft warn) ==="
+
+STATE_HOOK="$HOOKS/workflow-state-machine.sh"
+
+rm -rf "$SAZO_STATE_DIR"
+# 처음 3회 Write soft warn (exit 0)
+for i in 1 2 3 4; do
+    rc=$(run_hook "$STATE_HOOK" "pre" \
+        '{"session_id":"sm1","cwd":"/tmp","tool_name":"Write","tool_input":{"file_path":"/tmp/x"}}')
+    if [ "$i" -le 3 ]; then
+        assert_exit 0 "$rc" "Write #$i without research → soft warn (exit 0)"
+    else
+        assert_exit 2 "$rc" "Write #$i without research → hard block"
+    fi
+done
+
+# After research subagent, research stage passed → soft warn restarts on plan
+rm -rf "$SAZO_STATE_DIR"
+run_hook "$STATE_HOOK" "post" \
+    '{"session_id":"sm2","cwd":"/tmp","tool_name":"Task","tool_input":{"subagent_type":"code-searcher"}}' >/dev/null
+rc=$(run_hook "$STATE_HOOK" "pre" \
+    '{"session_id":"sm2","cwd":"/tmp","tool_name":"Write","tool_input":{"file_path":"/tmp/x"}}')
+assert_exit 0 "$rc" "after research → Write soft warn on plan (exit 0)"
+
+# After plan-drafter subagent, plan stage passed
+run_hook "$STATE_HOOK" "post" \
+    '{"session_id":"sm2","cwd":"/tmp","tool_name":"Task","tool_input":{"subagent_type":"plan-drafter"}}' >/dev/null
+rc=$(run_hook "$STATE_HOOK" "pre" \
+    '{"session_id":"sm2","cwd":"/tmp","tool_name":"Write","tool_input":{"file_path":"/tmp/x"}}')
+assert_exit 0 "$rc" "after plan → Write soft warn on approval (always soft)"
+
+echo ""
+echo "=== workflow-state-machine (gh pr create hard block) ==="
+
+# Without ci, gh pr create blocks
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$STATE_HOOK" "pre" \
+    '{"session_id":"pr1","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"gh pr create --title foo"}}')
+assert_exit 2 "$rc" "gh pr create without ci → hard block"
+
+# With SAZO_ALLOW_CI_SKIP=1, ci is auto-skipped, then review block
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_ALLOW_CI_SKIP=1 run_hook "$STATE_HOOK" "pre" \
+    '{"session_id":"pr2","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"gh pr create --title foo"}}')
+assert_exit 2 "$rc" "SAZO_ALLOW_CI_SKIP set, but review missing → block"
+
+# Add review, then SAZO_ALLOW_CI_SKIP allows pr create
+run_hook "$STATE_HOOK" "post" \
+    '{"session_id":"pr2","cwd":"/tmp","tool_name":"Task","tool_input":{"subagent_type":"code-reviewer"}}' >/dev/null
+rc=$(SAZO_ALLOW_CI_SKIP=1 run_hook "$STATE_HOOK" "pre" \
+    '{"session_id":"pr2","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"gh pr create --title foo"}}')
+assert_exit 0 "$rc" "SAZO_ALLOW_CI_SKIP + review → pass"
+
+echo ""
+echo "=== validator: approval/ci require by != auto-claude ==="
+
+rm -rf "$SAZO_STATE_DIR"
+# Source lib in subshell, manually mark approval as auto-claude
+(
+    source "$HOOKS/lib/session-state.sh"
+    SAZO_SESSION_ID="val1" SAZO_CWD="/tmp" state_init "val1" "/tmp"
+    stage_mark "val1" "approval" "completed" "auto-claude" "self-mark" "/tmp"
+)
+# Validator should reject this
+(
+    source "$HOOKS/lib/session-state.sh"
+    if SAZO_CWD="/tmp" stage_is_passed "val1" "approval"; then
+        echo "  ✗ approval auto-claude should NOT pass validator"
+        exit 1
+    else
+        echo "  ✓ approval auto-claude blocked by validator"
+        exit 0
+    fi
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+
+# By 'user' WITHOUT plan_approved_at → still fail (defense-in-depth)
+rm -rf "$SAZO_STATE_DIR"
+(
+    source "$HOOKS/lib/session-state.sh"
+    SAZO_SESSION_ID="val2a" SAZO_CWD="/tmp" state_init "val2a" "/tmp"
+    stage_mark "val2a" "approval" "completed" "user" "fake" "/tmp"
+    # plan_approved_at 비어 있음
+)
+(
+    source "$HOOKS/lib/session-state.sh"
+    if SAZO_CWD="/tmp" stage_is_passed "val2a" "approval"; then
+        echo "  ✗ approval by=user without plan_approved_at should fail"
+        exit 1
+    else
+        echo "  ✓ approval by=user without plan_approved_at rejected"
+        exit 0
+    fi
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+
+# By 'user' AND plan_approved_at set → pass
+rm -rf "$SAZO_STATE_DIR"
+(
+    source "$HOOKS/lib/session-state.sh"
+    SAZO_SESSION_ID="val2b" SAZO_CWD="/tmp" state_init "val2b" "/tmp"
+    state_set_str "val2b" ".plan_approved_at" "$(date +%Y-%m-%dT%H:%M:%S%z)" "/tmp"
+    stage_mark "val2b" "approval" "completed" "user" "/approved" "/tmp"
+)
+(
+    source "$HOOKS/lib/session-state.sh"
+    if SAZO_CWD="/tmp" stage_is_passed "val2b" "approval"; then
+        echo "  ✓ approval by=user + plan_approved_at passes validator"
+        exit 0
+    fi
+    exit 1
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+
+echo ""
+echo "=== state file cwd-keying ==="
+
+rm -rf "$SAZO_STATE_DIR"
+(
+    source "$HOOKS/lib/session-state.sh"
+    state_init "samesid" "/path/A" "opus"
+    stage_mark "samesid" "research" "completed" "auto" "test" "/path/A"
+    state_init "samesid" "/path/B" "opus"
+    if stage_is_passed "samesid" "research" "/path/B"; then
+        echo "  ✗ research leaked from /path/A to /path/B"
+        exit 1
+    else
+        echo "  ✓ different cwd → independent state"
+        exit 0
+    fi
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+
+echo ""
+echo "=== /skip lib operations ==="
+
+# /skip plan with reason → state honored
+rm -rf "$SAZO_STATE_DIR"
+(
+    source "$HOOKS/lib/session-state.sh"
+    state_init "skip2" "/tmp" "opus"
+    stage_mark "skip2" "plan" "skipped" "user" "≤5줄 typo" "/tmp"
+    if stage_is_passed "skip2" "plan" "/tmp"; then
+        echo "  ✓ /skip plan marker honored"
+        exit 0
+    fi
+    exit 1
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+
+# Validator: approval skip should NOT pass even with by=user (skipped 인정 안 함)
+rm -rf "$SAZO_STATE_DIR"
+(
+    source "$HOOKS/lib/session-state.sh"
+    state_init "skip3" "/tmp" "opus"
+    stage_mark "skip3" "approval" "skipped" "user" "user-skip" "/tmp"
+    if stage_is_passed "skip3" "approval" "/tmp"; then
+        echo "  ✗ approval skip should not pass validator"
+        exit 1
+    else
+        echo "  ✓ approval skip rejected (only completed by=user + plan_approved_at)"
+        exit 0
+    fi
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+
+# Validator: ci skip with by=user → pass (SAZO_ALLOW_CI_SKIP path)
+rm -rf "$SAZO_STATE_DIR"
+(
+    source "$HOOKS/lib/session-state.sh"
+    state_init "skip4" "/tmp" "opus"
+    stage_mark "skip4" "ci" "skipped" "user" "SAZO_ALLOW_CI_SKIP" "/tmp"
+    if stage_is_passed "skip4" "ci" "/tmp"; then
+        echo "  ✓ ci skip by=user passes (env override path)"
+        exit 0
+    fi
+    exit 1
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+
+# Validator: ci skip by=auto-claude (자가 위장) → reject
+rm -rf "$SAZO_STATE_DIR"
+(
+    source "$HOOKS/lib/session-state.sh"
+    state_init "skip5" "/tmp" "opus"
+    stage_mark "skip5" "ci" "skipped" "auto-claude" "self-skip" "/tmp"
+    if stage_is_passed "skip5" "ci" "/tmp"; then
+        echo "  ✗ ci skip by=auto-claude should not pass"
+        exit 1
+    fi
+    echo "  ✓ ci skip by=auto-claude rejected"
+    exit 0
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+
+echo ""
+echo "=== nonce-based approval ==="
+
+rm -rf "$SAZO_STATE_DIR"
+(
+    source "$HOOKS/lib/session-state.sh"
+    state_init "ap1" "/tmp" "opus"
+    # No nonce set yet → consume should fail
+    if approval_nonce_consume "ap1" "fakenonce" "/tmp"; then
+        echo "  ✗ consume without set should fail"
+        exit 1
+    fi
+    # Set nonce, then consume with same → success
+    approval_nonce_set "ap1" "abc123" "/tmp"
+    if approval_nonce_consume "ap1" "abc123" "/tmp"; then
+        echo "  ✓ nonce set+consume works"
+    else
+        echo "  ✗ nonce consume failed"
+        exit 1
+    fi
+    # After consume, nonce cleared
+    if approval_nonce_consume "ap1" "abc123" "/tmp"; then
+        echo "  ✗ nonce should be one-shot"
+        exit 1
+    fi
+    echo "  ✓ nonce one-shot semantics"
+    exit 0
+) && { PASS=$((PASS + 3)); } || FAIL=$((FAIL + 3))
+
+echo ""
+echo "=== /approved ordering (plan_approved_at before stage_mark) ==="
+
+# Mid-write에 stage_is_passed가 transient false 반환되면 안 됨.
+# /approved 흐름 시뮬레이션: nonce_consume → state_set_str(plan_approved_at) → stage_mark.
+# 각 단계 후 validator 상태 확인.
+rm -rf "$SAZO_STATE_DIR"
+(
+    source "$HOOKS/lib/session-state.sh"
+    state_init "ord1" "/tmp" "opus"
+    approval_nonce_set "ord1" "abc" "/tmp"
+    approval_nonce_consume "ord1" "abc" "/tmp"
+    # plan_approved_at 만 set, stage_mark 전 — validator는 false (history 없음)
+    state_set_str "ord1" ".plan_approved_at" "$(date +%Y-%m-%dT%H:%M:%S%z)" "/tmp"
+    if SAZO_CWD="/tmp" stage_is_passed "ord1" "approval"; then
+        echo "  ✗ approval should fail before stage_mark"
+        exit 1
+    fi
+    # stage_mark — validator 통과
+    stage_mark "ord1" "approval" "completed" "user" "/approved" "/tmp"
+    if SAZO_CWD="/tmp" stage_is_passed "ord1" "approval"; then
+        echo "  ✓ ordered nonce flow: validator passes after both fields set"
+        exit 0
+    fi
+    exit 1
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+
+echo ""
+echo "=== consecutive_skip_count ==="
+
+rm -rf "$SAZO_STATE_DIR"
+(
+    source "$HOOKS/lib/session-state.sh"
+    state_init "csk" "/tmp" "opus"
+    stage_mark "csk" "worktree" "completed" "auto" "" "/tmp"
+    stage_mark "csk" "research" "skipped" "user" "x" "/tmp"
+    stage_mark "csk" "plan" "skipped" "user" "y" "/tmp"
+    stage_mark "csk" "review" "skipped" "user" "z" "/tmp"
+    n=$(consecutive_skip_count "csk" "/tmp")
+    if [ "$n" = "3" ]; then
+        echo "  ✓ consecutive_skip_count = 3"
+    else
+        echo "  ✗ expected 3, got $n"
+        exit 1
+    fi
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+
+echo ""
+echo "=== register-workflow-hooks idempotency ==="
+
+TMP_SETTINGS=$(mktemp)
+echo '{}' > "$TMP_SETTINGS"
+# shellcheck disable=SC1090
+source "$HARNESS/scripts/register-workflow-hooks.sh"
+register_workflow_hooks "$HARNESS" "$TMP_SETTINGS" >/dev/null
+PRE1=$(jq '(.hooks.PreToolUse // []) | length' "$TMP_SETTINGS")
+POST1=$(jq '(.hooks.PostToolUse // []) | length' "$TMP_SETTINGS")
+USR1=$(jq '(.hooks.UserPromptSubmit // []) | length' "$TMP_SETTINGS")
+register_workflow_hooks "$HARNESS" "$TMP_SETTINGS" >/dev/null
+PRE2=$(jq '(.hooks.PreToolUse // []) | length' "$TMP_SETTINGS")
+POST2=$(jq '(.hooks.PostToolUse // []) | length' "$TMP_SETTINGS")
+USR2=$(jq '(.hooks.UserPromptSubmit // []) | length' "$TMP_SETTINGS")
+
+if [ "$PRE1" = "$PRE2" ] && [ "$PRE1" = "3" ]; then
+    PASS=$((PASS + 1))
+    echo "  ✓ PreToolUse 3 entries idempotent"
+else
+    FAIL=$((FAIL + 1))
+    echo "  ✗ PreToolUse: run1=$PRE1 run2=$PRE2 (expected 3)"
+fi
+if [ "$POST1" = "$POST2" ] && [ "$POST1" = "1" ]; then
+    PASS=$((PASS + 1))
+    echo "  ✓ PostToolUse 1 entry idempotent"
+else
+    FAIL=$((FAIL + 1))
+    echo "  ✗ PostToolUse: run1=$POST1 run2=$POST2 (expected 1)"
+fi
+if [ "$USR1" = "$USR2" ] && [ "$USR1" = "1" ]; then
+    PASS=$((PASS + 1))
+    echo "  ✓ UserPromptSubmit 1 entry idempotent"
+else
+    FAIL=$((FAIL + 1))
+    echo "  ✗ UserPromptSubmit: run1=$USR1 run2=$USR2 (expected 1)"
+fi
+rm -f "$TMP_SETTINGS"
+
+echo ""
+echo "=== Summary ==="
+echo "  PASS: $PASS"
+echo "  FAIL: $FAIL"
+
+[ "$FAIL" = "0" ]

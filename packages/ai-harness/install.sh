@@ -383,6 +383,19 @@ if [ -f "$PRECOMMIT_HOOK_SCRIPT" ]; then
     fi
 fi
 
+# --- Workflow enforcement hooks ---
+#
+# CLAUDE.md `<required>` 워크플로우(worktree/research/plan/approval/ci/review)를
+# 행동 레벨로 강제하는 hook 묶음. 자세한 설계는 docs/workflow-hooks.md 참조.
+
+WORKFLOW_HOOKS_REGISTER="$HARNESS_DIR/scripts/register-workflow-hooks.sh"
+
+if [ -f "$WORKFLOW_HOOKS_REGISTER" ]; then
+    # shellcheck disable=SC1090
+    source "$WORKFLOW_HOOKS_REGISTER"
+    register_workflow_hooks "$HARNESS_DIR" "$SETTINGS_FILE"
+fi
+
 # --- RTK Token-Saving Proxy (Claude Code 전용, optional) ---
 #
 # RTK은 Claude Code의 bash 출력을 압축해 LLM 토큰을 60-90% 절감해주는

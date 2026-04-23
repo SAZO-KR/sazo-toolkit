@@ -38,7 +38,8 @@
 
 - git status 확인 → 보호 브랜치(main/master/dev)이면 **worktree 자동 생성**
   - 브랜치명은 요청에서 추론. 스킬: `~/.claude/skills/isolate/SKILL.md`
-  - 예외: 설정/문서만 수정하는 경우
+  - **보호 브랜치 아니라도 새 작업이면 새 worktree**. 이미 PR merged된 stale worktree에서 이어받지 말 것. hook(`pre-worktree-gate.sh`)이 감지해 block.
+  - 예외는 사용자 명시 skip: `/skip worktree <reason>` (설정/문서 긴급 수정 등).
 - worktree 생성 후 **clean baseline 확인**: 프로젝트 CI 커맨드 실행 (프로젝트 CLAUDE.md/AGENTS.md에 정의)
   - baseline 실패 시 → 사용자에게 보고. 내 변경과 기존 실패를 구분하기 위함.
 
@@ -50,7 +51,40 @@
 - 사용자에게 제안: "이 작업은 [복잡도 판단 근거]이므로, [N단계]와 [M단계]는 생략해도 될 것 같습니다. 동의하시나요?"
   - **사용자가 동의한 단계만 skip**. 사용자 응답 없이 자의적으로 skip 금지.
 
-<system-reminder>quick/standard/full 같은 모드명을 사용자에게 강요하지 말 것. 사용자는 모드를 기억할 필요 없다. 복잡도 판단은 에이전트의 몫이고, skip 결정은 사용자의 몫이다.</system-reminder>
+### Workflow hook (opt-in)
+
+워크플로우는 hook으로 stage gate가 강제될 수 있다 (`packages/ai-harness/docs/workflow-hooks.md`).
+
+**기본 비활성**. 활성화: `export SAZO_WORKFLOW_HOOKS_ENABLED=1` (`~/.zshrc`/`~/.bashrc`).
+
+활성 시 동작:
+- worktree, gh-pr-create(ci/review): hard block
+- Write/Edit (research/plan): soft warn ×3 후 hard block
+- Write/Edit (approval): 항상 soft warn (사용자 직접 `/approved` 입력만 인정)
+- Opus 직접 grep/find: 3회 후 block
+
+비활성 시 워크플로우는 지시문 수준 — 본 섹션의 단계별 규칙대로 Claude가 자체 준수.
+
+### Skip 정책
+
+Skip은 세 경로:
+
+1. **사용자 명시**: `/skip <stage> <reason>` (worktree/research/plan/review만).
+2. **사용자 제안 승인**: Claude가 "N단계 skip 제안 (이유: ...)" → 사용자 동의 → Claude가 `/skip` 실행.
+3. **Autonomous skip** (아래 표 조건 충족 시만): Claude가 session-state history에 직접 기록. reason 필수.
+
+| Stage | Autonomous skip 가능 조건 |
+|---|---|
+| worktree | **불가** — 항상 사용자 명시만 (보호 브랜치 여부 무관) |
+| research | 사용자가 파일/라인 직접 지정, 수정 범위 ≤2 파일 |
+| plan | ≤5줄 + 단일 파일 + typo/주석/import 정리 |
+| approval | **불가** (user 의사결정) |
+| ci | **불가** (env override `SAZO_ALLOW_CI_SKIP=1`만) |
+| review | 문서/주석만, 테스트 없는 변경 |
+
+연속 3 stage skip 시 hook이 경고. 의도면 사용자 추가 확인 필요.
+
+<system-reminder>quick/standard/full 같은 모드명을 사용자에게 강요하지 말 것. 사용자는 모드를 기억할 필요 없다. 복잡도 판단은 에이전트의 몫이고, skip 결정은 사용자의 몫이다 (autonomous skip 표 조건 외).</system-reminder>
 
 ## 3. 플랜 작성 → 승인
 
