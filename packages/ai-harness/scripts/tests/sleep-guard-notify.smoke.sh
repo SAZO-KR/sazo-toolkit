@@ -146,6 +146,81 @@ else
     fail "race 실패 — $hits 회 출력 (expected exactly 1)"
 fi
 
+# ── opt-in needed 함수 ──
+# notify_sleep_guard_opt_in_needed: init-done/opt-out 모두 없으면 안내 출력.
+call_optin() {
+    local home="$1" uname_override="${2:-Darwin}"
+    local stub_dir="$home/stub-bin"
+    mkdir -p "$stub_dir"
+    cat > "$stub_dir/uname" <<EOF
+#!/bin/bash
+echo "$uname_override"
+EOF
+    chmod +x "$stub_dir/uname"
+    env -i \
+        HOME="$home" \
+        PATH="$stub_dir:/usr/bin:/bin" \
+        HARNESS_DIR="$SCRIPT_DIR/.." \
+        AUTOUPDATE_LOAD_ONLY=1 \
+        bash -c "source '$AUTOUPDATE' && notify_sleep_guard_opt_in_needed" 2>&1
+}
+
+# ── Case 9: init-done/opt-out 둘 다 없음 → 안내 + throttle 생성 ──
+echo ""
+echo "Case 9: opt-in 미완료 (마커 둘 다 없음) → 안내"
+H="$SANDBOX/c9"; mkdir -p "$H/.config/sazo-ai-harness"
+out=$(call_optin "$H" "Darwin")
+if echo "$out" | grep -q "sleep-guard"; then pass "opt-in 안내 출력"
+else fail "안내 누락: $out"; fi
+if [ -f "$H/.config/sazo-ai-harness/.sleep-guard-optin-notify-throttle" ]; then pass "optin throttle 파일 생성"
+else fail "optin throttle 파일 없음"; fi
+
+# ── Case 10: init-done 있음 → no-op (이미 설치됨) ──
+echo ""
+echo "Case 10: init-done 있음 → no-op"
+H="$SANDBOX/c10"; mkdir -p "$H/.config/sazo-ai-harness"
+touch "$H/.config/sazo-ai-harness/.sleep-guard-init-done"
+out=$(call_optin "$H" "Darwin")
+if [ -z "$out" ]; then pass "이미 설치됨 — 출력 없음"
+else fail "unexpected: $out"; fi
+
+# ── Case 11: opt-out 있음 → no-op (명시적 거부) ──
+echo ""
+echo "Case 11: opt-out 있음 → no-op"
+H="$SANDBOX/c11"; mkdir -p "$H/.config/sazo-ai-harness"
+touch "$H/.config/sazo-ai-harness/.sleep-guard-optout"
+out=$(call_optin "$H" "Darwin")
+if [ -z "$out" ]; then pass "opt-out — 출력 없음"
+else fail "unexpected: $out"; fi
+
+# ── Case 12: throttle 24h 이내 → no-op ──
+echo ""
+echo "Case 12: opt-in throttle 24h 이내 → no-op"
+H="$SANDBOX/c12"; mkdir -p "$H/.config/sazo-ai-harness"
+now=$(date +%s); recent=$(( now - 3600 * 23 ))
+echo "$recent" > "$H/.config/sazo-ai-harness/.sleep-guard-optin-notify-throttle"
+out=$(call_optin "$H" "Darwin")
+if [ -z "$out" ]; then pass "throttle 이내 — 출력 없음"
+else fail "throttle 위반: $out"; fi
+
+# ── Case 12b: opt-in throttle 24h 초과 → 재출력 ──
+echo ""
+echo "Case 12b: opt-in throttle 24h 초과 → 재출력"
+H="$SANDBOX/c12b"; mkdir -p "$H/.config/sazo-ai-harness"
+old=$(( now - 3600 * 25 ))
+echo "$old" > "$H/.config/sazo-ai-harness/.sleep-guard-optin-notify-throttle"
+out=$(call_optin "$H" "Darwin")
+if echo "$out" | grep -q "sleep-guard"; then pass "opt-in throttle 만료 — 재출력"
+else fail "opt-in throttle 만료 재출력 실패"; fi
+
+# ── Case 13: 비-macOS → no-op ──
+echo ""
+echo "Case 13: 비-macOS → no-op"
+H="$SANDBOX/c13"; mkdir -p "$H/.config/sazo-ai-harness"
+out=$(call_optin "$H" "Linux")
+if [ -z "$out" ]; then pass "Linux — 출력 없음"
+else fail "Linux에서 출력됨: $out"; fi
+
 echo ""
 echo "─────────────────────"
 if [ "$FAIL" -eq 0 ]; then
