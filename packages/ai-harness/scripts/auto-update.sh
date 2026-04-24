@@ -122,6 +122,13 @@ sync_rtk_setup() {
 # Sleep guard도 install.sh가 대화형으로 초기 등록한다. quiet 모드는 init-done
 # 마커가 이미 있는 경우에만 검증/복구 (settings.json 리셋, symlink/plist 삭제
 # 대응). 아직 opt-in을 안 한 사용자에게 매 세션마다 질문하지 않기 위함.
+#
+# opt-in 미완료 상태(init-done 마커 없음, opt-out 마커도 없음)는 기존엔
+# silent-skip이었는데, install.sh에서 opt-in 프롬프트를 놓친 사용자는 아무
+# 신호를 못 받고 sleep-guard가 영구 미동작 상태로 방치됨. 이를 SessionStart
+# 훅 stdout으로 한 번 알려서 사용자가 대화형 설치를 시작하도록 유도한다.
+# 비대화형 환경(SessionStart 훅)에서 sudoers NOPASSWD 설치는 근본적으로
+# 불가하므로 자동 설치는 하지 않는다.
 sync_sleep_guard() {
     local setup_script="$HARNESS_DIR/scripts/sleep-guard/setup.sh"
     [ -f "$setup_script" ] || return 0
@@ -129,6 +136,42 @@ sync_sleep_guard() {
     [ -f "$HOME/.config/sazo-ai-harness/.sleep-guard-optout" ] && return 0
     "$setup_script" --quiet >>"$LOG_FILE" 2>&1 || true
     notify_sleep_guard_sudoers_missing
+    notify_sleep_guard_opt_in_needed
+}
+
+# opt-in 자체를 한 적이 없는 상태에 대한 안내. install.sh 첫 실행 시
+# 사용자가 프롬프트에 "y"를 누르지 않았거나 비대화형 환경(e.g. Claude Code
+# 내부 Bash)에서 install.sh를 돌려 프롬프트가 스킵된 케이스. init-done /
+# opt-out 마커가 둘 다 없으면 "결정 보류" 상태로 간주하고 24h throttle로
+# 1회씩 안내.
+notify_sleep_guard_opt_in_needed() {
+    [ "$(uname -s)" = "Darwin" ] || return 0
+    local init_done="$HOME/.config/sazo-ai-harness/.sleep-guard-init-done"
+    local optout="$HOME/.config/sazo-ai-harness/.sleep-guard-optout"
+    [ -f "$init_done" ] && return 0
+    [ -f "$optout" ] && return 0
+
+    local throttle_file="$HOME/.config/sazo-ai-harness/.sleep-guard-optin-notify-throttle"
+    local now last
+    now="$(date +%s)"
+    mkdir -p "$(dirname "$throttle_file")" 2>/dev/null || true
+
+    # 동일 set -C O_EXCL 패턴 — sudoers missing 알림과 같은 race 처리.
+    if ! ( set -C; echo "$now" > "$throttle_file" ) 2>/dev/null; then
+        last="$(cat "$throttle_file" 2>/dev/null || echo 0)"
+        case "$last" in ''|*[!0-9]*) last=0 ;; esac
+        [ $(( now - last )) -lt 86400 ] && return 0
+        echo "$now" > "$throttle_file"
+    fi
+
+    local setup_script="$HARNESS_DIR/scripts/sleep-guard/setup.sh"
+    cat <<EOF
+ℹ️  [sleep-guard] macOS sleep 방지 기능(opt-in)이 아직 설치되지 않았습니다.
+Claude Code 작업 중 노트북 뚜껑을 닫아도 sleep 되지 않게 하려면 대화형 터미널에서
+  bash $setup_script
+(sudo 비밀번호 1회 필요). 관심 없으면 안내 영구 중지:
+  touch $HOME/.config/sazo-ai-harness/.sleep-guard-optout
+EOF
 }
 
 # sudoers 엔트리만 --quiet 경로로 복구할 수 없다 (sudo 비밀번호 필요).
