@@ -6,93 +6,96 @@ description: Use this whenever you need to create an isolated workspace using gi
 <required>
 *CRITICAL* Add the following steps to your Todo list using TodoWrite:
 
-1. Find the worktrees directory. Follow the priority **existing > CLAUDE.md/AGENTS.md > ask**:
+1. Find the worktrees directory. Follow the priority **explicit declaration (CLAUDE.md/AGENTS.md) > in-repo common names > in-repo existing worktree > default `.worktrees`**.
 
-- First, check for an existing worktree directory. Do **not** hardcode a single name — the project may use `.worktrees`, `_worktrees`, or anything else:
-  ```bash
-  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+   **Sibling worktrees (outside `$REPO_ROOT`) are NOT auto-inherited.** Earlier versions of this skill promoted any existing worktree's parent to the project convention, which caused ad-hoc `git worktree add ~/work/foo bar` invocations to silently retrain the project toward sibling layouts. Sibling layouts are only honored when a project explicitly declares them in `CLAUDE.md` or `AGENTS.md`.
 
-  # 1. If worktrees already exist, derive the shared root.
-  #    Primary path: strip the FULL branch path (may contain "/") from the
-  #    worktree path. A naive single `dirname` would break for `feature/auth`
-  #    branches — /repo/.worktrees/feature/auth → /repo/.worktrees/feature (wrong).
-  #    Fallback: if the worktree path doesn't follow the "<parent>/<branch>"
-  #    convention (e.g., `git worktree add /tmp/wt-auth feature/auth`), fall
-  #    back to plain dirname so the existing location is still discovered.
-  EXISTING_WT_PARENT=$(git worktree list --porcelain | awk -v root="$REPO_ROOT" '
-    # Record the first worktree entry as the primary worktree (git guarantees
-    # "main worktree is listed first" per git-worktree docs). We skip it when
-    # inferring the shared worktree dir, since the primary lives AT REPO_ROOT
-    # and its dirname is REPO_ROOTs parent (e.g., /workspace) — not a valid
-    # worktree directory.
-    /^worktree / {
-      wt = substr($0, 10)
-      if (primary == "") primary = wt
-      next
-    }
-    # Handle branched worktrees: `branch refs/heads/<name>` emits a branch name
-    # we can strip as a suffix to recover the parent. Handle detached
-    # worktrees: `detached` has no branch info, so fall back to dirname.
-    /^(branch refs\/heads\/|detached$)/ {
-      if (wt == primary) next
+   ```bash
+   REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+   WORKTREE_DIR=""  # set below; required by Steps 2 and 3
 
-      if ($0 ~ /^branch /) {
-        branch = substr($0, 19)
-        suffix = "/" branch
-        if (length(wt) > length(suffix) && \
-            substr(wt, length(wt) - length(suffix) + 1) == suffix) {
-          parent = substr(wt, 1, length(wt) - length(suffix))
-        } else {
-          # Non-standard layout — use dirname as best-effort parent
-          parent = wt
-          sub("/[^/]*$", "", parent)
-        }
-      } else {
-        # Detached — no branch name to strip, use dirname as best-effort.
-        # KNOWN LIMITATION: if the worktree path encodes a multi-segment
-        # name (e.g., /repo/.worktrees/feature/auth created detached),
-        # single dirname yields /repo/.worktrees/feature (wrong). There is
-        # no reliable fix because detached worktrees carry no branch info
-        # to determine stripping depth. The common-names fallback below
-        # covers this case in practice.
-        parent = wt
-        sub("/[^/]*$", "", parent)
-      }
-      if (parent != root && parent != "") { print parent; exit }
-    }
-  ')
+   # (a) Explicit declaration in CLAUDE.md / AGENTS.md (walk ancestors up to repo root).
+   #     A project can opt into any layout — including sibling (`../foo-worktrees`) —
+   #     but only via explicit declaration, never by incidental discovery.
+   DIR=$(pwd)
+   while :; do
+     [ -f "$DIR/CLAUDE.md" ] && grep -iHE 'worktree' "$DIR/CLAUDE.md" 2>/dev/null
+     [ -f "$DIR/AGENTS.md" ] && grep -iHE 'worktree' "$DIR/AGENTS.md" 2>/dev/null
+     [ "$DIR" = "$REPO_ROOT" ] && break
+     [ "$DIR" = "/" ] && break
+     DIR=$(dirname "$DIR")
+   done
+   # If any ancestor CLAUDE.md / AGENTS.md declares a worktree convention, assign
+   # that path (resolved against the repo root) to $WORKTREE_DIR — e.g.,
+   # WORKTREE_DIR="$REPO_ROOT/custom-worktrees" or WORKTREE_DIR="$REPO_ROOT/../sibling-worktrees".
 
-  WORKTREE_DIR=""  # set below; required by Steps 2 and 3
-  if [ -n "$EXISTING_WT_PARENT" ]; then
-    WORKTREE_DIR="$EXISTING_WT_PARENT"
-    echo "Found existing worktree directory: $WORKTREE_DIR"
-  else
-    # 2. No active worktrees — check common directory names at repo root
-    for d in .worktrees _worktrees worktrees; do
-      if [ -d "$REPO_ROOT/$d" ]; then
-        WORKTREE_DIR="$REPO_ROOT/$d"
-        echo "Found: $WORKTREE_DIR"
-        break
-      fi
-    done
-  fi
-  ```
-  If a directory is found, `$WORKTREE_DIR` is now assigned and Steps 2–3 will use it.
-- If not found, check the project's `CLAUDE.md` and `AGENTS.md` for a project-specific worktree location before creating anything. **Walk from the current directory up to the git repo root** so the check works even when the skill is invoked from a subdirectory:
-  ```bash
-  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-  DIR=$(pwd)
-  while :; do
-    [ -f "$DIR/CLAUDE.md" ] && grep -iHE 'worktree' "$DIR/CLAUDE.md" 2>/dev/null
-    [ -f "$DIR/AGENTS.md" ] && grep -iHE 'worktree' "$DIR/AGENTS.md" 2>/dev/null
-    [ "$DIR" = "$REPO_ROOT" ] && break
-    [ "$DIR" = "/" ] && break
-    DIR=$(dirname "$DIR")
-  done
-  ```
-  If any ancestor `CLAUDE.md` / `AGENTS.md` defines a worktree convention, assign that path (resolved against the repo root) to `$WORKTREE_DIR` — e.g., `WORKTREE_DIR="$REPO_ROOT/custom-worktrees"`.
-- Only if none of the above applies, ask me for permission to create a `.worktrees` directory, and if given permission: `WORKTREE_DIR="$REPO_ROOT/.worktrees"; mkdir -p "$WORKTREE_DIR"`.
-- **At the end of Step 1, `$WORKTREE_DIR` MUST be a non-empty path** — Steps 2 and 3 consume it. If you reached this point without a value, stop and ask the user.
+   # (b) In-repo common names at repo root.
+   if [ -z "$WORKTREE_DIR" ]; then
+     for d in .worktrees _worktrees worktrees; do
+       if [ -d "$REPO_ROOT/$d" ]; then
+         WORKTREE_DIR="$REPO_ROOT/$d"
+         echo "Found in-repo worktree directory: $WORKTREE_DIR"
+         break
+       fi
+     done
+   fi
+
+   # (c) Existing worktree whose parent lies INSIDE $REPO_ROOT. Sibling/outside
+   #     parents are intentionally ignored here — see the note above.
+   if [ -z "$WORKTREE_DIR" ]; then
+     EXISTING_WT_PARENT=$(git worktree list --porcelain | awk -v root="$REPO_ROOT" '
+       /^worktree / {
+         wt = substr($0, 10)
+         if (primary == "") { primary = wt; next }
+         next
+       }
+       /^(branch refs\/heads\/|detached$)/ {
+         if (wt == primary) next
+         if ($0 ~ /^branch /) {
+           branch = substr($0, 19)
+           suffix = "/" branch
+           if (length(wt) > length(suffix) && \
+               substr(wt, length(wt) - length(suffix) + 1) == suffix) {
+             parent = substr(wt, 1, length(wt) - length(suffix))
+           } else {
+             parent = wt; sub("/[^/]*$", "", parent)
+           }
+         } else {
+           parent = wt; sub("/[^/]*$", "", parent)
+         }
+         if (parent == "" || parent == root) next
+         # Only accept parents strictly inside the repo root.
+         if (index(parent "/", root "/") == 1) { print parent; exit }
+       }
+     ')
+     if [ -n "$EXISTING_WT_PARENT" ]; then
+       WORKTREE_DIR="$EXISTING_WT_PARENT"
+       echo "Found existing in-repo worktree directory: $WORKTREE_DIR"
+     fi
+   fi
+
+   # (d) Default: create $REPO_ROOT/.worktrees. This is a safe, reversible
+   #     convention and the directory is gitignored in Step 2.
+   if [ -z "$WORKTREE_DIR" ]; then
+     WORKTREE_DIR="$REPO_ROOT/.worktrees"
+     mkdir -p "$WORKTREE_DIR"
+     echo "Defaulting to: $WORKTREE_DIR (create CLAUDE.md/AGENTS.md worktree note to override)"
+   fi
+
+   # Warn if sibling worktrees exist but weren't adopted — likely ad-hoc leftovers
+   # from `git worktree add <absolute-outside-path>`. User should clean them up
+   # or declare them in CLAUDE.md/AGENTS.md if intentional.
+   git worktree list --porcelain | awk -v root="$REPO_ROOT" -v chosen="$WORKTREE_DIR" '
+     /^worktree / {
+       wt = substr($0, 10)
+       if (primary == "") { primary = wt; next }
+       if (wt == primary) next
+       if (index(wt "/", root "/") != 1) print "  " wt
+     }
+   ' | { out=$(cat); [ -n "$out" ] && printf "Note: sibling/outside worktrees detected (not auto-inherited):\n%s\n" "$out"; }
+   ```
+
+   **At the end of Step 1, `$WORKTREE_DIR` MUST be a non-empty path** — Steps 2 and 3 consume it.
 
 2. Verify .gitignore before creating a worktree using the Bash tool. **Only applies when `$WORKTREE_DIR` is inside the repo** — worktrees that live outside the repo do not need (and should not get) an entry in repo `.gitignore`, since adding the basename could accidentally ignore an unrelated in-repo directory with the same name:
 
@@ -529,7 +532,8 @@ Red Flags:
 | Situation                         | Action                                                                       |
 | --------------------------------- | ---------------------------------------------------------------------------- |
 | Project worktree dir exists       | Use it (verify .gitignore)                                                   |
-| Project worktree dir missing      | Check `CLAUDE.md` / `AGENTS.md` (current dir up to repo root) → else ask user |
+| Project worktree dir missing      | Priority: CLAUDE.md/AGENTS.md declaration → in-repo common names → in-repo existing worktree → default `$REPO_ROOT/.worktrees` |
+| Sibling worktree exists outside repo | **Do not auto-inherit.** Only honor if CLAUDE.md/AGENTS.md declares it      |
 | Directory not in .gitignore       | Add it immediately                                                           |
 | Tests fail during baseline        | Report failures + ask                                                        |
 | No package.json/Cargo.toml        | Skip dependency install                                                      |
@@ -544,7 +548,7 @@ Red Flags:
 **Assuming directory location**
 
 - **Problem:** Creates inconsistency, violates project conventions
-- **Fix:** Follow priority: existing > `CLAUDE.md` / `AGENTS.md` (including ancestors) > ask
+- **Fix:** Follow priority: `CLAUDE.md` / `AGENTS.md` declaration > in-repo common names > in-repo existing worktree > default `.worktrees`. Never inherit sibling/outside worktrees automatically.
 
 **Missing project installation**
 
@@ -589,7 +593,7 @@ Ready to implement auth feature
 
 **Always:**
 
-- Follow directory priority: existing > `CLAUDE.md` / `AGENTS.md` (including ancestors) > ask
+- Follow directory priority: `CLAUDE.md` / `AGENTS.md` declaration > in-repo common names > in-repo existing worktree > default `.worktrees`. Sibling/outside parents require explicit declaration.
 - Verify .gitignore for project-local
 - Auto-detect and run project setup
 - Verify clean test baseline
