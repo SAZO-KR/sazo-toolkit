@@ -165,12 +165,14 @@ notify_sleep_guard_opt_in_needed() {
     fi
 
     local setup_script="$HARNESS_DIR/scripts/sleep-guard/setup.sh"
+    # 경로 변수 주변 큰따옴표는 사용자가 메시지를 복사해 쉘에 붙일 때 공백이
+    # 섞인 HOME (e.g. /Users/Full Name)에서도 안전하게 파싱되도록 유지한다.
     cat <<EOF
 ℹ️  [sleep-guard] macOS sleep 방지 기능(opt-in)이 아직 설치되지 않았습니다.
 Claude Code 작업 중 노트북 뚜껑을 닫아도 sleep 되지 않게 하려면 대화형 터미널에서
-  bash $setup_script
+  bash "$setup_script"
 (sudo 비밀번호 1회 필요). 관심 없으면 안내 영구 중지:
-  touch $HOME/.config/sazo-ai-harness/.sleep-guard-optout
+  touch "$optout"
 EOF
 }
 
