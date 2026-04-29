@@ -260,17 +260,28 @@ Quota 감지 시:
 
 ```bash
 # ── (a) 매 라운드 review ID 재조회 ── (race 방지)
+# CRITICAL: 정확 bot login 매칭 — substring `test("codex|gemini")`은 mid-cycle에
+#           login에 substring 포함한 임의 사용자(human reviewer 포함)를 bot 리뷰로
+#           오인해 ALL_*_REVIEW_IDS에 끼워넣을 수 있다. 이 refresh가 매 라운드
+#           돌아가므로 sweep block과 동일한 exact match로 통일.
+# CRITICAL: --paginate + 단일 array-emitting --jq는 페이지마다 분리 array를
+#           생성한다. 2-stage 패턴(`.[] | {id, submitted_at}` raw emit → `jq -s`)
+#           으로 multi-page 정확 처리.
 ALL_CODEX_REVIEW_IDS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews --paginate \
-  --jq '[.[] | select(.user.login | test("codex"))] | sort_by(.submitted_at) | [.[].id]')
+  --jq ".[] | select(.user.login == \"$CODEX_BOT_LOGIN\") | {id, submitted_at}" \
+  | jq -s 'sort_by(.submitted_at) | [.[].id]')
 ALL_GEMINI_REVIEW_IDS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews --paginate \
-  --jq '[.[] | select(.user.login | test("gemini"))] | sort_by(.submitted_at) | [.[].id]')
+  --jq ".[] | select(.user.login == \"$GEMINI_BOT_LOGIN\") | {id, submitted_at}" \
+  | jq -s 'sort_by(.submitted_at) | [.[].id]')
 
 # ── (b) 모든 Codex 리뷰의 코멘트를 하나의 배열로 수집 ──
 # CRITICAL: reviewer_login 필드 포함 — Step 4에서 decline 답변 시 @멘션에 사용
+# CRITICAL: review-comments도 --paginate + 2-stage 패턴 (sweep block과 일관).
 CODEX_ALL_COMMENTS='[]'
 for REVIEW_ID in $(echo "$ALL_CODEX_REVIEW_IDS" | jq -r '.[]'); do
-  COMMENTS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews/$REVIEW_ID/comments \
-    --jq '[.[] | {id: .id, body: .body[0:500], path: .path, line: .line, reviewer_login: .user.login, review_id: '$REVIEW_ID'}]')
+  COMMENTS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews/$REVIEW_ID/comments --paginate \
+    --jq ".[] | {id, body: .body[0:500], path, line, reviewer_login: .user.login, review_id: $REVIEW_ID}" \
+    | jq -s '.')
   CODEX_ALL_COMMENTS=$(echo "$CODEX_ALL_COMMENTS" | jq --argjson c "$COMMENTS" '. + $c')
 done
 
@@ -278,8 +289,9 @@ done
 if [ "$GEMINI_ENABLED" = true ]; then
   GEMINI_ALL_COMMENTS='[]'
   for REVIEW_ID in $(echo "$ALL_GEMINI_REVIEW_IDS" | jq -r '.[]'); do
-    COMMENTS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews/$REVIEW_ID/comments \
-      --jq '[.[] | {id: .id, body: .body[0:500], path: .path, line: .line, reviewer_login: .user.login, review_id: '$REVIEW_ID'}]')
+    COMMENTS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews/$REVIEW_ID/comments --paginate \
+      --jq ".[] | {id, body: .body[0:500], path, line, reviewer_login: .user.login, review_id: $REVIEW_ID}" \
+      | jq -s '.')
     GEMINI_ALL_COMMENTS=$(echo "$GEMINI_ALL_COMMENTS" | jq --argjson c "$COMMENTS" '. + $c')
   done
 fi
