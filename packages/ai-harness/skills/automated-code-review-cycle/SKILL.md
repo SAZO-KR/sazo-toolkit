@@ -1,7 +1,7 @@
 ---
 name: Automated-Code-Review-Cycle
 description: PR에 대해 Codex/Gemini 코드 리뷰를 자동으로 받고, 피드백 수정 → 재리뷰 사이클을 사용자 개입 없이 반복. 활성 리뷰어 전부 통과하면 완료. Gemini 미설정 repo는 Codex만으로 판단.
-version: 1.6.0
+version: 1.7.0
 when_to_use: PR 생성 후 코드 리뷰 사이클을 자동화하고 싶을 때
 ---
 
@@ -97,7 +97,18 @@ CYCLE_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 **현재 상태 파악:**
 
 ```bash
-# 1. 모든 Codex/Gemini 리뷰 ID 수집 (봇 이름 동적 감지)
+# 0. Bot 로그인 정확 매칭 상수 (identity spoofing 가드).
+# CRITICAL: Step 1에서 정의해야 한다. 미답변 코멘트가 있어 Step 3로 직접 진입하는
+# 경로(상태표 첫 행)에서는 Step 2가 실행되지 않으므로, Step 2에 정의하면 sweep
+# block이 빈 문자열로 비교하여 silent pass되는 경로가 생긴다.
+CODEX_BOT_LOGIN="chatgpt-codex-connector[bot]"
+GEMINI_BOT_LOGIN="gemini-code-assist[bot]"
+
+# 1. 모든 Codex/Gemini 리뷰 ID 수집 — **initial snapshot only**.
+# CRITICAL: 이 변수는 cycle start 시점 기준이라 이후 round에서 stale.
+#           Step 3-1이 매 라운드 재호출하여 `refresh_review_ids()`로 갱신해야 한다.
+#           "Codex가 cycle start 직후 review submit + +1 reaction을 거의 동시에 처리"
+#           race를 막는 핵심 — initial snapshot만 신뢰하면 새 review 누락.
 # CRITICAL: --paginate 필수! 기본 30건만 반환 → 리뷰 많은 PR에서 누락
 # CRITICAL: 최신 리뷰만이 아니라 모든 리뷰를 수집해야 이전 리뷰의 미답변 코멘트를 놓치지 않음
 ALL_CODEX_REVIEW_IDS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews --paginate \
@@ -174,11 +185,10 @@ PUSH_TIME=$(fetch_push_time) || {
 }
 NEW_REVIEW_FOUND=false
 
-# Bot 로그인 정확 매칭 상수 (Step 3-3과 동일한 identity spoofing 가드).
+# `CODEX_BOT_LOGIN` / `GEMINI_BOT_LOGIN`은 Step 1에서 정의됨 (identity spoofing 가드).
 # substring 매칭(`test("codex|gemini")`)은 login에 "codex"/"gemini"를 포함한
-# 임의 사용자(`fake-codex`, PR author 이름 등)를 허용해 조기 탈출을 유발할 수 있다.
-CODEX_BOT_LOGIN="chatgpt-codex-connector[bot]"
-GEMINI_BOT_LOGIN="gemini-code-assist[bot]"
+# 임의 사용자(`fake-codex`, PR author 이름 등)를 허용해 조기 탈출을 유발하므로
+# 정확 매칭 상수를 cycle 시작 시점에 한 번만 정의하고 모든 step에서 재사용한다.
 
 # 30초 간격으로 최대 10분 polling
 #
@@ -246,8 +256,16 @@ Quota 감지 시:
 
 **CRITICAL: 최신 리뷰만이 아니라 모든 리뷰의 코멘트를 수집해야 한다.** Codex/Gemini가 여러 리뷰를 제출한 경우, 이전 리뷰의 미답변 코멘트가 누락되는 버그를 방지.
 
+**CRITICAL: `ALL_*_REVIEW_IDS`를 매 라운드 재조회한다.** Step 1의 변수는 cycle start 시점 snapshot이라, 사이클 도중 submit된 review를 누락한다. 특히 Codex가 첫 polling 직전에 review submit + reaction 갱신을 거의 동시에 처리하면 +1만 보고 통과 오판하는 race가 발생.
+
 ```bash
-# 모든 Codex 리뷰의 코멘트를 하나의 배열로 수집
+# ── (a) 매 라운드 review ID 재조회 ── (race 방지)
+ALL_CODEX_REVIEW_IDS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews --paginate \
+  --jq '[.[] | select(.user.login | test("codex"))] | sort_by(.submitted_at) | [.[].id]')
+ALL_GEMINI_REVIEW_IDS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews --paginate \
+  --jq '[.[] | select(.user.login | test("gemini"))] | sort_by(.submitted_at) | [.[].id]')
+
+# ── (b) 모든 Codex 리뷰의 코멘트를 하나의 배열로 수집 ──
 # CRITICAL: reviewer_login 필드 포함 — Step 4에서 decline 답변 시 @멘션에 사용
 CODEX_ALL_COMMENTS='[]'
 for REVIEW_ID in $(echo "$ALL_CODEX_REVIEW_IDS" | jq -r '.[]'); do
@@ -344,7 +362,58 @@ case "$CODEX_LATEST" in
 esac
 
 CODEX_PASSED=false
-[ "$CODEX_STATE" = "approved" ] && CODEX_PASSED=true
+if [ "$CODEX_STATE" = "approved" ]; then
+  # ── Final sweep guard ──
+  # +1 reaction은 review 본문 submit과 별 endpoint라, Codex가 두 작업을
+  # 거의 동시에 처리하면 Step 3-1 fetch와 Step 3-3 reaction fetch 사이의 gap에
+  # 새 review가 끼어들어 reaction만 보고 통과 오판하는 race가 발생.
+  # +1 확정 직전에 reviews + review-comments + replies를 한 번 더 fetch하여
+  # 신규 미답변 코멘트가 없는지 최종 확인.
+  #
+  # 비용: API 추가 호출 (reviews list + reviews별 comments + replies). round당
+  # CODEX_STATE=approved일 때 1회만 발생 → 통과 직전에만 비용 발생.
+  #
+  # CRITICAL: 신규 미답변 발견 시 `CODEX_ALL_COMMENTS` + `UNANSWERED_CODEX` +
+  # `UNANSWERED_CODEX_COUNT`까지 모두 덮어써야 Step 6의 `no_unanswered_feedback`
+  # 분기가 fresh 데이터를 반영해 Step 4 fix 경로로 정상 진입.
+  #
+  # CRITICAL: substring match가 아닌 정확한 bot login으로 필터 (identity spoofing 방어,
+  #           Step 2/3-3 가드와 일관).
+  # CRITICAL: --paginate + 단일 --jq에서 array-emitting 필터(`[.[] | ...]`,
+  #           `sort_by`, `last` 등)는 페이지마다 독립 평가되어 multi-page 응답을
+  #           multi-array stream으로 만든다. Step 3-3 reaction fetch와 동일한
+  #           2-stage 패턴 사용: 1차는 raw 객체/스칼라만 emit, 2차 `jq -s`로
+  #           전 페이지를 슬럽 후 단일 연산. 이 방어가 깨지면 sweep이 silent
+  #           false-pass로 통과하므로 구조적 정확성이 가장 중요한 곳.
+  SWEEP_REVIEW_IDS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews --paginate \
+    --jq ".[] | select(.user.login == \"$CODEX_BOT_LOGIN\") | {id, submitted_at}" \
+    | jq -s 'sort_by(.submitted_at) | [.[].id]')
+  SWEEP_COMMENTS='[]'
+  for REVIEW_ID in $(echo "$SWEEP_REVIEW_IDS" | jq -r '.[]'); do
+    SC=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews/$REVIEW_ID/comments --paginate \
+      --jq ".[] | {id, body: .body[0:500], path, line, reviewer_login: .user.login, review_id: $REVIEW_ID}" \
+      | jq -s '.')
+    SWEEP_COMMENTS=$(echo "$SWEEP_COMMENTS" | jq --argjson c "$SC" '. + $c')
+  done
+  REPLIED_IDS_FRESH=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/comments --paginate \
+    --jq '.[] | select(.in_reply_to_id != null) | .in_reply_to_id' \
+    | jq -s '.')
+  SWEEP_UNANSWERED=$(echo "$SWEEP_COMMENTS" \
+    | jq --argjson replied "$REPLIED_IDS_FRESH" \
+    '[.[] | select(.id as $cid | ($replied | index($cid)) | not)]')
+  SWEEP_UNANSWERED_COUNT=$(echo "$SWEEP_UNANSWERED" | jq 'length')
+
+  if [ "${SWEEP_UNANSWERED_COUNT:-0}" -eq "0" ]; then
+    CODEX_PASSED=true
+  else
+    # Race 감지 — Step 3-1/3-2 결과를 fresh 데이터로 덮어써 Step 6이 fix 경로로
+    # 정상 진입하도록.
+    CODEX_ALL_COMMENTS="$SWEEP_COMMENTS"
+    UNANSWERED_CODEX="$SWEEP_UNANSWERED"
+    UNANSWERED_CODEX_COUNT="$SWEEP_UNANSWERED_COUNT"
+    echo "Final sweep race 감지: 신규 미답변 코멘트 ${SWEEP_UNANSWERED_COUNT}건. Step 4 fix 경로로 진행." >&2
+  fi
+fi
 
 # Gemini 통과 확인 (활성 시에만 평가, 미설정 시 자동 통과)
 if [ "$GEMINI_ENABLED" = true ]; then
@@ -577,6 +646,8 @@ PR이 머지 가능한 상태입니다. / 사용자 확인이 필요합니다.
 | Codex 승인 판정 시 PR body 텍스트에서 👍 이모지 grep           | Codex는 PR(issue) `reactions` 엔드포인트에 `content: "+1"`로 반응. `gh api .../issues/$PR_NUM/reactions`를 codex bot 로그인 + `+1`로 필터 |
 | Codex가 `eyes`(👀) 반응인 상태를 "무응답"으로 오인해 stale 카운트 증가 | `eyes`는 "리뷰 진행 중" 상태 — polling 계속. 최신 reaction content를 `approved`(+1) / `reviewing`(eyes) / `pending`(없음)으로 분기 |
 | fix push 후 Codex 재리뷰가 완료되기 전에 이전 라운드의 `+1`만 보고 통과 판정 | PUSH_TIME 이후의 **최신** reaction content를 봐야 현재 코드 상태의 승인 여부 판정 가능. 새 push는 `+1`을 `eyes`로 되돌림 |
+| Codex가 review submit과 +1 reaction을 거의 동시에 처리할 때, reaction만 먼저 보고 review-comments 미답변을 놓침 | Step 3-1에서 `ALL_*_REVIEW_IDS`를 매 라운드 재조회 + Step 3-3에서 CODEX_STATE=approved 직후 final sweep으로 reviews/review-comments 한 번 더 fetch |
+| `ALL_*_REVIEW_IDS`를 Step 1의 cycle-start snapshot만 신뢰 | 매 라운드 Step 3-1 진입 시 재조회 — 사이클 도중 submit된 review를 누락하지 않도록 |
 | Step 2 polling에서 PR 작성자의 리뷰 reply도 "새 리뷰"로 카운트 | `gh api .../reviews`에 bot 로그인 **정확 매칭** 필수 (`select(.user.login == $codex or .user.login == $gemini)`). substring `test("codex\|gemini")`는 identity spoofing 위험 있음 — Step 3-3의 가드와 일관되게 exact match 사용 |
 
 ## Related Skills
