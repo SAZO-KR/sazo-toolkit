@@ -130,11 +130,15 @@ done
 #
 # `pmset -g`에서 SleepDisabled 라인이 누락되면 시스템 기본값(0 = sleep 허용)으로
 # 간주. 일부 환경/버전에서 값이 0일 때 라인이 생략될 수 있어 방어적으로 처리.
+#
+# awk는 키 바로 뒤 필드($2)를 출력. `$NF`를 쓰면 일부 macOS 빌드/조건에서
+# 라인이 `SleepDisabled 1 (imposed by 'coreaudiod')` 같은 metadata 꼬리표를
+# 달고 나올 때 마지막 토큰을 잡아 case에서 0으로 오판된다.
 desired=0
 [ "$active_count" -gt 0 ] && desired=1
 
 current=$("$PMSET_BIN" -g 2>/dev/null \
-    | awk '/^[[:space:]]*SleepDisabled/ {print $NF; found=1; exit} END {if (!found) print "0"}')
+    | awk '/^[[:space:]]*SleepDisabled/ {print $2; found=1; exit} END {if (!found) print "0"}')
 case "$current" in
     0|1) ;;
     *) current=0 ;;

@@ -317,14 +317,21 @@ mkdir -p "$STUB_BIN8"
 SUDO_TOUCH="$SANDBOX8/sudo-called"
 PMSET_TOUCH="$SANDBOX8/pmset-mutate-called"
 
-# pmset stub: -g면 SleepDisabled 1 출력, -a (mutation)면 touch marker
+# pmset stub: -g면 SleepDisabled 출력, -a (mutation)면 touch marker.
+# PMSET_MOCK_SUFFIX가 설정되면 값 뒤에 metadata 꼬리표를 붙여 출력
+# (예: "SleepDisabled 1 (imposed by 'coreaudiod')").
+# 이는 awk \$NF → \$2 회귀 테스트용.
 cat > "$STUB_BIN8/pmset" <<EOF
 #!/bin/bash
 if [ "\$1" = "-g" ]; then
     case "\$2" in
         ''|live|everything)
             echo "System-wide power settings:"
-            echo " SleepDisabled		\$PMSET_MOCK_VALUE"
+            if [ -n "\${PMSET_MOCK_SUFFIX:-}" ]; then
+                echo " SleepDisabled		\$PMSET_MOCK_VALUE \$PMSET_MOCK_SUFFIX"
+            else
+                echo " SleepDisabled		\$PMSET_MOCK_VALUE"
+            fi
             ;;
         *) ;;
     esac
@@ -403,6 +410,22 @@ if [ ! -e "$SUDO_TOUCH" ]; then
 else
     echo "  INFO 활성 마커 0인데 sudo 호출됨 — 다른 사용자 fresh 마커 존재 가능성 (skip 평가)"
 fi
+
+# (e) awk 파싱 회귀: pmset 출력에 metadata 꼬리표가 붙은 경우에도
+# 상태값을 정확히 추출해야 함 (Gemini round 2 피드백).
+# 예: "SleepDisabled 1 (imposed by 'coreaudiod')" — \$NF는 마지막 토큰을
+# 잡으므로 case 0/1) 검증에서 떨어져 0으로 오판되어 sudo 불필요 호출 발생.
+touch "$SKIP_MARKER"  # 활성 마커 1개 → desired=1
+rm -f "$SUDO_TOUCH" "$PMSET_TOUCH"
+rmdir "$LOCK_DIR" 2>/dev/null || true
+PMSET_BIN="$STUB_BIN8/pmset" PMSET_MOCK_VALUE=1 PMSET_MOCK_SUFFIX="(imposed by 'coreaudiod')" PATH="$STUB_BIN8:$PATH" "$WATCH" sync
+
+if [ ! -e "$SUDO_TOUCH" ]; then
+    pass "metadata 꼬리표 출력에서도 현재=1 정확 추출 → sudo skip"
+else
+    fail "metadata 꼬리표에서 awk \$NF가 마지막 토큰을 잡아 sudo 오호출됨"
+fi
+rm -f "$SKIP_MARKER"
 
 rm -rf "$SANDBOX8"
 rmdir "$LOCK_DIR" 2>/dev/null || true
