@@ -7,12 +7,13 @@
 # 동작:
 #   1) /tmp/claude-awake-$USER/* 중 mtime이 STALE_SECS를 초과한 마커 제거
 #      (interrupt 시 Stop 훅이 불리지 않는 케이스 안전망)
-#   2) 남은 마커 수에 따라 `sudo -n pmset -a disablesleep 0|1` 호출
-#      (NOPASSWD sudoers 엔트리 필요 — setup.sh가 설치)
+#   2) 남은 마커 수와 현재 SleepDisabled 값이 다를 때만 `sudo -n pmset -a
+#      disablesleep 0|1` 호출 (NOPASSWD sudoers 엔트리 필요 — setup.sh가 설치).
+#      현재 값은 sudo 없는 `pmset -g`에서 읽어 0/non-0 경계를 넘을 때만 sudo 호출.
 #
-# pmset은 매 sync마다 호출 (캐시 없음). pmset -a는 시스템 전역이고
-# idempotent & 저비용이라, 사용자별 state 캐시는 cross-user short-circuit
-# 버그를 유발할 수 있어 제거함.
+# 사용자별 state 캐시는 두지 않음 — pmset -a는 시스템 전역이라 cross-user
+# short-circuit 버그를 유발한다. `pmset -g`의 SleepDisabled는 시스템 권위값이라
+# 어느 사용자의 watchdog이 호출해도 동일한 값을 본다.
 #
 # STALE_SECS 기본 900초(15분):
 #   - 단일 tool이 15분 넘게 실행되는 동안 중간 tool 경계(heartbeat)가 없으면
@@ -111,15 +112,35 @@ for dir in /tmp/claude-awake-*; do
     done
 done
 
-# pmset 호출 — 캐시 없이 매 sync마다 desired_state로 동기화.
-# 이전 설계는 per-user state cache를 뒀으나, pmset -a는 시스템 전역이라
-# user A가 on 설정 후 watchdog을 중단하면 user B의 watchdog이 "내 캐시 off
-# == desired_state off"로 short-circuit해서 on이 stuck되는 문제가 있음.
-# pmset -a disablesleep 0|1 은 idempotent & 저비용이라 매번 호출해도 무해.
-if [ "$active_count" -gt 0 ]; then
-    sudo -n /usr/bin/pmset -a disablesleep 1 >/dev/null 2>&1 || true
-else
-    sudo -n /usr/bin/pmset -a disablesleep 0 >/dev/null 2>&1 || true
+# 노이즈 감소: launchd가 ~10초 주기로 watchdog을 호출하므로 매 sync마다 sudo를
+# spawn하면 macOS Sequoia가 background-activity notification을 띄우거나 unified
+# log에 sudo의 "Too many groups requested" 같은 Default-level 경고가 누적된다.
+# `pmset -g`는 sudo 없이 시스템 전역 SleepDisabled 값을 출력하므로(authoritative
+# read), 현재 값과 desired_state가 같으면 sudo 호출을 skip — 활성 마커 수가
+# 0/non-0 경계를 넘는 시점에만 sudo가 호출된다.
+#
+# per-user cache를 쓰지 않는 이유는 그대로 유효: 여기서 읽는 SleepDisabled는
+# 시스템 전역 pmset의 권위값이므로 user A가 설정한 상태를 user B의 watchdog도
+# 정확히 본다. cross-user short-circuit 버그가 발생하지 않는다.
+#
+# `pmset -g`에서 SleepDisabled 라인이 누락되면 시스템 기본값(0 = sleep 허용)으로
+# 간주. 일부 환경/버전에서 값이 0일 때 라인이 생략될 수 있어 방어적으로 처리.
+desired=0
+[ "$active_count" -gt 0 ] && desired=1
+
+current=$(pmset -g 2>/dev/null \
+    | awk '/^[[:space:]]*SleepDisabled/ {print $NF; found=1; exit} END {if (!found) print "0"}')
+case "$current" in
+    0|1) ;;
+    *) current=0 ;;
+esac
+
+if [ "$current" != "$desired" ]; then
+    if [ "$desired" = "1" ]; then
+        sudo -n /usr/bin/pmset -a disablesleep 1 >/dev/null 2>&1 || true
+    else
+        sudo -n /usr/bin/pmset -a disablesleep 0 >/dev/null 2>&1 || true
+    fi
 fi
 
 exit 0
