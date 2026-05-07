@@ -299,8 +299,9 @@ echo ""
 echo "Case 10: watchdog idempotent skip — 상태 일치 시 sudo 호출 안 함"
 
 # (a) 소스 grep — pmset -g 기반 idempotent check 식이 watchdog.sh에 존재
-# pmset -g 호출과 awk 파이프가 다음 줄에 걸쳐 있을 수 있어 개별 라인으로 검증
-if grep -q 'pmset -g' "$WATCH" \
+# pmset 호출은 PMSET_BIN 변수 경유 (절대 경로 default, 테스트 override 가능).
+# awk 파이프가 다음 줄에 걸쳐 있을 수 있어 개별 라인으로 검증.
+if grep -qE '"\$PMSET_BIN"[[:space:]]+-g|/usr/bin/pmset[[:space:]]+-g|pmset[[:space:]]+-g' "$WATCH" \
    && grep -q 'SleepDisabled' "$WATCH" \
    && grep -q 'awk' "$WATCH" \
    && grep -q 'current.*!=.*desired\|"\$current".*"\$desired"' "$WATCH"; then
@@ -337,16 +338,19 @@ exit 0
 EOF
 chmod +x "$STUB_BIN8/pmset"
 
-# sudo stub: 호출되면 touch marker. -n /usr/bin/pmset 형태도 처리
+# sudo stub: 호출되면 touch marker. -n <pmset> 형태도 처리.
+# watchdog은 PMSET_BIN을 넘기므로 절대 경로($STUB_BIN8/pmset)도 매칭해야 한다.
 cat > "$STUB_BIN8/sudo" <<EOF
 #!/bin/bash
 touch "$SUDO_TOUCH"
 # sudo가 실제 mutation까지 했는지도 보고 싶으면 인자로 pmset 실행
 shift # -n
-if [ "\$1" = "/usr/bin/pmset" ] || [ "\$1" = "pmset" ]; then
-    shift
-    "$STUB_BIN8/pmset" "\$@"
-fi
+case "\$1" in
+    "$STUB_BIN8/pmset"|/usr/bin/pmset|pmset)
+        shift
+        "$STUB_BIN8/pmset" "\$@"
+        ;;
+esac
 exit 0
 EOF
 chmod +x "$STUB_BIN8/sudo"
@@ -359,7 +363,8 @@ rm -f "$SUDO_TOUCH" "$PMSET_TOUCH"
 rmdir "$LOCK_DIR" 2>/dev/null || true
 
 # pmset 현재값=1, desired=1 → sudo 호출 skip
-PMSET_MOCK_VALUE=1 PATH="$STUB_BIN8:$PATH" "$WATCH" sync
+# PMSET_BIN으로 stub 직접 가리킴 (절대 경로 default를 우회).
+PMSET_BIN="$STUB_BIN8/pmset" PMSET_MOCK_VALUE=1 PATH="$STUB_BIN8:$PATH" "$WATCH" sync
 
 if [ ! -e "$SUDO_TOUCH" ]; then
     pass "상태 일치(현재=1, desired=1) → sudo 호출 안 됨"
@@ -375,7 +380,7 @@ fi
 # (c) 상태 불일치: pmset 현재값=0, 활성 마커 존재 → desired=1, sudo 호출 IS 발생
 rm -f "$SUDO_TOUCH" "$PMSET_TOUCH"
 rmdir "$LOCK_DIR" 2>/dev/null || true
-PMSET_MOCK_VALUE=0 PATH="$STUB_BIN8:$PATH" "$WATCH" sync
+PMSET_BIN="$STUB_BIN8/pmset" PMSET_MOCK_VALUE=0 PATH="$STUB_BIN8:$PATH" "$WATCH" sync
 
 if [ -e "$SUDO_TOUCH" ]; then
     pass "상태 불일치(현재=0, desired=1) → sudo 호출됨"
@@ -387,7 +392,7 @@ fi
 rm -f "$SKIP_MARKER" "$SUDO_TOUCH" "$PMSET_TOUCH"
 # 다른 사용자 디렉토리도 비어 있어야 active_count=0
 rmdir "$LOCK_DIR" 2>/dev/null || true
-PMSET_MOCK_VALUE=0 PATH="$STUB_BIN8:$PATH" "$WATCH" sync
+PMSET_BIN="$STUB_BIN8/pmset" PMSET_MOCK_VALUE=0 PATH="$STUB_BIN8:$PATH" "$WATCH" sync
 
 # 다른 사용자 stale 마커가 있으면 결과 영향. 본 테스트 호스트 한정으로
 # 본인 마커 0 + 현재=0이면 일반적으로 active_count=0 → sudo skip.

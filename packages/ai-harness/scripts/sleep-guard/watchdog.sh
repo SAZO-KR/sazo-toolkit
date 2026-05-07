@@ -28,6 +28,11 @@ set -u
 MODE="${1:-}"
 [ "$MODE" = "sync" ] || exit 0
 
+# launchd PATH는 제한적이라 (/usr/bin:/bin:/usr/sbin:/sbin) 절대 경로로 호출.
+# sudo NOPASSWD sudoers 엔트리도 /usr/bin/pmset 절대 경로에 바인딩되므로 직접 호출
+# 경로와 일치시켜 일관성 확보. 테스트는 PMSET_BIN을 stub 경로로 override.
+PMSET_BIN="${PMSET_BIN:-/usr/bin/pmset}"
+
 # 멀티유저 환경 권한 충돌 방지 — /tmp 공용 경로를 사용자별로 분리.
 # $USER가 비어 있으면(일부 launchd 컨텍스트) UID로 폴백.
 USER_SUFFIX="${USER:-$(id -u)}"
@@ -128,19 +133,16 @@ done
 desired=0
 [ "$active_count" -gt 0 ] && desired=1
 
-current=$(pmset -g 2>/dev/null \
+current=$("$PMSET_BIN" -g 2>/dev/null \
     | awk '/^[[:space:]]*SleepDisabled/ {print $NF; found=1; exit} END {if (!found) print "0"}')
 case "$current" in
     0|1) ;;
     *) current=0 ;;
 esac
 
+# desired는 위에서 0/1로만 설정되므로 분기 없이 그대로 전달.
 if [ "$current" != "$desired" ]; then
-    if [ "$desired" = "1" ]; then
-        sudo -n /usr/bin/pmset -a disablesleep 1 >/dev/null 2>&1 || true
-    else
-        sudo -n /usr/bin/pmset -a disablesleep 0 >/dev/null 2>&1 || true
-    fi
+    sudo -n "$PMSET_BIN" -a disablesleep "$desired" >/dev/null 2>&1 || true
 fi
 
 exit 0
