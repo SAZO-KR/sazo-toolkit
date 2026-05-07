@@ -149,11 +149,22 @@ done
 desired=0
 [ "$active_count" -gt 0 ] && desired=1
 
-current=$("$PMSET_READ_BIN" -g 2>/dev/null \
-    | awk '/^[[:space:]]*SleepDisabled/ {print $2; found=1; exit} END {if (!found) print "unknown"}')
-# unknown sentinel: SleepDisabled 라인을 못 찾았다 = read 신뢰 불가 (PMSET_READ_BIN
-# 자체 실패 또는 출력 형식 변경). 0/1로 normalize하지 말고 unknown 유지 — 아래
-# 비교에서 desired(0/1)와 무조건 mismatch가 되어 보수적으로 sudo write를 강제한다.
+# pmset 호출 자체 실패와 "성공 + SleepDisabled 라인 생략" 두 시나리오를 구분.
+# macOS default(SleepDisabled=0)에서는 라인이 출력되지 않을 수 있으므로 line 생략을
+# 무조건 unknown으로 처리하면 idle 머신에서 매 sync마다 sudo가 호출돼 idempotent
+# skip이 무력화된다 (Codex 라운드 5 회귀). 따라서:
+#   - exit_code != 0 OR empty stdout → unknown (PMSET_READ_BIN 자체 호출 실패)
+#   - exit_code == 0 + non-empty output:
+#       SleepDisabled 라인 있음 → 그 값
+#       라인 없음 → 0 (default 미표시)
+pmset_output=$("$PMSET_READ_BIN" -g 2>/dev/null)
+pmset_rc=$?
+if [ "$pmset_rc" -ne 0 ] || [ -z "$pmset_output" ]; then
+    current=unknown
+else
+    current=$(printf '%s\n' "$pmset_output" \
+        | awk '/^[[:space:]]*SleepDisabled/ {print $2; found=1; exit} END {if (!found) print "0"}')
+fi
 case "$current" in
     0|1|unknown) ;;
     *) current=unknown ;;
