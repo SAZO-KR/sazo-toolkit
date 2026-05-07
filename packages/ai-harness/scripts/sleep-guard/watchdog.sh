@@ -29,9 +29,16 @@ MODE="${1:-}"
 [ "$MODE" = "sync" ] || exit 0
 
 # launchd PATH는 제한적이라 (/usr/bin:/bin:/usr/sbin:/sbin) 절대 경로로 호출.
-# sudo NOPASSWD sudoers 엔트리도 /usr/bin/pmset 절대 경로에 바인딩되므로 직접 호출
-# 경로와 일치시켜 일관성 확보. 테스트는 PMSET_BIN을 stub 경로로 override.
-PMSET_BIN="${PMSET_BIN:-/usr/bin/pmset}"
+# sudo NOPASSWD sudoers 엔트리는 정확히 `/usr/bin/pmset -a disablesleep 0|1`만 허용
+# 하므로 sudo write는 절대 경로를 하드코드해야 매칭이 깨지지 않는다. 만약 production
+# 에서 PMSET_BIN env가 노출되면 (예: launchctl setenv) sudo -n "$PMSET_BIN" ...이
+# silent fail하여 active-session 전환 시 sleep 토글이 안 됨 (Codex 리뷰 P2).
+#
+# 따라서 read와 write를 분리:
+#   - PMSET_READ_BIN: sudo 없이 SleepDisabled 읽기. 테스트는 PMSET_BIN env로 stub.
+#   - write 경로: /usr/bin/pmset 하드코드 (sudoers NOPASSWD와 정확 매칭). 테스트는
+#     sudo 자체를 stub해서 path와 무관하게 호출 여부만 확인.
+PMSET_READ_BIN="${PMSET_BIN:-/usr/bin/pmset}"
 
 # 멀티유저 환경 권한 충돌 방지 — /tmp 공용 경로를 사용자별로 분리.
 # $USER가 비어 있으면(일부 launchd 컨텍스트) UID로 폴백.
@@ -137,7 +144,7 @@ done
 desired=0
 [ "$active_count" -gt 0 ] && desired=1
 
-current=$("$PMSET_BIN" -g 2>/dev/null \
+current=$("$PMSET_READ_BIN" -g 2>/dev/null \
     | awk '/^[[:space:]]*SleepDisabled/ {print $2; found=1; exit} END {if (!found) print "0"}')
 case "$current" in
     0|1) ;;
@@ -145,8 +152,10 @@ case "$current" in
 esac
 
 # desired는 위에서 0/1로만 설정되므로 분기 없이 그대로 전달.
+# write 경로는 /usr/bin/pmset 하드코드 — sudoers NOPASSWD가 정확히 이 경로에
+# 바인딩되어 있어야만 silent fail 없이 동작. PMSET_BIN env로 override 금지.
 if [ "$current" != "$desired" ]; then
-    sudo -n "$PMSET_BIN" -a disablesleep "$desired" >/dev/null 2>&1 || true
+    sudo -n /usr/bin/pmset -a disablesleep "$desired" >/dev/null 2>&1 || true
 fi
 
 exit 0
