@@ -184,19 +184,21 @@ fi
 # 강한 end-to-end 가드는 Case 9의 anchored extraction + isolated subshell 평가가 담당.
 echo ""
 echo "Case 8: sudoers username escape (dot-bearing username 회귀 가드)"
+# LC_ALL=C 명시: locale 의존적 [A-Za-z] 범위 해석 방지 (Gemini 리뷰 권고).
+ESCAPE_SED_INVOCATION="LC_ALL=C sed 's/[^A-Za-z0-9_-]/\\\\&/g'"
 ESCAPE_SED='s/[^A-Za-z0-9_-]/\\&/g'
-if grep -Fq "$ESCAPE_SED" "$SETUP"; then
-    pass "setup.sh 내 escape sed expression 존재"
+if grep -Fq "$ESCAPE_SED_INVOCATION" "$SETUP"; then
+    pass "setup.sh 내 escape sed expression 존재 (LC_ALL=C 포함)"
 else
-    fail "setup.sh 내 escape sed expression 미발견 (회귀)"
+    fail "setup.sh 내 escape sed expression 미발견 또는 LC_ALL=C 누락 (회귀)"
 fi
-escaped=$(printf '%s' 'hakun.lee' | sed "$ESCAPE_SED")
+escaped=$(printf '%s' 'hakun.lee' | LC_ALL=C sed "$ESCAPE_SED")
 if [ "$escaped" = 'hakun\.lee' ]; then
     pass 'dot 포함 username escape (hakun.lee → hakun\.lee)'
 else
     fail "dot escape 결과 불일치: $escaped"
 fi
-escaped=$(printf '%s' 'simple_user-1' | sed "$ESCAPE_SED")
+escaped=$(printf '%s' 'simple_user-1' | LC_ALL=C sed "$ESCAPE_SED")
 if [ "$escaped" = 'simple_user-1' ]; then
     pass "alphanumeric/_/- only → escape 없음"
 else
@@ -211,25 +213,26 @@ fi
 # 하는지(`tr -c 'A-Za-z0-9_-' '_'`) 검증한다.
 echo ""
 echo "Case 9: sudoers.d 파일명 sanitize (dot/tilde 포함 username 회귀 가드)"
-SANITIZE_TR="tr -c 'A-Za-z0-9_-' '_'"
-if grep -Fq "$SANITIZE_TR" "$SETUP"; then
-    pass "setup.sh 내 파일명 sanitize tr expression 존재"
+# LC_ALL=C 명시: locale 의존적 [A-Za-z] 범위 해석 방지 (Gemini 리뷰 권고).
+SANITIZE_TR_INVOCATION="LC_ALL=C tr -c 'A-Za-z0-9_-' '_'"
+if grep -Fq "$SANITIZE_TR_INVOCATION" "$SETUP"; then
+    pass "setup.sh 내 파일명 sanitize tr expression 존재 (LC_ALL=C 포함)"
 else
-    fail "setup.sh 내 파일명 sanitize tr expression 미발견 (회귀)"
+    fail "setup.sh 내 파일명 sanitize tr expression 미발견 또는 LC_ALL=C 누락 (회귀)"
 fi
-sanitized=$(printf '%s' 'hakun.lee' | tr -c 'A-Za-z0-9_-' '_')
+sanitized=$(printf '%s' 'hakun.lee' | LC_ALL=C tr -c 'A-Za-z0-9_-' '_')
 if [ "$sanitized" = 'hakun_lee' ]; then
     pass 'dot 포함 username (hakun.lee → hakun_lee)'
 else
     fail "sanitize 결과 불일치: $sanitized"
 fi
-sanitized=$(printf '%s' 'user~bak' | tr -c 'A-Za-z0-9_-' '_')
+sanitized=$(printf '%s' 'user~bak' | LC_ALL=C tr -c 'A-Za-z0-9_-' '_')
 if [ "$sanitized" = 'user_bak' ]; then
     pass 'tilde 포함 username (user~bak → user_bak)'
 else
     fail "tilde sanitize 불일치: $sanitized"
 fi
-sanitized=$(printf '%s' 'plain-user_1' | tr -c 'A-Za-z0-9_-' '_')
+sanitized=$(printf '%s' 'plain-user_1' | LC_ALL=C tr -c 'A-Za-z0-9_-' '_')
 if [ "$sanitized" = 'plain-user_1' ]; then
     pass "alphanumeric/_/- only → 변환 없음"
 else

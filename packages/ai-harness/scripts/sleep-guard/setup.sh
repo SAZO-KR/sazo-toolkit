@@ -42,7 +42,7 @@ PLIST_PATH="$LAUNCH_AGENTS_DIR/shop.sazo.claude-sleep-guard.plist"
 # 환경에서 dot이 그대로 들어가면 룰 자체가 로드 안 되어 NOPASSWD 미동작 → 'sudo -n
 # pmset' 실패 → sleep-guard 사실상 미동작. 따라서 파일명에 들어가는 username은
 # alphanumeric/_/- 외 문자를 '_'로 치환한다.
-SUDOERS_FILENAME_USER=$(printf '%s' "${USER:-$(id -un)}" | tr -c 'A-Za-z0-9_-' '_')
+SUDOERS_FILENAME_USER=$(printf '%s' "${USER:-$(id -un)}" | LC_ALL=C tr -c 'A-Za-z0-9_-' '_')
 SUDOERS_FILE="/etc/sudoers.d/sazo-claude-pmset-${SUDOERS_FILENAME_USER}"
 # 멀티유저 collision 한계: 두 사용자 short name이 non-alphanumeric만 다르면 (예:
 # 'foo.bar' vs 'foo_bar') 둘 다 'sazo-claude-pmset-foo_bar'로 매핑되어 두 번째
@@ -262,7 +262,7 @@ install_sudoers() {
     # → watchdog의 `sudo -n pmset` 실패 → sleep-guard 사실상 미작동.
     # macOS 'firstname.lastname' username 환경에서 특히 자주 노출되는 버그.
     local sudo_user_spec
-    sudo_user_spec=$(printf '%s' "$sudo_user" | sed 's/[^A-Za-z0-9_-]/\\&/g')
+    sudo_user_spec=$(printf '%s' "$sudo_user" | LC_ALL=C sed 's/[^A-Za-z0-9_-]/\\&/g')
     if [ -f "$SUDOERS_FILE" ]; then
         # 기존 파일이 기대 내용과 같으면 skip
         local expected="$sudo_user_spec ALL=(ALL) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1"
