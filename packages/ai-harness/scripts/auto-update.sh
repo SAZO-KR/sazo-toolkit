@@ -211,7 +211,13 @@ notify_sleep_guard_sudoers_missing() {
     #        fallback하여 false alarm 방지. macOS 기본 /etc/sudoers.d 퍼미션(0755)
     #        에서 `test -f`는 일반 사용자도 가능.
     local status="missing"
-    local user_suffix="${USER:-$(id -un)}"
+    # setup.sh와 동일 sanitize: sudoers(5)는 /etc/sudoers.d 안의 dot/tilde 파일을
+    # 무시한다. raw $USER 기반의 legacy 경로(예: 'sazo-claude-pmset-hakun.lee')는
+    # 파일은 존재해도 sudo가 로드 안 함 → file existence fallback이 false 'ok'를
+    # 반환해 사용자에게 repair prompt가 안 뜬다. 새 sanitized 파일명만 fallback의
+    # 권위 경로로 사용 (Codex 리뷰 P2).
+    local user_suffix
+    user_suffix=$(printf '%s' "${USER:-$(id -un)}" | LC_ALL=C tr -c 'A-Za-z0-9_-' '_')
     local sudoers_file="/etc/sudoers.d/sazo-claude-pmset-${user_suffix}"
     if [ -n "${_SLEEP_GUARD_SUDOERS_CHECK:-}" ]; then
         status="$_SLEEP_GUARD_SUDOERS_CHECK"

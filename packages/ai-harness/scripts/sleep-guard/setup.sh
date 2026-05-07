@@ -37,7 +37,22 @@ LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 PLIST_PATH="$LAUNCH_AGENTS_DIR/shop.sazo.claude-sleep-guard.plist"
 # 멀티유저/공유 머신에서 다른 사용자가 setup.sh를 돌릴 때 기존 사용자의
 # NOPASSWD 엔트리를 덮어쓰지 않도록 파일명에 $USER를 포함한다.
-SUDOERS_FILE="/etc/sudoers.d/sazo-claude-pmset-${USER:-$(id -un)}"
+# 단, sudoers(5) 명시: "/etc/sudoers.d 안의 파일이 '.' 또는 '~'를 포함하면 sudo가 무시"
+# (패키지 매니저/에디터 백업 파일과 충돌 방지). macOS 'firstname.lastname' username
+# 환경에서 dot이 그대로 들어가면 룰 자체가 로드 안 되어 NOPASSWD 미동작 → 'sudo -n
+# pmset' 실패 → sleep-guard 사실상 미동작. 따라서 파일명에 들어가는 username은
+# alphanumeric/_/- 외 문자를 '_'로 치환한다.
+SUDOERS_FILENAME_USER=$(printf '%s' "${USER:-$(id -un)}" | LC_ALL=C tr -c 'A-Za-z0-9_-' '_')
+SUDOERS_FILE="/etc/sudoers.d/sazo-claude-pmset-${SUDOERS_FILENAME_USER}"
+# 멀티유저 collision 한계: 두 사용자 short name이 non-alphanumeric만 다르면 (예:
+# 'foo.bar' vs 'foo_bar') 둘 다 'sazo-claude-pmset-foo_bar'로 매핑되어 두 번째
+# 설치가 첫 번째의 NOPASSWD 룰을 덮는다. 결과적으로 첫 번째 사용자의 sleep-guard는
+# 다음 'sudo -n pmset' 호출에서 조용히 실패한다 (룰의 username 필드가 두 번째 사용자
+# 이므로 첫 번째 사용자에는 매칭 안 됨). macOS 개인 dev machine에선 드문 시나리오고,
+# 권한 상승 없음(overwriting 사용자도 pmset NOPASSWD만 얻음).
+# 동일 사용자가 이전 버전(파일명에 dot 포함)으로 만든 stale 파일이 남아 있으면
+# 새 파일과 공존하게 된다(sudo는 dot 파일 무시이므로 룰 충돌은 없지만 cleanup 권장).
+LEGACY_SUDOERS_FILE="/etc/sudoers.d/sazo-claude-pmset-${USER:-$(id -un)}"
 
 HOOK_CAFFEINATE_SRC="$SCRIPT_DIR/caffeinate-session.sh"
 HOOK_WATCHDOG_SRC="$SCRIPT_DIR/watchdog.sh"
@@ -242,10 +257,18 @@ msg "  ✓ settings.json 훅 등록"
 install_sudoers() {
     # set -u + USER unset 환경에서도 unbound variable로 죽지 않도록 폴백.
     local sudo_user="${USER:-$(id -un)}"
+    # sudoers 문법: User_List에서 username 중 alphanumeric/_/- 외 문자(예: dot)는
+    # backslash escape 필요. 미escape 시 sudo가 룰을 무시 → NOPASSWD 매칭 실패
+    # → watchdog의 `sudo -n pmset` 실패 → sleep-guard 사실상 미작동.
+    # macOS 'firstname.lastname' username 환경에서 특히 자주 노출되는 버그.
+    local sudo_user_spec
+    sudo_user_spec=$(printf '%s' "$sudo_user" | LC_ALL=C sed 's/[^A-Za-z0-9_-]/\\&/g')
     if [ -f "$SUDOERS_FILE" ]; then
         # 기존 파일이 기대 내용과 같으면 skip
-        local expected="$sudo_user ALL=(ALL) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1"
-        if grep -Fxq "$expected" "$SUDOERS_FILE" 2>/dev/null; then
+        local expected="$sudo_user_spec ALL=(ALL) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1"
+        # `--`로 옵션 종료 명시: $expected가 hyphen으로 시작하는 username으로
+        # 빌드되면 grep이 옵션으로 해석할 수 있다 (defensive).
+        if grep -Fxq -- "$expected" "$SUDOERS_FILE" 2>/dev/null; then
             msg "  ✓ sudoers 엔트리 이미 설치됨: $SUDOERS_FILE"
             return 0
         fi
@@ -259,7 +282,7 @@ install_sudoers() {
     cat > "$tmp" <<EOF
 # sazo ai-harness sleep-guard — Claude Code 세션 활성 중에만 pmset 제어
 # 범위: pmset -a disablesleep 0|1 두 명령만 허용
-$sudo_user ALL=(ALL) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1
+$sudo_user_spec ALL=(ALL) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1
 EOF
 
     # visudo로 문법 검증 먼저
@@ -272,6 +295,26 @@ EOF
     if sudo install -m 440 -o root -g wheel "$tmp" "$SUDOERS_FILE"; then
         rm -f "$tmp"
         msg "  ✓ sudoers 설치 완료: $SUDOERS_FILE"
+        # legacy 파일(이전 버전이 남긴 dot 포함 파일명)이 있으면 cleanup.
+        # sudo는 어차피 dot 파일을 무시하므로 보안/동작 영향 없지만 stale 파일 잔존
+        # 방지를 위해 제거. 새 설치가 성공한 뒤에만 시도.
+        # Path traversal 방어: $USER가 '../...' 같은 슬래시를 포함하면
+        # LEGACY_SUDOERS_FILE 정규화 결과가 sudoers.d 밖을 가리킬 수 있다. basename이
+        # 'sazo-claude-pmset-' prefix이고, full path가 정확히 '/etc/sudoers.d/<basename>'
+        # 인 경우만 cleanup 진행 — 슬래시가 끼어든 입력은 mismatch로 안전 skip.
+        local legacy_basename="${LEGACY_SUDOERS_FILE##*/}"
+        if [ "$LEGACY_SUDOERS_FILE" != "$SUDOERS_FILE" ] \
+            && [ -f "$LEGACY_SUDOERS_FILE" ] \
+            && [ "$LEGACY_SUDOERS_FILE" = "/etc/sudoers.d/$legacy_basename" ] \
+            && case "$legacy_basename" in sazo-claude-pmset-*) true ;; *) false ;; esac
+        then
+            # stderr 보존 — sudo rm 실패 시 사용자가 수동 cleanup 가능하도록 안내.
+            if sudo rm -f "$LEGACY_SUDOERS_FILE"; then
+                msg "  ✓ legacy sudoers 제거: $LEGACY_SUDOERS_FILE"
+            else
+                msg "  ⚠️  legacy sudoers 제거 실패 — 수동 제거: sudo rm $LEGACY_SUDOERS_FILE"
+            fi
+        fi
     else
         rm -f "$tmp"
         err "  ❌ sudoers 설치 실패"

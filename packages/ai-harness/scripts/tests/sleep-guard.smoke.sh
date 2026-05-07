@@ -175,6 +175,122 @@ else
     fail "비-macOS인데 init-done 마커 생성됨"
 fi
 
+# ─── 8. sudoers username escape 회귀 가드 (presence check) ───
+# username이 alphanumeric/_/- 외 문자(예: macOS firstname.lastname)를 포함하면
+# sudoers User_List 매칭이 실패해 NOPASSWD 룰이 무시된다 → watchdog의
+# `sudo -n pmset` 실패 → sleep-guard 사실상 미작동. setup.sh가 backslash escape
+# 를 적용하는지, 그리고 escape 결과가 의도대로 나오는지 검증.
+# 주의: 이 case는 단순 grep + 별도 sed 실행이라 presence/sanity check 수준이다.
+# 강한 end-to-end 가드는 Case 9의 anchored extraction + isolated subshell 평가가 담당.
+echo ""
+echo "Case 8: sudoers username escape (dot-bearing username 회귀 가드)"
+# LC_ALL=C 명시: locale 의존적 [A-Za-z] 범위 해석 방지 (Gemini 리뷰 권고).
+ESCAPE_SED_INVOCATION="LC_ALL=C sed 's/[^A-Za-z0-9_-]/\\\\&/g'"
+ESCAPE_SED='s/[^A-Za-z0-9_-]/\\&/g'
+if grep -Fq "$ESCAPE_SED_INVOCATION" "$SETUP"; then
+    pass "setup.sh 내 escape sed expression 존재 (LC_ALL=C 포함)"
+else
+    fail "setup.sh 내 escape sed expression 미발견 또는 LC_ALL=C 누락 (회귀)"
+fi
+escaped=$(printf '%s' 'hakun.lee' | LC_ALL=C sed "$ESCAPE_SED")
+if [ "$escaped" = 'hakun\.lee' ]; then
+    pass 'dot 포함 username escape (hakun.lee → hakun\.lee)'
+else
+    fail "dot escape 결과 불일치: $escaped"
+fi
+escaped=$(printf '%s' 'simple_user-1' | LC_ALL=C sed "$ESCAPE_SED")
+if [ "$escaped" = 'simple_user-1' ]; then
+    pass "alphanumeric/_/- only → escape 없음"
+else
+    fail "불필요한 변환: $escaped"
+fi
+
+# ─── 9. sudoers.d 파일명 sanitize 회귀 가드 ───
+# sudoers(5): /etc/sudoers.d 안의 파일명에 '.'(dot)이나 '~'(tilde)가 포함되면 sudo가
+# 그 파일을 무시한다 (패키지 매니저/에디터 백업 파일 충돌 방지). macOS 'first.last'
+# username 환경에서 dot이 파일명에 그대로 들어가면 NOPASSWD 룰 자체가 로드되지 않아
+# sleep-guard가 사실상 동작하지 않는다. 이 케이스는 setup.sh가 파일명을 sanitize
+# 하는지(`tr -c 'A-Za-z0-9_-' '_'`) 검증한다.
+echo ""
+echo "Case 9: sudoers.d 파일명 sanitize (dot/tilde 포함 username 회귀 가드)"
+# LC_ALL=C 명시: locale 의존적 [A-Za-z] 범위 해석 방지 (Gemini 리뷰 권고).
+SANITIZE_TR_INVOCATION="LC_ALL=C tr -c 'A-Za-z0-9_-' '_'"
+if grep -Fq "$SANITIZE_TR_INVOCATION" "$SETUP"; then
+    pass "setup.sh 내 파일명 sanitize tr expression 존재 (LC_ALL=C 포함)"
+else
+    fail "setup.sh 내 파일명 sanitize tr expression 미발견 또는 LC_ALL=C 누락 (회귀)"
+fi
+sanitized=$(printf '%s' 'hakun.lee' | LC_ALL=C tr -c 'A-Za-z0-9_-' '_')
+if [ "$sanitized" = 'hakun_lee' ]; then
+    pass 'dot 포함 username (hakun.lee → hakun_lee)'
+else
+    fail "sanitize 결과 불일치: $sanitized"
+fi
+sanitized=$(printf '%s' 'user~bak' | LC_ALL=C tr -c 'A-Za-z0-9_-' '_')
+if [ "$sanitized" = 'user_bak' ]; then
+    pass 'tilde 포함 username (user~bak → user_bak)'
+else
+    fail "tilde sanitize 불일치: $sanitized"
+fi
+sanitized=$(printf '%s' 'plain-user_1' | LC_ALL=C tr -c 'A-Za-z0-9_-' '_')
+if [ "$sanitized" = 'plain-user_1' ]; then
+    pass "alphanumeric/_/- only → 변환 없음"
+else
+    fail "불필요한 변환: $sanitized"
+fi
+# legacy 경로 cleanup 로직 존재 검증
+if grep -Fq 'LEGACY_SUDOERS_FILE' "$SETUP"; then
+    pass "legacy sudoers cleanup 로직 존재"
+else
+    fail "legacy sudoers cleanup 로직 미발견"
+fi
+
+# Path traversal guard 회귀 가드 — $USER에 '/'가 포함되면 LEGACY_SUDOERS_FILE 정규화
+# 결과가 sudoers.d 밖을 가리킬 수 있다(Gemini 리뷰 medium). cleanup 직전 basename
+# prefix + 정확한 sudoers.d 경로 매칭이 active code path에 있는지 검증.
+if grep -Fq 'case "$legacy_basename" in sazo-claude-pmset-*' "$SETUP"; then
+    pass "path traversal guard (basename prefix case statement) 존재"
+else
+    fail "path traversal guard 미발견 (회귀)"
+fi
+if grep -Fq '"$LEGACY_SUDOERS_FILE" = "/etc/sudoers.d/$legacy_basename"' "$SETUP"; then
+    pass "path traversal guard (sudoers.d 정확 경로 매칭) 존재"
+else
+    fail "path traversal guard sudoers.d 경로 매칭 미발견 (회귀)"
+fi
+
+# auto-update.sh의 sleep-guard sudoers fallback도 setup.sh와 동일 sanitize를
+# 사용해야 dot 포함 username 환경에서 false 'ok'가 발생하지 않음 (Codex 리뷰 P2).
+# 동일 LC_ALL=C tr 호출이 auto-update.sh의 user_suffix 라인 부근에 있는지 grep.
+AUTO_UPDATE="$SCRIPT_DIR/auto-update.sh"
+if grep -Fq "$SANITIZE_TR_INVOCATION" "$AUTO_UPDATE"; then
+    pass "auto-update.sh도 setup.sh와 동일 sanitize 사용"
+else
+    fail "auto-update.sh sanitize 동기화 누락 (회귀)"
+fi
+
+# 더 강한 회귀 가드 — setup.sh의 실제 변수 선언 라인을 추출해 isolated subshell에서
+# 평가한다. 단순 grep은 주석 안의 expression까지 통과시키지만, '^SUDOERS_FILENAME_USER='
+# / '^SUDOERS_FILE='로 anchored 추출하면 active code path(top-level assignment)에
+# 위치해야만 잡힌다. USER='hakun.lee' 입력에서 dot 제거된 결과가 산출되는지 직접 검증.
+extracted=$(sed -n '/^SUDOERS_FILENAME_USER=/p; /^SUDOERS_FILE=/p' "$SETUP")
+if [ -z "$extracted" ]; then
+    fail "setup.sh의 SUDOERS_FILENAME_USER/SUDOERS_FILE 선언이 active code path에 없음"
+else
+    actual=$(USER='hakun.lee' bash -c "set -u; $extracted; echo \$SUDOERS_FILE")
+    if [ "$actual" = "/etc/sudoers.d/sazo-claude-pmset-hakun_lee" ]; then
+        pass "USER=hakun.lee → 실제 setup.sh 평가 결과 sazo-claude-pmset-hakun_lee"
+    else
+        fail "setup.sh 평가 결과 불일치: $actual"
+    fi
+    actual=$(USER='simple_user-1' bash -c "set -u; $extracted; echo \$SUDOERS_FILE")
+    if [ "$actual" = "/etc/sudoers.d/sazo-claude-pmset-simple_user-1" ]; then
+        pass "USER=simple_user-1 → 변환 없음 (실제 setup.sh 평가)"
+    else
+        fail "변환 없는 입력 결과 불일치: $actual"
+    fi
+fi
+
 echo ""
 echo "─────────────────────"
 if [ "$FAIL" -eq 0 ]; then
