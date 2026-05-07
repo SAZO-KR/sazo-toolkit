@@ -7,12 +7,13 @@
 # 동작:
 #   1) /tmp/claude-awake-$USER/* 중 mtime이 STALE_SECS를 초과한 마커 제거
 #      (interrupt 시 Stop 훅이 불리지 않는 케이스 안전망)
-#   2) 남은 마커 수에 따라 `sudo -n pmset -a disablesleep 0|1` 호출
-#      (NOPASSWD sudoers 엔트리 필요 — setup.sh가 설치)
+#   2) 남은 마커 수와 현재 SleepDisabled 값이 다를 때만 `sudo -n pmset -a
+#      disablesleep 0|1` 호출 (NOPASSWD sudoers 엔트리 필요 — setup.sh가 설치).
+#      현재 값은 sudo 없는 `pmset -g`에서 읽어 0/non-0 경계를 넘을 때만 sudo 호출.
 #
-# pmset은 매 sync마다 호출 (캐시 없음). pmset -a는 시스템 전역이고
-# idempotent & 저비용이라, 사용자별 state 캐시는 cross-user short-circuit
-# 버그를 유발할 수 있어 제거함.
+# 사용자별 state 캐시는 두지 않음 — pmset -a는 시스템 전역이라 cross-user
+# short-circuit 버그를 유발한다. `pmset -g`의 SleepDisabled는 시스템 권위값이라
+# 어느 사용자의 watchdog이 호출해도 동일한 값을 본다.
 #
 # STALE_SECS 기본 900초(15분):
 #   - 단일 tool이 15분 넘게 실행되는 동안 중간 tool 경계(heartbeat)가 없으면
@@ -26,6 +27,23 @@ set -u
 
 MODE="${1:-}"
 [ "$MODE" = "sync" ] || exit 0
+
+# launchd PATH는 제한적이라 (/usr/bin:/bin:/usr/sbin:/sbin) 절대 경로로 호출.
+# sudo NOPASSWD sudoers 엔트리는 정확히 `/usr/bin/pmset -a disablesleep 0|1`만 허용
+# 하므로 sudo write는 절대 경로를 하드코드해야 매칭이 깨지지 않는다. 만약 production
+# 에서 PMSET_BIN env가 노출되면 (예: launchctl setenv) sudo -n "$PMSET_BIN" ...이
+# silent fail하여 active-session 전환 시 sleep 토글이 안 됨 (Codex 리뷰 P2).
+#
+# 따라서 read와 write를 분리:
+#   - PMSET_READ_BIN: sudo 없이 SleepDisabled 읽기. 테스트는 PMSET_BIN env로 stub.
+#   - write 경로: /usr/bin/pmset 하드코드 (sudoers NOPASSWD와 정확 매칭). 테스트는
+#     sudo 자체를 stub해서 path와 무관하게 호출 여부만 확인.
+PMSET_READ_BIN="${PMSET_BIN:-/usr/bin/pmset}"
+# PMSET_BIN env가 launchd/Claude 컨텍스트로 누출돼 잘못된 경로를 가리키면
+# read가 빈 값을 내고 awk fallback이 "0"을 보고하게 되는데, 활성 마커가 없는
+# (desired=0) 상황에서 이는 실제 SleepDisabled=1 상태를 stuck 시킬 수 있다
+# (Codex 리뷰 P2). 실행 가능성 검증 후 실패 시 절대경로로 fallback.
+[ -x "$PMSET_READ_BIN" ] || PMSET_READ_BIN="/usr/bin/pmset"
 
 # 멀티유저 환경 권한 충돌 방지 — /tmp 공용 경로를 사용자별로 분리.
 # $USER가 비어 있으면(일부 launchd 컨텍스트) UID로 폴백.
@@ -111,15 +129,52 @@ for dir in /tmp/claude-awake-*; do
     done
 done
 
-# pmset 호출 — 캐시 없이 매 sync마다 desired_state로 동기화.
-# 이전 설계는 per-user state cache를 뒀으나, pmset -a는 시스템 전역이라
-# user A가 on 설정 후 watchdog을 중단하면 user B의 watchdog이 "내 캐시 off
-# == desired_state off"로 short-circuit해서 on이 stuck되는 문제가 있음.
-# pmset -a disablesleep 0|1 은 idempotent & 저비용이라 매번 호출해도 무해.
-if [ "$active_count" -gt 0 ]; then
-    sudo -n /usr/bin/pmset -a disablesleep 1 >/dev/null 2>&1 || true
+# 노이즈 감소: launchd가 ~10초 주기로 watchdog을 호출하므로 매 sync마다 sudo를
+# spawn하면 macOS Sequoia가 background-activity notification을 띄우거나 unified
+# log에 sudo의 "Too many groups requested" 같은 Default-level 경고가 누적된다.
+# `pmset -g`는 sudo 없이 시스템 전역 SleepDisabled 값을 출력하므로(authoritative
+# read), 현재 값과 desired_state가 같으면 sudo 호출을 skip — 활성 마커 수가
+# 0/non-0 경계를 넘는 시점에만 sudo가 호출된다.
+#
+# per-user cache를 쓰지 않는 이유는 그대로 유효: 여기서 읽는 SleepDisabled는
+# 시스템 전역 pmset의 권위값이므로 user A가 설정한 상태를 user B의 watchdog도
+# 정확히 본다. cross-user short-circuit 버그가 발생하지 않는다.
+#
+# `pmset -g`에서 SleepDisabled 라인이 누락되면 시스템 기본값(0 = sleep 허용)으로
+# 간주. 일부 환경/버전에서 값이 0일 때 라인이 생략될 수 있어 방어적으로 처리.
+#
+# awk는 키 바로 뒤 필드($2)를 출력. `$NF`를 쓰면 일부 macOS 빌드/조건에서
+# 라인이 `SleepDisabled 1 (imposed by 'coreaudiod')` 같은 metadata 꼬리표를
+# 달고 나올 때 마지막 토큰을 잡아 case에서 0으로 오판된다.
+desired=0
+[ "$active_count" -gt 0 ] && desired=1
+
+# pmset 호출 자체 실패와 "성공 + SleepDisabled 라인 생략" 두 시나리오를 구분.
+# macOS default(SleepDisabled=0)에서는 라인이 출력되지 않을 수 있으므로 line 생략을
+# 무조건 unknown으로 처리하면 idle 머신에서 매 sync마다 sudo가 호출돼 idempotent
+# skip이 무력화된다 (Codex 라운드 5 회귀). 따라서:
+#   - exit_code != 0 OR empty stdout → unknown (PMSET_READ_BIN 자체 호출 실패)
+#   - exit_code == 0 + non-empty output:
+#       SleepDisabled 라인 있음 → 그 값
+#       라인 없음 → 0 (default 미표시)
+pmset_output=$(LC_ALL=C "$PMSET_READ_BIN" -g 2>/dev/null)
+pmset_rc=$?
+if [ "$pmset_rc" -ne 0 ] || [ -z "$pmset_output" ]; then
+    current=unknown
 else
-    sudo -n /usr/bin/pmset -a disablesleep 0 >/dev/null 2>&1 || true
+    current=$(printf '%s\n' "$pmset_output" \
+        | awk '/^[[:space:]]*SleepDisabled/ {print $2; found=1; exit} END {if (!found) print "0"}')
+fi
+case "$current" in
+    0|1|unknown) ;;
+    *) current=unknown ;;
+esac
+
+# desired는 위에서 0/1로만 설정되므로 분기 없이 그대로 전달.
+# write 경로는 /usr/bin/pmset 하드코드 — sudoers NOPASSWD가 정확히 이 경로에
+# 바인딩되어 있어야만 silent fail 없이 동작. PMSET_BIN env로 override 금지.
+if [ "$current" != "$desired" ]; then
+    sudo -n /usr/bin/pmset -a disablesleep "$desired" >/dev/null 2>&1 || true
 fi
 
 exit 0

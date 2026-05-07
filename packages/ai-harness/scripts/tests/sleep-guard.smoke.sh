@@ -9,6 +9,7 @@
 #   5) setup.sh --quiet 가 init-done 마커 없을 때 no-op (새 사용자 시나리오)
 #   6) setup.sh opt-out 마커 존재 시 즉시 exit 0
 #   7) setup.sh 비-macOS 시뮬레이션 — Darwin이 아니면 즉시 exit 0
+#   10) watchdog.sh idempotent skip — 현재 SleepDisabled가 desired와 같으면 sudo skip
 #
 # 주의: 실제 pmset / launchctl / sudoers 는 건드리지 않음 (격리된 HOME 사용).
 # setup.sh의 "실제 설치" 경로는 단위 테스트 범위 밖 — install.sh 대화형 실행으로 커버.
@@ -74,7 +75,7 @@ USER_SUFFIX="${USER:-$(id -u)}"
 AWAKE_DIR="/tmp/claude-awake-${USER_SUFFIX}"
 LOCK_DIR="/tmp/claude-awake-${USER_SUFFIX}.lock.d"
 # lock.d 정리 추가 — Case 4 재실행 시 stale lock이 남아 watchdog이 no-op 하는 것 방지
-trap "rm -rf '$SANDBOX' '$AWAKE_DIR'/smoke-test-session '$AWAKE_DIR'/smoke-stale-session '$AWAKE_DIR'/smoke-fresh-session '$AWAKE_DIR'/default; rmdir '$LOCK_DIR' 2>/dev/null || true" EXIT
+trap "rm -rf '$SANDBOX' '$AWAKE_DIR'/smoke-test-session '$AWAKE_DIR'/smoke-stale-session '$AWAKE_DIR'/smoke-fresh-session '$AWAKE_DIR'/smoke-idempotent-active '$AWAKE_DIR'/default; rmdir '$LOCK_DIR' 2>/dev/null || true" EXIT
 MARKER="$AWAKE_DIR/smoke-test-session"
 rm -f "$MARKER"
 
@@ -290,6 +291,165 @@ else
         fail "변환 없는 입력 결과 불일치: $actual"
     fi
 fi
+# ─── 10. watchdog.sh idempotent skip ───
+# 핵심 회귀: launchd가 ~10s마다 watchdog을 호출하므로 매번 sudo를 spawn하면
+# macOS Sequoia가 background-activity notification을 띄운다. 현재 SleepDisabled를
+# pmset -g (no sudo)로 읽어 desired와 같으면 sudo skip.
+echo ""
+echo "Case 10: watchdog idempotent skip — 상태 일치 시 sudo 호출 안 함"
+
+# (a) 소스 grep — pmset -g 기반 idempotent check 식이 watchdog.sh에 존재.
+# read는 PMSET_READ_BIN 변수(테스트 stub override 가능), write는 /usr/bin/pmset
+# 하드코드(sudoers NOPASSWD 매칭). awk 파이프는 다음 줄에 걸쳐 있을 수 있어 개별 검증.
+if grep -qE '"\$PMSET_READ_BIN"[[:space:]]+-g|/usr/bin/pmset[[:space:]]+-g|pmset[[:space:]]+-g' "$WATCH" \
+   && grep -q 'SleepDisabled' "$WATCH" \
+   && grep -q 'awk' "$WATCH" \
+   && grep -q 'current.*!=.*desired\|"\$current".*"\$desired"' "$WATCH"; then
+    pass "watchdog.sh에 pmset -g/SleepDisabled/awk 기반 check 존재"
+else
+    fail "watchdog.sh에 idempotent check 누락"
+fi
+
+# (b) end-to-end mock: pmset이 'SleepDisabled 1' 출력 + 활성 마커 1개 → sudo skip
+SANDBOX8=$(mktemp -d)
+STUB_BIN8="$SANDBOX8/bin"
+mkdir -p "$STUB_BIN8"
+SUDO_TOUCH="$SANDBOX8/sudo-called"
+PMSET_TOUCH="$SANDBOX8/pmset-mutate-called"
+
+# pmset stub: -g면 SleepDisabled 출력, -a (mutation)면 touch marker.
+# PMSET_MOCK_SUFFIX가 설정되면 값 뒤에 metadata 꼬리표를 붙여 출력
+# (예: "SleepDisabled 1 (imposed by 'coreaudiod')").
+# 이는 awk \$NF → \$2 회귀 테스트용.
+cat > "$STUB_BIN8/pmset" <<EOF
+#!/bin/bash
+if [ "\$1" = "-g" ]; then
+    case "\$2" in
+        ''|live|everything)
+            echo "System-wide power settings:"
+            if [ -n "\${PMSET_MOCK_SUFFIX:-}" ]; then
+                echo " SleepDisabled		\$PMSET_MOCK_VALUE \$PMSET_MOCK_SUFFIX"
+            else
+                echo " SleepDisabled		\$PMSET_MOCK_VALUE"
+            fi
+            ;;
+        *) ;;
+    esac
+    exit 0
+fi
+# mutation 경로 — sudo wrapper에서만 도달해야 함
+if [ "\$1" = "-a" ]; then
+    touch "$PMSET_TOUCH"
+fi
+exit 0
+EOF
+chmod +x "$STUB_BIN8/pmset"
+
+# sudo stub: 호출되면 touch marker. -n <pmset> 형태도 처리.
+# watchdog은 PMSET_BIN을 넘기므로 절대 경로($STUB_BIN8/pmset)도 매칭해야 한다.
+cat > "$STUB_BIN8/sudo" <<EOF
+#!/bin/bash
+touch "$SUDO_TOUCH"
+# sudo가 실제 mutation까지 했는지도 보고 싶으면 인자로 pmset 실행
+shift # -n
+case "\$1" in
+    "$STUB_BIN8/pmset"|/usr/bin/pmset|pmset)
+        shift
+        "$STUB_BIN8/pmset" "\$@"
+        ;;
+esac
+exit 0
+EOF
+chmod +x "$STUB_BIN8/sudo"
+
+# 활성 마커 1개 (fresh, $USER 디렉토리에) → desired=1
+SKIP_MARKER="$AWAKE_DIR/smoke-idempotent-active"
+mkdir -p "$AWAKE_DIR"
+touch "$SKIP_MARKER"
+rm -f "$SUDO_TOUCH" "$PMSET_TOUCH"
+rmdir "$LOCK_DIR" 2>/dev/null || true
+
+# pmset 현재값=1, desired=1 → sudo 호출 skip
+# PMSET_BIN으로 stub 직접 가리킴 (절대 경로 default를 우회).
+PMSET_BIN="$STUB_BIN8/pmset" PMSET_MOCK_VALUE=1 PATH="$STUB_BIN8:$PATH" "$WATCH" sync
+
+if [ ! -e "$SUDO_TOUCH" ]; then
+    pass "상태 일치(현재=1, desired=1) → sudo 호출 안 됨"
+else
+    fail "상태 일치인데 sudo 호출됨 (idempotent skip 미동작)"
+fi
+if [ ! -e "$PMSET_TOUCH" ]; then
+    pass "상태 일치 → pmset mutation 안 됨"
+else
+    fail "상태 일치인데 pmset mutation 호출됨"
+fi
+
+# (c) 상태 불일치: pmset 현재값=0, 활성 마커 존재 → desired=1, sudo 호출 IS 발생
+rm -f "$SUDO_TOUCH" "$PMSET_TOUCH"
+rmdir "$LOCK_DIR" 2>/dev/null || true
+PMSET_BIN="$STUB_BIN8/pmset" PMSET_MOCK_VALUE=0 PATH="$STUB_BIN8:$PATH" "$WATCH" sync
+
+if [ -e "$SUDO_TOUCH" ]; then
+    pass "상태 불일치(현재=0, desired=1) → sudo 호출됨"
+else
+    fail "상태 불일치인데 sudo 호출 안 됨 (toggle 누락)"
+fi
+
+# (d) 활성 마커 없음 + 현재값=0 → desired=0, sudo skip
+rm -f "$SKIP_MARKER" "$SUDO_TOUCH" "$PMSET_TOUCH"
+# 다른 사용자 디렉토리도 비어 있어야 active_count=0
+rmdir "$LOCK_DIR" 2>/dev/null || true
+PMSET_BIN="$STUB_BIN8/pmset" PMSET_MOCK_VALUE=0 PATH="$STUB_BIN8:$PATH" "$WATCH" sync
+
+# 다른 사용자 stale 마커가 있으면 결과 영향. 본 테스트 호스트 한정으로
+# 본인 마커 0 + 현재=0이면 일반적으로 active_count=0 → sudo skip.
+# 다른 디렉토리의 fresh 마커가 있어 active_count>0인 경우는 이 case가 의미 없음.
+# 보수적으로: sudo가 호출됐다 해도 상태 불일치 toggle은 정상 동작이라 fail 처리하지 않고 정보 출력.
+if [ ! -e "$SUDO_TOUCH" ]; then
+    pass "활성 마커 0 + 현재=0 → sudo 호출 안 됨"
+else
+    echo "  INFO 활성 마커 0인데 sudo 호출됨 — 다른 사용자 fresh 마커 존재 가능성 (skip 평가)"
+fi
+
+# (e) awk 파싱 회귀: pmset 출력에 metadata 꼬리표가 붙은 경우에도
+# 상태값을 정확히 추출해야 함 (Gemini round 2 피드백).
+# 예: "SleepDisabled 1 (imposed by 'coreaudiod')" — \$NF는 마지막 토큰을
+# 잡으므로 case 0/1) 검증에서 떨어져 0으로 오판되어 sudo 불필요 호출 발생.
+touch "$SKIP_MARKER"  # 활성 마커 1개 → desired=1
+rm -f "$SUDO_TOUCH" "$PMSET_TOUCH"
+rmdir "$LOCK_DIR" 2>/dev/null || true
+PMSET_BIN="$STUB_BIN8/pmset" PMSET_MOCK_VALUE=1 PMSET_MOCK_SUFFIX="(imposed by 'coreaudiod')" PATH="$STUB_BIN8:$PATH" "$WATCH" sync
+
+if [ ! -e "$SUDO_TOUCH" ]; then
+    pass "metadata 꼬리표 출력에서도 현재=1 정확 추출 → sudo skip"
+else
+    fail "metadata 꼬리표에서 awk \$NF가 마지막 토큰을 잡아 sudo 오호출됨"
+fi
+rm -f "$SKIP_MARKER"
+
+# (f)~(h) 동작 검증은 host의 launchd-watchdog lock + Claude session 활성 markers와
+# race가 잦아 flaky. 회귀 가드는 source grep으로 대체:
+#   (f) exit_code != 0 OR empty stdout → unknown sentinel (Codex 라운드 4)
+#   (g) line omit + exit 0 → "0" default fallback (Codex 라운드 5: idle 노이즈 방지)
+#   (h) PMSET_READ_BIN executable check + 절대경로 fallback (Codex 라운드 4)
+if grep -Fq 'LC_ALL=C "$PMSET_READ_BIN"' "$WATCH" && grep -Fq 'pmset_rc' "$WATCH" && grep -Fq '"$pmset_rc" -ne 0' "$WATCH" && grep -Fq 'current=unknown' "$WATCH"; then
+    pass "(f) pmset 호출 실패 시 unknown sentinel 분기 존재"
+else
+    fail "(f) pmset_rc 검사 + unknown sentinel 분기 누락"
+fi
+if grep -Fq 'END {if (!found) print "0"}' "$WATCH"; then
+    pass "(g) SleepDisabled 라인 omit 시 0 default fallback 존재"
+else
+    fail "(g) awk END 분기에 0 fallback 누락 (idle 노이즈 회귀 위험)"
+fi
+if grep -Fq '[ -x "$PMSET_READ_BIN" ] || PMSET_READ_BIN="/usr/bin/pmset"' "$WATCH"; then
+    pass "(h) PMSET_READ_BIN executable check + 절대경로 fallback 존재"
+else
+    fail "(h) PMSET_READ_BIN executable check fallback 누락 (회귀)"
+fi
+
+rm -rf "$SANDBOX8"
+rmdir "$LOCK_DIR" 2>/dev/null || true
 
 echo ""
 echo "─────────────────────"
