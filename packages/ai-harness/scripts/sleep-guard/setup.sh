@@ -266,7 +266,9 @@ install_sudoers() {
     if [ -f "$SUDOERS_FILE" ]; then
         # 기존 파일이 기대 내용과 같으면 skip
         local expected="$sudo_user_spec ALL=(ALL) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1"
-        if grep -Fxq "$expected" "$SUDOERS_FILE" 2>/dev/null; then
+        # `--`로 옵션 종료 명시: $expected가 hyphen으로 시작하는 username으로
+        # 빌드되면 grep이 옵션으로 해석할 수 있다 (defensive).
+        if grep -Fxq -- "$expected" "$SUDOERS_FILE" 2>/dev/null; then
             msg "  ✓ sudoers 엔트리 이미 설치됨: $SUDOERS_FILE"
             return 0
         fi
