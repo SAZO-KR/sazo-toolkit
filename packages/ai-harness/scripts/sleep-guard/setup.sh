@@ -298,7 +298,16 @@ EOF
         # legacy 파일(이전 버전이 남긴 dot 포함 파일명)이 있으면 cleanup.
         # sudo는 어차피 dot 파일을 무시하므로 보안/동작 영향 없지만 stale 파일 잔존
         # 방지를 위해 제거. 새 설치가 성공한 뒤에만 시도.
-        if [ "$LEGACY_SUDOERS_FILE" != "$SUDOERS_FILE" ] && [ -f "$LEGACY_SUDOERS_FILE" ]; then
+        # Path traversal 방어: $USER가 '../...' 같은 슬래시를 포함하면
+        # LEGACY_SUDOERS_FILE 정규화 결과가 sudoers.d 밖을 가리킬 수 있다. basename이
+        # 'sazo-claude-pmset-' prefix이고, full path가 정확히 '/etc/sudoers.d/<basename>'
+        # 인 경우만 cleanup 진행 — 슬래시가 끼어든 입력은 mismatch로 안전 skip.
+        local legacy_basename="${LEGACY_SUDOERS_FILE##*/}"
+        if [ "$LEGACY_SUDOERS_FILE" != "$SUDOERS_FILE" ] \
+            && [ -f "$LEGACY_SUDOERS_FILE" ] \
+            && [ "$LEGACY_SUDOERS_FILE" = "/etc/sudoers.d/$legacy_basename" ] \
+            && case "$legacy_basename" in sazo-claude-pmset-*) true ;; *) false ;; esac
+        then
             # stderr 보존 — sudo rm 실패 시 사용자가 수동 cleanup 가능하도록 안내.
             if sudo rm -f "$LEGACY_SUDOERS_FILE"; then
                 msg "  ✓ legacy sudoers 제거: $LEGACY_SUDOERS_FILE"

@@ -245,6 +245,30 @@ else
     fail "legacy sudoers cleanup 로직 미발견"
 fi
 
+# Path traversal guard 회귀 가드 — $USER에 '/'가 포함되면 LEGACY_SUDOERS_FILE 정규화
+# 결과가 sudoers.d 밖을 가리킬 수 있다(Gemini 리뷰 medium). cleanup 직전 basename
+# prefix + 정확한 sudoers.d 경로 매칭이 active code path에 있는지 검증.
+if grep -Fq 'case "$legacy_basename" in sazo-claude-pmset-*' "$SETUP"; then
+    pass "path traversal guard (basename prefix case statement) 존재"
+else
+    fail "path traversal guard 미발견 (회귀)"
+fi
+if grep -Fq '"$LEGACY_SUDOERS_FILE" = "/etc/sudoers.d/$legacy_basename"' "$SETUP"; then
+    pass "path traversal guard (sudoers.d 정확 경로 매칭) 존재"
+else
+    fail "path traversal guard sudoers.d 경로 매칭 미발견 (회귀)"
+fi
+
+# auto-update.sh의 sleep-guard sudoers fallback도 setup.sh와 동일 sanitize를
+# 사용해야 dot 포함 username 환경에서 false 'ok'가 발생하지 않음 (Codex 리뷰 P2).
+# 동일 LC_ALL=C tr 호출이 auto-update.sh의 user_suffix 라인 부근에 있는지 grep.
+AUTO_UPDATE="$SCRIPT_DIR/auto-update.sh"
+if grep -Fq "$SANITIZE_TR_INVOCATION" "$AUTO_UPDATE"; then
+    pass "auto-update.sh도 setup.sh와 동일 sanitize 사용"
+else
+    fail "auto-update.sh sanitize 동기화 누락 (회귀)"
+fi
+
 # 더 강한 회귀 가드 — setup.sh의 실제 변수 선언 라인을 추출해 isolated subshell에서
 # 평가한다. 단순 grep은 주석 안의 expression까지 통과시키지만, '^SUDOERS_FILENAME_USER='
 # / '^SUDOERS_FILE='로 anchored 추출하면 active code path(top-level assignment)에
