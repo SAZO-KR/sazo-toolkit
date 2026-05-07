@@ -427,6 +427,35 @@ else
 fi
 rm -f "$SKIP_MARKER"
 
+# (f) PMSET_READ_BIN이 SleepDisabled 출력 안 함 → unknown sentinel → sudo write
+# 강제. PMSET_BIN env가 production 컨텍스트로 누출돼 잘못된 stub을 가리키면 read는
+# 침묵하고 awk가 "0"을 fallback으로 보고하던 이전 동작은 desired=0과 일치해 sudo
+# skip을 유발 → 실제 SleepDisabled=1 상태를 stuck 시켰음 (Codex 라운드 4 회귀).
+cat > "$STUB_BIN8/pmset_silent" <<'EOF'
+#!/bin/bash
+echo "System-wide power settings:"
+exit 0
+EOF
+chmod +x "$STUB_BIN8/pmset_silent"
+
+# 활성 마커 0 + SleepDisabled 출력 침묵 → desired=0, current=unknown → mismatch → sudo 호출
+rm -f "$SKIP_MARKER" "$SUDO_TOUCH" "$PMSET_TOUCH"
+rmdir "$LOCK_DIR" 2>/dev/null || true
+PMSET_BIN="$STUB_BIN8/pmset_silent" PATH="$STUB_BIN8:$PATH" "$WATCH" sync
+
+if [ -e "$SUDO_TOUCH" ]; then
+    pass "PMSET_READ_BIN이 SleepDisabled 출력 안 함 → unknown → sudo write 강제 (false skip 방지)"
+else
+    fail "SleepDisabled 미출력에서도 sudo skip 발생 (Codex P2 회귀 위험)"
+fi
+
+# (g) PMSET_READ_BIN이 실행 불가 경로 → /usr/bin/pmset로 fallback 검증 (소스 grep)
+if grep -Fq '[ -x "$PMSET_READ_BIN" ] || PMSET_READ_BIN="/usr/bin/pmset"' "$WATCH"; then
+    pass "PMSET_READ_BIN 실행 불가 시 절대경로 fallback 로직 존재"
+else
+    fail "PMSET_READ_BIN executable check fallback 누락 (회귀)"
+fi
+
 rm -rf "$SANDBOX8"
 rmdir "$LOCK_DIR" 2>/dev/null || true
 

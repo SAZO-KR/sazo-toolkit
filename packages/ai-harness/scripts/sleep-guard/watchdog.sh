@@ -39,6 +39,11 @@ MODE="${1:-}"
 #   - write 경로: /usr/bin/pmset 하드코드 (sudoers NOPASSWD와 정확 매칭). 테스트는
 #     sudo 자체를 stub해서 path와 무관하게 호출 여부만 확인.
 PMSET_READ_BIN="${PMSET_BIN:-/usr/bin/pmset}"
+# PMSET_BIN env가 launchd/Claude 컨텍스트로 누출돼 잘못된 경로를 가리키면
+# read가 빈 값을 내고 awk fallback이 "0"을 보고하게 되는데, 활성 마커가 없는
+# (desired=0) 상황에서 이는 실제 SleepDisabled=1 상태를 stuck 시킬 수 있다
+# (Codex 리뷰 P2). 실행 가능성 검증 후 실패 시 절대경로로 fallback.
+[ -x "$PMSET_READ_BIN" ] || PMSET_READ_BIN="/usr/bin/pmset"
 
 # 멀티유저 환경 권한 충돌 방지 — /tmp 공용 경로를 사용자별로 분리.
 # $USER가 비어 있으면(일부 launchd 컨텍스트) UID로 폴백.
@@ -145,10 +150,13 @@ desired=0
 [ "$active_count" -gt 0 ] && desired=1
 
 current=$("$PMSET_READ_BIN" -g 2>/dev/null \
-    | awk '/^[[:space:]]*SleepDisabled/ {print $2; found=1; exit} END {if (!found) print "0"}')
+    | awk '/^[[:space:]]*SleepDisabled/ {print $2; found=1; exit} END {if (!found) print "unknown"}')
+# unknown sentinel: SleepDisabled 라인을 못 찾았다 = read 신뢰 불가 (PMSET_READ_BIN
+# 자체 실패 또는 출력 형식 변경). 0/1로 normalize하지 말고 unknown 유지 — 아래
+# 비교에서 desired(0/1)와 무조건 mismatch가 되어 보수적으로 sudo write를 강제한다.
 case "$current" in
-    0|1) ;;
-    *) current=0 ;;
+    0|1|unknown) ;;
+    *) current=unknown ;;
 esac
 
 # desired는 위에서 0/1로만 설정되므로 분기 없이 그대로 전달.
