@@ -9,7 +9,7 @@
 #   5) setup.sh --quiet 가 init-done 마커 없을 때 no-op (새 사용자 시나리오)
 #   6) setup.sh opt-out 마커 존재 시 즉시 exit 0
 #   7) setup.sh 비-macOS 시뮬레이션 — Darwin이 아니면 즉시 exit 0
-#   8) watchdog.sh idempotent skip — 현재 SleepDisabled가 desired와 같으면 sudo skip
+#   10) watchdog.sh idempotent skip — 현재 SleepDisabled가 desired와 같으면 sudo skip
 #
 # 주의: 실제 pmset / launchctl / sudoers 는 건드리지 않음 (격리된 HOME 사용).
 # setup.sh의 "실제 설치" 경로는 단위 테스트 범위 밖 — install.sh 대화형 실행으로 커버.
@@ -298,10 +298,10 @@ fi
 echo ""
 echo "Case 10: watchdog idempotent skip — 상태 일치 시 sudo 호출 안 함"
 
-# (a) 소스 grep — pmset -g 기반 idempotent check 식이 watchdog.sh에 존재
-# pmset 호출은 PMSET_BIN 변수 경유 (절대 경로 default, 테스트 override 가능).
-# awk 파이프가 다음 줄에 걸쳐 있을 수 있어 개별 라인으로 검증.
-if grep -qE '"\$PMSET_BIN"[[:space:]]+-g|/usr/bin/pmset[[:space:]]+-g|pmset[[:space:]]+-g' "$WATCH" \
+# (a) 소스 grep — pmset -g 기반 idempotent check 식이 watchdog.sh에 존재.
+# read는 PMSET_READ_BIN 변수(테스트 stub override 가능), write는 /usr/bin/pmset
+# 하드코드(sudoers NOPASSWD 매칭). awk 파이프는 다음 줄에 걸쳐 있을 수 있어 개별 검증.
+if grep -qE '"\$PMSET_READ_BIN"[[:space:]]+-g|/usr/bin/pmset[[:space:]]+-g|pmset[[:space:]]+-g' "$WATCH" \
    && grep -q 'SleepDisabled' "$WATCH" \
    && grep -q 'awk' "$WATCH" \
    && grep -q 'current.*!=.*desired\|"\$current".*"\$desired"' "$WATCH"; then
