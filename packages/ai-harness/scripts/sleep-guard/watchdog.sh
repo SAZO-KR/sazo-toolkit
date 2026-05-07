@@ -157,7 +157,7 @@ desired=0
 #   - exit_code == 0 + non-empty output:
 #       SleepDisabled 라인 있음 → 그 값
 #       라인 없음 → 0 (default 미표시)
-pmset_output=$("$PMSET_READ_BIN" -g 2>/dev/null)
+pmset_output=$(LC_ALL=C "$PMSET_READ_BIN" -g 2>/dev/null)
 pmset_rc=$?
 if [ "$pmset_rc" -ne 0 ] || [ -z "$pmset_output" ]; then
     current=unknown

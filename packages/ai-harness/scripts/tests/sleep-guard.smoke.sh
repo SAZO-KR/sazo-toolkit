@@ -432,7 +432,7 @@ rm -f "$SKIP_MARKER"
 #   (f) exit_code != 0 OR empty stdout → unknown sentinel (Codex 라운드 4)
 #   (g) line omit + exit 0 → "0" default fallback (Codex 라운드 5: idle 노이즈 방지)
 #   (h) PMSET_READ_BIN executable check + 절대경로 fallback (Codex 라운드 4)
-if grep -Fq 'pmset_rc' "$WATCH" && grep -Fq '"$pmset_rc" -ne 0' "$WATCH" && grep -Fq 'current=unknown' "$WATCH"; then
+if grep -Fq 'LC_ALL=C "$PMSET_READ_BIN"' "$WATCH" && grep -Fq 'pmset_rc' "$WATCH" && grep -Fq '"$pmset_rc" -ne 0' "$WATCH" && grep -Fq 'current=unknown' "$WATCH"; then
     pass "(f) pmset 호출 실패 시 unknown sentinel 분기 존재"
 else
     fail "(f) pmset_rc 검사 + unknown sentinel 분기 누락"
