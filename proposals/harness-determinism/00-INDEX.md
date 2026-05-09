@@ -27,7 +27,8 @@
 | 10 | Dangerous command sandbox (+ GH #34692 fallback) | P2 (revision) | 00-spike | 0.3주 |
 | 11 | Approval nonce idle TTL | P2 | — | 0.3주 |
 | 12 | Phase 2 default ON (workflow-state-machine) | P3 | 02, 06, dogfood | 0.3주 |
-| 13? | (proposed) subagent tools whitelist enforcement | P1 candidate | — | TBD |
+| 13 | Control flow extensions (integrator wishlist 통합) | P1 (PR #27 후속) | PR #27 | 1.5주 |
+| 14? | (proposed) subagent tools whitelist enforcement | P1 candidate | — | TBD |
 
 ## 공통 가이드
 
