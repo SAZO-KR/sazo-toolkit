@@ -757,13 +757,22 @@ _verdict_nonce_consume_inner() {
     local f="$1" nonce="$2" agent="$3"
 
     # Read + validate + flip within a single jq invocation against the locked file.
-    local before after
+    # Stale-cycle defense: reject nonces issued before the current
+    # last_cycle_at[stage]. Without this check, a late response from a
+    # previous cycle could populate last_verdicts after verdict_cycle_init
+    # cleared it, mixing stale verdicts into a fresh cycle.
+    local before
     before=$(jq -r --arg n "$nonce" --arg a "$agent" '
         (.verdict_nonces[$n] // null) as $entry |
         if $entry == null then "missing"
         elif $entry.agent != $a then "wrong_agent"
         elif $entry.consumed != false then "already_consumed"
-        else "ok"
+        else
+          ($entry.stage // null) as $st |
+          ((.last_cycle_at // {})[$st] // null) as $cycle_at |
+          if ($cycle_at != null and $entry.issued_at < $cycle_at) then "stale_cycle"
+          else "ok"
+          end
         end
     ' "$f" 2>/dev/null)
 

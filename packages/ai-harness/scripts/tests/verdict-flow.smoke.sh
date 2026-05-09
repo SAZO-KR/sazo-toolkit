@@ -310,6 +310,33 @@ else
   FAIL=$((FAIL+1)); echo "  ✗ L.1 legacy fallback should pass"
 fi
 
+# --- P: stale-cycle nonce rejected after cycle_init ---
+echo "Test P: nonce issued in prior cycle rejected after cycle_init"
+SID="flow-P"
+state_init "$SID" "$CWD" "test"
+
+# Cycle 1: issue nonce but DON'T consume yet (simulating in-flight Task)
+verdict_cycle_init "$SID" "$CWD" "review" '["code-reviewer","architect-advisor"]'
+N_OLD=$(verdict_nonce_issue "$SID" "$CWD" "code-reviewer" "review")
+
+# Sleep so cycle 2 has newer cycle_at
+sleep 1
+
+# Cycle 2: cycle_init fires (e.g., user reset for fresh review)
+verdict_cycle_init "$SID" "$CWD" "review" '["code-reviewer","architect-advisor"]'
+
+# Late response from cycle 1 arrives — should be rejected
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "code-reviewer" "$(mk_envelope "$N_OLD" "APPROVE")"
+
+verdict_recorded=$(state_jq "$SID" '.last_verdicts.review["code-reviewer"] // null' "$CWD")
+assert_eq "null" "$verdict_recorded" "P.1 stale-cycle nonce rejected — verdict NOT recorded in fresh cycle"
+
+# Fresh nonce in cycle 2 should still work
+N_FRESH=$(verdict_nonce_issue "$SID" "$CWD" "code-reviewer" "review")
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "code-reviewer" "$(mk_envelope "$N_FRESH" "APPROVE")"
+fresh_verdict=$(state_jq "$SID" '.last_verdicts.review["code-reviewer"].verdict // "none"' "$CWD")
+assert_eq "APPROVE" "$fresh_verdict" "P.2 fresh-cycle nonce accepted"
+
 # --- O: cycle_init invalidates prior cycle's stale completion ---
 echo "Test O: cycle_init prevents stale completion from passing fresh cycle"
 SID="flow-O"
