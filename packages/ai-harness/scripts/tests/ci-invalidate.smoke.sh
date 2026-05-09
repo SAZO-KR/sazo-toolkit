@@ -244,6 +244,46 @@ val=$(get_ci_passed_at "t11" "$WORK_REPO")
 assert_exit "0" "$?" "11. ci_passed_at preserved (docs-only staged)"
 rm -rf "$WORK_REPO"
 
+# 11b. git commit + staged DELETED code file (Codex PR #30 P2-1) → invalidate
+# 코드 파일 삭제도 build break 가능 → diff-filter에 D 포함 필요
+WORK_REPO="/tmp/sazo-ci-invalidate-commit-del-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    echo "package main" > foo.go
+    git add foo.go
+    git commit -q -m init
+    git rm -q foo.go
+)
+mark_ci_passed "t11b" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11b\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m delete-go\"}}" >/dev/null
+val=$(get_ci_passed_at "t11b" "$WORK_REPO")
+assert_null "$val" "11b. ci_passed_at invalidated by staged code DELETION"
+rm -rf "$WORK_REPO"
+
+# 11c. git commit + staged DELETED docs only → ci_passed_at 유지 (코드 아님)
+WORK_REPO="/tmp/sazo-ci-invalidate-commit-del2-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    echo "# Old" > old.md
+    git add old.md
+    git commit -q -m init
+    git rm -q old.md
+)
+mark_ci_passed "t11c" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11c\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m delete-md\"}}" >/dev/null
+val=$(get_ci_passed_at "t11c" "$WORK_REPO")
+[ -n "$val" ] && [ "$val" != "null" ]
+assert_exit "0" "$?" "11c. ci_passed_at preserved (docs-only DELETION)"
+rm -rf "$WORK_REPO"
+
 # 12. git commit + staged 비어있음 → ci_passed_at 유지
 WORK_REPO="/tmp/sazo-ci-invalidate-commit3-$$"
 rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
@@ -274,6 +314,14 @@ mark_ci_passed "t13b" "/tmp"
 run_hook_pre "{\"session_id\":\"t13b\",\"cwd\":\"/tmp\",\"tool_name\":\"Task\",\"tool_input\":{\"subagent_type\":\"ui-engineer\"}}" >/dev/null
 val=$(get_ci_passed_at "t13b" "/tmp")
 assert_null "$val" "13b. ui-engineer Task preemptive invalidate"
+
+# 13c. doc-writer (Codex PR #30 P2-2): inline code comment 추가 권한 보유 →
+# .go/.ts 등 코드 파일 직접 Edit 가능. preemptive invalidate 대상.
+reset_state
+mark_ci_passed "t13c" "/tmp"
+run_hook_pre "{\"session_id\":\"t13c\",\"cwd\":\"/tmp\",\"tool_name\":\"Task\",\"tool_input\":{\"subagent_type\":\"doc-writer\"}}" >/dev/null
+val=$(get_ci_passed_at "t13c" "/tmp")
+assert_null "$val" "13c. doc-writer Task preemptive invalidate"
 
 # 14. PreToolUse Task subagent_type=code-searcher (read-only) → 유지
 reset_state

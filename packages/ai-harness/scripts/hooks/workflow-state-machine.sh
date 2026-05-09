@@ -349,10 +349,14 @@ EOF
             # Plan 04 §6 (B): subagent fallback for GH #34692. Subagent 내부의
             # Edit/Write/Bash 호출은 parent hook 미발동 — Task PreToolUse 시점에
             # mutating 가능 agent 검출 시 ci_passed_at preemptive invalidate.
+            #
+            # 대상: Write/Edit tools를 보유하고 코드 파일을 수정할 가능성이 있는
+            # subagent 전체. doc-writer도 inline code comment 추가 권한이 있어
+            # .go/.ts 등에 직접 Edit 가능 (`agents/doc-writer.md` §3 Code Comments).
             local subagent_pre
             subagent_pre=$(echo "$SAZO_TOOL_INPUT" | jq -r '.subagent_type // ""' 2>/dev/null)
             case "$subagent_pre" in
-                plan-executor|ui-engineer)
+                plan-executor|ui-engineer|doc-writer)
                     ci_invalidate_unconditional "$SAZO_SESSION_ID" "$SAZO_CWD" "task_preemptive:$subagent_pre"
                     ;;
             esac
@@ -375,7 +379,11 @@ EOF
                                 [ -z "$staged_f" ] && continue
                                 if _is_doc_only_path "$staged_f"; then continue; fi
                                 if _is_code_file "$staged_f"; then has_code_staged=1; break; fi
-                            done < <(git -C "$repo_root" diff --cached --name-only --diff-filter=ACMR 2>/dev/null)
+                            done < <(git -C "$repo_root" diff --cached --name-only --diff-filter=ACMRD 2>/dev/null)
+                            # diff-filter ACMRD: Added/Copied/Modified/Renamed/**Deleted**.
+                            # 코드 파일 삭제도 CI 결과를 무효화할 수 있음 (build break,
+                            # missing import 등). D 빠지면 `git rm foo.go && git commit`
+                            # 후 ci_passed_at 그대로 남아 PR create가 통과 (Codex PR #30 P2).
                             if [ "$has_code_staged" = "1" ]; then
                                 ci_invalidate_unconditional "$SAZO_SESSION_ID" "$SAZO_CWD" "git_commit"
                             fi
