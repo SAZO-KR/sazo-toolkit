@@ -1,0 +1,597 @@
+#!/bin/bash
+# sazo-workflow — CLI to inspect workflow state, history, and audit logs.
+#
+# Subcommands:
+#   status [--session <id>] [--json]      현재 stage / 완료 시각 / soft warn / verdict
+#   history [--last N] [--session <id>]   stage transition timeline
+#   why-blocked [--session <id>]          최근 stage_block 사유 + 권장 action
+#   audit [--last N] [--filter <event>]   audit.log 조회 (JSON Lines + freeform)
+#   sessions [--days N]                   최근 N일 활성 세션 list
+#   stats [--days N]                      Plan 12 promotion criteria 집계
+#   recover                               degraded mode reset (Plan 05 stub)
+#
+# All subcommands accept --json for machine-readable output (default: human).
+#
+# Exit codes (per subcommand):
+#   0   정상
+#   1   에러 (잘못된 인자, jq/grep 실패 등)
+#   2   "데이터 없음" 또는 "차단됨" (subcommand별 의미 — 표 참조)
+#
+# Source of truth: state file ($SAZO_STATE_DIR/$sid--$cwd_hash.json) + audit.log.
+
+set -uo pipefail
+
+# Resolve repo path from this script's location, then source session-state.sh.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || \
+    python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}" 2>/dev/null || \
+    echo "${BASH_SOURCE[0]}")")" && pwd)"
+
+LIB="$SCRIPT_DIR/hooks/lib/session-state.sh"
+if [ ! -f "$LIB" ]; then
+    echo "sazo-workflow: cannot find session-state.sh at $LIB" >&2
+    exit 1
+fi
+# shellcheck source=hooks/lib/session-state.sh
+source "$LIB"
+
+JSON_MODE=0
+
+# ----- session resolution -----
+
+list_active_sessions() {
+    local since_ts now
+    now=$(date +%s)
+    since_ts=$((now - 86400))  # 24h
+    local files
+    files=$(find "$STATE_DIR" -maxdepth 1 -name '*--*.json' -type f 2>/dev/null) || return 0
+    [ -z "$files" ] && return 0
+    local rows=""
+    while IFS= read -r f; do
+        [ -z "$f" ] && continue
+        local mt
+        mt=$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f" 2>/dev/null) || continue
+        [ -z "$mt" ] && continue
+        [ "$mt" -ge "$since_ts" ] || continue
+        rows="$rows
+$mt $f"
+    done <<EOF
+$files
+EOF
+    printf '%s\n' "$rows" \
+        | sed '/^$/d' \
+        | sort -rn -k1,1 \
+        | awk '{print $2}' \
+        | while IFS= read -r path; do
+            local base="${path##*/}"
+            printf '%s\n' "${base%%--*}"
+        done \
+        | awk '!seen[$0]++'
+}
+
+list_active_sessions_with_days() {
+    local days="${1:-1}"
+    local since_ts now
+    now=$(date +%s)
+    since_ts=$((now - days * 86400))
+    local files
+    files=$(find "$STATE_DIR" -maxdepth 1 -name '*--*.json' -type f 2>/dev/null) || return 0
+    [ -z "$files" ] && return 0
+    local rows=""
+    while IFS= read -r f; do
+        [ -z "$f" ] && continue
+        local mt
+        mt=$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f" 2>/dev/null) || continue
+        [ -z "$mt" ] && continue
+        [ "$mt" -ge "$since_ts" ] || continue
+        rows="$rows
+$mt $f"
+    done <<EOF
+$files
+EOF
+    printf '%s\n' "$rows" \
+        | sed '/^$/d' \
+        | sort -rn -k1,1
+}
+
+resolve_session() {
+    local arg="${1:-}"
+    if [ -n "$arg" ]; then
+        if ls "$STATE_DIR/${arg}--"*.json >/dev/null 2>&1; then
+            printf '%s' "$arg"
+            return 0
+        fi
+        return 2
+    fi
+    if [ -n "${SAZO_SESSION_ID:-}" ]; then
+        if ls "$STATE_DIR/${SAZO_SESSION_ID}--"*.json >/dev/null 2>&1; then
+            printf '%s' "$SAZO_SESSION_ID"
+            return 0
+        fi
+    fi
+    local sessions count
+    sessions=$(list_active_sessions)
+    if [ -z "$sessions" ]; then
+        return 2
+    fi
+    count=$(printf '%s\n' "$sessions" | wc -l | tr -d ' ')
+    case "$count" in
+        1) printf '%s' "$sessions"; return 0;;
+        *)
+            echo "Multiple active sessions detected (last 24h):" >&2
+            printf '%s\n' "$sessions" | head -5 >&2
+            echo "Using most recent (mtime). Specify --session <id> to disambiguate." >&2
+            printf '%s' "$sessions" | head -1
+            return 0
+            ;;
+    esac
+}
+
+resolve_state_file() {
+    local sid="$1"
+    local files
+    files=$(ls "$STATE_DIR/${sid}--"*.json 2>/dev/null) || return 1
+    [ -z "$files" ] && return 1
+    local count
+    count=$(printf '%s\n' "$files" | wc -l | tr -d ' ')
+    if [ "$count" = "1" ]; then
+        printf '%s' "$files"
+        return 0
+    fi
+    local newest=""
+    local newest_mt=0
+    while IFS= read -r f; do
+        [ -z "$f" ] && continue
+        local mt
+        mt=$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f" 2>/dev/null)
+        [ -z "$mt" ] && continue
+        if [ "$mt" -gt "$newest_mt" ]; then
+            newest_mt="$mt"
+            newest="$f"
+        fi
+    done <<EOF
+$files
+EOF
+    echo "Multiple state files for session $sid (different cwd). Using newest." >&2
+    printf '%s' "$newest"
+}
+
+# ----- subcommands -----
+
+cmd_status() {
+    local sid_arg=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --session) sid_arg="${2:-}"; shift 2;;
+            --json) JSON_MODE=1; shift;;
+            *) shift;;
+        esac
+    done
+    local sid
+    sid=$(resolve_session "$sid_arg") || return 2
+    local sf
+    sf=$(resolve_state_file "$sid") || return 2
+
+    if [ "$JSON_MODE" = "1" ]; then
+        cat "$sf"
+        return 0
+    fi
+
+    cat <<EOF
+Session: $sid
+State file: $sf
+
+Stage: $(jq -r '.stage // "—"' "$sf")
+Started at: $(jq -r '.started_at // "—"' "$sf")
+Plan approved at: $(jq -r '.plan_approved_at // "—"' "$sf")
+CI passed at: $(jq -r '.ci_passed_at // "—"' "$sf")
+
+History (last 10):
+EOF
+    jq -r '.history // [] | .[-10:][] | "  \(.ts) \(.stage) \(.status) by=\(.by) reason=\(.reason)"' "$sf"
+
+    echo ""
+    echo "Soft warn counts:"
+    local warn_lines
+    warn_lines=$(jq -r 'to_entries[] | select(.key | startswith("soft_warn_count_")) | "  \(.key | sub("soft_warn_count_"; "")): \(.value)"' "$sf" 2>/dev/null)
+    if [ -z "$warn_lines" ]; then
+        echo "  (none)"
+    else
+        printf '%s\n' "$warn_lines"
+    fi
+
+    echo ""
+    echo "Verdict missing counts:"
+    local vm_lines
+    vm_lines=$(jq -r '.verdict_missing_count // {} | to_entries[] | "  \(.key): \(.value)"' "$sf" 2>/dev/null)
+    if [ -z "$vm_lines" ]; then
+        echo "  (none)"
+    else
+        printf '%s\n' "$vm_lines"
+    fi
+
+    echo ""
+    echo "Active reviewers expected (review):"
+    local exp
+    exp=$(jq -r '.review_expected_set // [] | join(", ")' "$sf" 2>/dev/null)
+    if [ -z "$exp" ]; then
+        echo "  (none)"
+    else
+        echo "  $exp"
+    fi
+
+    return 0
+}
+
+cmd_history() {
+    local sid_arg="" last=20
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --session) sid_arg="${2:-}"; shift 2;;
+            --last) last="${2:-20}"; shift 2;;
+            --json) JSON_MODE=1; shift;;
+            *) shift;;
+        esac
+    done
+    local sid
+    sid=$(resolve_session "$sid_arg") || return 2
+    local sf
+    sf=$(resolve_state_file "$sid") || return 2
+
+    if [ "$JSON_MODE" = "1" ]; then
+        jq --argjson n "$last" '.history // [] | .[-$n:]' "$sf"
+        return 0
+    fi
+    jq -r --argjson n "$last" '.history // [] | .[-$n:][] | "\(.ts) \(.stage) \(.status) by=\(.by) reason=\(.reason)"' "$sf"
+    return 0
+}
+
+cmd_why_blocked() {
+    local sid_arg=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --session) sid_arg="${2:-}"; shift 2;;
+            --json) JSON_MODE=1; shift;;
+            *) shift;;
+        esac
+    done
+    [ -f "$AUDIT_LOG" ] || {
+        if [ "$JSON_MODE" = "1" ]; then
+            echo '{"blocked":false}'
+        else
+            echo "Not blocked."
+        fi
+        return 0
+    }
+
+    local last_block
+    last_block=$(grep '"event":"stage_block"' "$AUDIT_LOG" 2>/dev/null | tail -1)
+
+    if [ -z "$last_block" ]; then
+        if [ "$JSON_MODE" = "1" ]; then
+            echo '{"blocked":false}'
+        else
+            echo "Not blocked."
+        fi
+        return 0
+    fi
+
+    if [ "$JSON_MODE" = "1" ]; then
+        printf '%s\n' "$last_block"
+        return 2
+    fi
+
+    local stage reason ts
+    stage=$(printf '%s' "$last_block" | jq -r '.stage // "—"' 2>/dev/null)
+    reason=$(printf '%s' "$last_block" | jq -r '.reason // "—"' 2>/dev/null)
+    ts=$(printf '%s' "$last_block" | jq -r '.ts // "—"' 2>/dev/null)
+
+    cat <<EOF
+Blocked at stage: $stage
+Time: $ts
+Reason: $reason
+
+EOF
+    case "$stage" in
+        research)
+            echo "To proceed: invoke code-searcher or docs-researcher subagent (Task)."
+            ;;
+        plan)
+            echo "To proceed: invoke plan-drafter subagent (Task) and produce a plan."
+            ;;
+        approval)
+            echo "To proceed: get user approval, user types '/approved'."
+            ;;
+        ci)
+            echo "To proceed: run project CI command (per CLAUDE.md) until exit 0."
+            ;;
+        review)
+            echo "To proceed: invoke code-reviewer (and architect-advisor if needed) Task with verdict APPROVE."
+            ;;
+        *)
+            echo "To proceed: complete stage '$stage' before retrying."
+            ;;
+    esac
+    return 2
+}
+
+cmd_audit() {
+    local last=50 filter=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --last) last="${2:-50}"; shift 2;;
+            --filter) filter="${2:-}"; shift 2;;
+            --json) JSON_MODE=1; shift;;
+            *) shift;;
+        esac
+    done
+    [ -f "$AUDIT_LOG" ] || return 2
+    local lines
+    lines=$(tail -n "$last" "$AUDIT_LOG")
+    [ -z "$lines" ] && return 2
+
+    if [ -n "$filter" ]; then
+        # JSON entries: filter by event field; freeform: substring match.
+        lines=$(printf '%s\n' "$lines" | awk -v f="$filter" '
+            /^\{/ {
+                if (index($0, "\"event\":\"" f "\"") > 0) print
+                next
+            }
+            { if (index($0, f) > 0) print }
+        ')
+    fi
+
+    if [ -z "$lines" ]; then
+        return 2
+    fi
+
+    if [ "$JSON_MODE" = "1" ]; then
+        # JSON-only output: skip freeform.
+        printf '%s\n' "$lines" | grep '^{' || return 2
+        return 0
+    fi
+    printf '%s\n' "$lines"
+    return 0
+}
+
+cmd_sessions() {
+    local days=7
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --days) days="${2:-7}"; shift 2;;
+            --json) JSON_MODE=1; shift;;
+            *) shift;;
+        esac
+    done
+    local rows
+    rows=$(list_active_sessions_with_days "$days")
+    if [ -z "$rows" ]; then
+        return 2
+    fi
+    if [ "$JSON_MODE" = "1" ]; then
+        printf '%s\n' "$rows" | awk '{
+            mt=$1; path=$2;
+            n=split(path,parts,"/"); base=parts[n];
+            sub(/\.json$/, "", base);
+            split(base, sb, "--");
+            sid=sb[1]; cwd_hash=sb[2];
+            printf "{\"sid\":\"%s\",\"cwd_hash\":\"%s\",\"mtime\":%s,\"path\":\"%s\"}\n",
+                sid, cwd_hash, mt, path
+        }'
+        return 0
+    fi
+    printf '%s\n' "$rows" | awk '{
+        mt=$1; path=$2;
+        n=split(path,parts,"/"); base=parts[n];
+        sub(/\.json$/, "", base);
+        split(base, sb, "--");
+        sid=sb[1]; cwd_hash=sb[2];
+        cmd="date -r " mt " +%Y-%m-%dT%H:%M:%S%z 2>/dev/null || date -d @" mt " +%Y-%m-%dT%H:%M:%S%z 2>/dev/null"
+        cmd | getline ts; close(cmd)
+        printf "%s  sid=%s  cwd_hash=%s  state=%s\n", ts, sid, cwd_hash, path
+    }'
+    return 0
+}
+
+cmd_stats() {
+    local days=30
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --days) days="${2:-30}"; shift 2;;
+            --json) JSON_MODE=1; shift;;
+            *) shift;;
+        esac
+    done
+
+    local since=""
+    since=$(date -d "$days days ago" +%Y-%m-%dT%H:%M:%S%z 2>/dev/null) \
+        || since=$(date -v"-${days}d" +%Y-%m-%dT%H:%M:%S%z 2>/dev/null) \
+        || since=""
+
+    local entries=""
+    if [ -f "$AUDIT_LOG" ]; then
+        if [ -n "$since" ]; then
+            entries=$(grep -h '^{' "$AUDIT_LOG" 2>/dev/null \
+                | jq -c "select(.ts >= \"$since\")" 2>/dev/null) || entries=""
+        else
+            entries=$(grep -h '^{' "$AUDIT_LOG" 2>/dev/null) || entries=""
+        fi
+    fi
+
+    # `grep -c` returns rc=1 when 0 matches, which would trigger `|| echo 0`
+    # AND emit grep's own "0" → "0\n0" string corrupting numeric comparisons
+    # downstream. Use explicit count function that always emits a single
+    # integer line.
+    _count_pattern() {
+        local pat="$1" file="$2"
+        [ -f "$file" ] || { printf '0'; return 0; }
+        local n
+        n=$(grep -c "$pat" "$file" 2>/dev/null) || n=0
+        # Strip newlines/whitespace, default to 0 on non-numeric.
+        n=$(printf '%s' "$n" | tr -d '[:space:]')
+        case "$n" in
+            ''|*[!0-9]*) printf '0' ;;
+            *) printf '%s' "$n" ;;
+        esac
+    }
+
+    local total_blocks=0 lock_timeouts=0 jq_errors=0 verdict_missing=0 state_corruptions=0
+    if [ -n "$entries" ]; then
+        local n
+        n=$(printf '%s\n' "$entries" | grep -c '"event":"stage_block"') || n=0
+        n=$(printf '%s' "$n" | tr -d '[:space:]')
+        case "$n" in ''|*[!0-9]*) n=0 ;; esac
+        total_blocks="$n"
+    fi
+    lock_timeouts=$(_count_pattern 'lock_timeout' "$AUDIT_LOG")
+    jq_errors=$(_count_pattern 'jq_error' "$AUDIT_LOG")
+    verdict_missing=$(_count_pattern 'verdict_missing' "$AUDIT_LOG")
+    state_corruptions=$(_count_pattern 'state_corruption' "$AUDIT_LOG")
+
+    local verdict_unset=0
+    local sf
+    for sf in "$STATE_DIR"/*.json; do
+        [ -f "$sf" ] || continue
+        local v
+        v=$(jq -r '.verdict_unset_expected_set_count // 0' "$sf" 2>/dev/null) || v=0
+        case "$v" in
+            ''|*[!0-9]*) v=0 ;;
+        esac
+        verdict_unset=$((verdict_unset + v))
+    done
+
+    local top_stage="—"
+    if [ -n "$entries" ]; then
+        top_stage=$(printf '%s\n' "$entries" \
+            | jq -r 'select(.event=="stage_block") | .stage // empty' 2>/dev/null \
+            | sort | uniq -c | sort -rn | head -1 | awk '{if (NF>=2) print $2 " (" $1 ")"}')
+        [ -z "$top_stage" ] && top_stage="—"
+    fi
+
+    local promotion="not_met"
+    if [ "$state_corruptions" -eq 0 ] \
+        && [ "$lock_timeouts" -lt 5 ] \
+        && [ "$jq_errors" -lt 5 ] \
+        && [ "$verdict_unset" -lt 10 ]; then
+        promotion="numeric_met"
+    fi
+
+    if [ "$JSON_MODE" = "1" ]; then
+        jq -nc \
+            --argjson days "$days" \
+            --argjson total_blocks "$total_blocks" \
+            --argjson state_corruptions "$state_corruptions" \
+            --argjson lock_timeouts "$lock_timeouts" \
+            --argjson jq_errors "$jq_errors" \
+            --argjson verdict_unset "$verdict_unset" \
+            --argjson verdict_missing "$verdict_missing" \
+            --arg top_stage "$top_stage" \
+            --arg promotion "$promotion" \
+            '{days:$days, total_blocks:$total_blocks, top_stage:$top_stage,
+              cumulative:{state_corruption_count:$state_corruptions,
+                          lock_timeout_count:$lock_timeouts,
+                          jq_error_count:$jq_errors,
+                          verdict_unset_expected_set_count:$verdict_unset,
+                          verdict_missing_count:$verdict_missing},
+              promotion:$promotion}'
+    else
+        cat <<EOF
+Stats (last $days days):
+  Total stage_block events: $total_blocks
+  Most blocked stage: $top_stage
+
+Cumulative (Plan 12 promotion criteria):
+  state_corruption_count:        $state_corruptions  (target == 0)
+  lock_timeout_count:            $lock_timeouts  (target < 5)
+  jq_error_count:                $jq_errors  (target < 5)
+  verdict_unset_expected_set:    $verdict_unset  (target < 10)
+  verdict_missing_count:         $verdict_missing  (informational)
+
+EOF
+        if [ "$promotion" = "numeric_met" ]; then
+            cat <<EOF
+[OK] Phase 2 promotion: all numeric criteria met.
+     (Time criteria — 14일 dogfood — manual check)
+EOF
+        else
+            echo "[--] Phase 2 promotion: numeric criteria NOT met yet."
+        fi
+    fi
+
+    if [ -z "$entries" ] && [ "$lock_timeouts" -eq 0 ] && [ "$jq_errors" -eq 0 ]; then
+        return 2
+    fi
+    return 0
+}
+
+cmd_recover() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) JSON_MODE=1; shift;;
+            *) shift;;
+        esac
+    done
+    # Plan 05 stub: degraded marker file does not yet exist. Real recovery
+    # logic lands with state-corruption recovery plan.
+    local marker="$STATE_DIR/.degraded"
+    if [ ! -f "$marker" ]; then
+        if [ "$JSON_MODE" = "1" ]; then
+            echo '{"degraded":false}'
+        else
+            echo "No degraded state to recover (Plan 05 marker absent)."
+        fi
+        return 2
+    fi
+    rm -f "$marker"
+    audit_log "recovery_acknowledged" "" "" "" "user" "manual recover"
+    if [ "$JSON_MODE" = "1" ]; then
+        echo '{"degraded":false,"recovered":true}'
+    else
+        echo "Degraded marker cleared."
+    fi
+    return 0
+}
+
+usage() {
+    cat <<'EOF'
+Usage: sazo-workflow <subcommand> [options]
+
+Subcommands:
+  status [--session <id>] [--json]              Show current session state.
+  history [--last N] [--session <id>] [--json]  Show stage transition timeline.
+  why-blocked [--session <id>] [--json]         Show last block reason + next action.
+  audit [--last N] [--filter <event>] [--json]  Show audit.log entries.
+  sessions [--days N] [--json]                  List recent active sessions.
+  stats [--days N] [--json]                     Aggregated metrics + promotion check.
+  recover [--json]                              Reset degraded mode (Plan 05).
+
+Environment:
+  SAZO_STATE_DIR  Override state directory (default: ~/.claude/session-state).
+  SAZO_SESSION_ID Pre-select session id (overridden by --session).
+
+Exit codes:
+  0  ok
+  1  error (bad args, missing tools)
+  2  no data, blocked, or session not found
+EOF
+}
+
+# ----- main -----
+
+main() {
+    local sub="${1:-}"
+    [ -n "$sub" ] || { usage; exit 1; }
+    shift
+    case "$sub" in
+        status)       cmd_status "$@";;
+        history)      cmd_history "$@";;
+        why-blocked)  cmd_why_blocked "$@";;
+        audit)        cmd_audit "$@";;
+        sessions)     cmd_sessions "$@";;
+        stats)        cmd_stats "$@";;
+        recover)      cmd_recover "$@";;
+        -h|--help|help) usage; exit 0;;
+        *) echo "sazo-workflow: unknown subcommand '$sub'" >&2; usage; exit 1;;
+    esac
+}
+
+main "$@"
