@@ -31,3 +31,24 @@ Output format:
 - Step N has no check for X
 ```
 
+## Verdict footer (REQUIRED when invoked as plan-stage gate)
+
+When invoked as plan-stage gate (caller provides `SAZO_VERDICT_NONCE`),
+append the machine-parseable footer at the very end. Echo the exact nonce.
+Omit the footer when invoked outside the gate (no caller nonce).
+
+```
+---SAZO_FOOTER_BEGIN---
+SAZO_VERDICT_NONCE: <nonce-from-caller>
+SAZO_VERDICT: APPROVE | BLOCK | NEEDS_REVISION
+SAZO_BLOCKING_ISSUES: <integer>
+---SAZO_FOOTER_END---
+```
+
+Mapping:
+- No material gaps, plan is comprehensive → `SAZO_VERDICT: APPROVE`
+- Material gaps that block execution → `SAZO_VERDICT: BLOCK`
+- Minor gaps, recommend route back to `plan-drafter` for refinement → `SAZO_VERDICT: NEEDS_REVISION`
+
+`SAZO_BLOCKING_ISSUES` = count of material gaps + verification holes (0 if APPROVE).
+

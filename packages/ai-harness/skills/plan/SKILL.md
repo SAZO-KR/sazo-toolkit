@@ -91,3 +91,38 @@ types. Your tests should NOT simply test mocks. Always test actual behavior.</sy
 
 ---
 ```
+
+## Plan-stage gate (verdict footer)
+
+When the main loop invokes `plan-critic` or `plan-auditor` as a plan-stage
+gate, mint a verdict nonce per call and inject the footer instruction
+into each Task prompt:
+
+```bash
+SESSION_ID="${CLAUDE_SESSION_ID:-${SAZO_SESSION_ID:-}}"
+CWD="$(pwd)"
+HARNESS_DIR="${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}"
+
+# Initialize cycle — clear stale verdicts from previous gate
+bash -c "source $HARNESS_DIR/scripts/hooks/lib/session-state.sh && \
+         verdict_cycle_init '$SESSION_ID' '$CWD' 'plan' \
+         '[\"plan-critic\",\"plan-auditor\"]'"
+
+NONCE_CRITIC=$(bash -c "source $HARNESS_DIR/scripts/hooks/lib/session-state.sh && \
+                        verdict_nonce_issue '$SESSION_ID' '$CWD' 'plan-critic' 'plan'")
+NONCE_AUDITOR=$(bash -c "source $HARNESS_DIR/scripts/hooks/lib/session-state.sh && \
+                         verdict_nonce_issue '$SESSION_ID' '$CWD' 'plan-auditor' 'plan'")
+```
+
+Append to each Task prompt the corresponding footer template (see
+`agents/plan-critic.md` and `agents/plan-auditor.md` for the exact
+envelope format).
+
+The PostToolUse hook aggregates: plan stage marks `completed` only when
+**both** plan-critic AND plan-auditor return `SAZO_VERDICT: APPROVE`.
+Plan-auditor `NEEDS_REVISION` indicates a route-back to `plan-drafter`
+(main loop responsibility).
+
+When invoking plan-critic/auditor for purposes outside the gate
+(advisory, exploration), omit the nonce — agent then omits the footer
+and the hook records nothing.

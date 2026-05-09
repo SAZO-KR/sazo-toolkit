@@ -48,3 +48,25 @@ purely for advisory/design purposes, this line may be omitted.)
   - Design that contradicts stated project conventions (per project CLAUDE.md / AGENTS.md)
   - Any finding where **Confidence is `low` AND Assessment flags a risk** — escalate rather than paper over
 - **PASS** otherwise, including when only minor design nits remain that don't affect maintainability.
+
+## Verdict footer (REQUIRED when invoked as review gate)
+
+When invoked as a review-stage gate, append the machine-parseable footer at
+the very end of your response. The caller injects `SAZO_VERDICT_NONCE` into
+the prompt — echo that exact nonce. Omit footer entirely when invoked for
+advisory/design purposes (no caller nonce supplied).
+
+```
+---SAZO_FOOTER_BEGIN---
+SAZO_VERDICT_NONCE: <nonce-from-caller>
+SAZO_VERDICT: APPROVE | BLOCK | NEEDS_REVISION
+SAZO_BLOCKING_ISSUES: <integer>
+---SAZO_FOOTER_END---
+```
+
+Mapping:
+- `## Verdict: PASS` → `SAZO_VERDICT: APPROVE`
+- `## Verdict: FAIL` → `SAZO_VERDICT: BLOCK`
+- Architectural risk noted but not blocking → `SAZO_VERDICT: NEEDS_REVISION`
+
+`SAZO_BLOCKING_ISSUES` = count of FAIL-criteria items found (0 if PASS).

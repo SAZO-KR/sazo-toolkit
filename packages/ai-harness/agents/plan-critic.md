@@ -30,3 +30,24 @@ Output format:
 ## Notes (optional)
 - ...
 ```
+
+## Verdict footer (REQUIRED, machine-parseable)
+
+After the human-readable verdict, append the machine-parseable footer
+exactly. The caller injects `SAZO_VERDICT_NONCE` into the prompt — echo
+that exact nonce. If caller did not provide a nonce, omit footer.
+
+```
+---SAZO_FOOTER_BEGIN---
+SAZO_VERDICT_NONCE: <nonce-from-caller>
+SAZO_VERDICT: APPROVE | BLOCK | NEEDS_REVISION
+SAZO_BLOCKING_ISSUES: <integer>
+---SAZO_FOOTER_END---
+```
+
+Mapping:
+- `## Verdict: APPROVE` → `SAZO_VERDICT: APPROVE`
+- `## Verdict: BLOCK` → `SAZO_VERDICT: BLOCK`
+- Plan has ambiguity but is conceptually sound → `SAZO_VERDICT: NEEDS_REVISION`
+
+`SAZO_BLOCKING_ISSUES` = count of items in your Blockers section (0 if APPROVE).
