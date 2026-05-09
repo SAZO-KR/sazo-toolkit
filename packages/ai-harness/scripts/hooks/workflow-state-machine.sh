@@ -113,6 +113,8 @@ $((warn_threshold + 1))회부터 hard block. Override:
 EOF
         return 0
     fi
+    audit_log "stage_block" "${SAZO_SESSION_ID:-}" "$stage" "blocked" "hook" \
+        "soft_warn_count=$count exceeded threshold $warn_threshold; tool=$SAZO_TOOL_NAME"
     cat >&2 <<EOF
 [workflow-block] stage=$stage 미통과 $count회 — $SAZO_TOOL_NAME 차단.
 $msg
@@ -125,6 +127,8 @@ EOF
 
 hard_block() {
     local stage="$1" msg="$2"
+    audit_log "stage_block" "${SAZO_SESSION_ID:-}" "$stage" "blocked" "hook" \
+        "tool=$SAZO_TOOL_NAME; ${msg%%$'\n'*}"
     cat >&2 <<EOF
 [workflow-block] stage=$stage 미통과 → $SAZO_TOOL_NAME 차단.
 $msg
