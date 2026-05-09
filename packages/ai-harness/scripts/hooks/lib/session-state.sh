@@ -482,24 +482,28 @@ process_verdict_tracked_post_task() {
                 simple_audit "verdict_missing_block" "agent=$agent" "stage=$stage"
                 return 0
             fi
-            # Phase 1 warn: legacy fallback. Record a synthetic APPROVE in
-            # last_verdicts so aggregation gating works alongside cycle_init.
-            # Without this synthetic entry, last_cycle_at != null forces
-            # stage_is_passed into expected_set completeness mode and a legacy
-            # reviewer without a footer leaves the stage blocked despite the
-            # warn-mode design promise.
+            # Phase 1 warn fallback. The behavior depends on whether an
+            # aggregation cycle is active for this stage.
             simple_audit "verdict_missing_warn" "agent=$agent" "stage=$stage"
-            local synthetic
-            synthetic=$(jq -nc --arg ts "$(date +%Y-%m-%dT%H:%M:%S%z)" \
-                '{verdict: "APPROVE", issues: 0, ts: $ts, source: "phase1_fallback"}')
-            state_set_json "$sid" ".last_verdicts[\"$stage\"][\"$agent\"]" "$synthetic" "$cwd"
 
-            # Mark stage if aggregation now satisfied (with synthetic + any
-            # real verdicts already recorded).
-            if _evaluate_stage_completion "$sid" "$cwd" "$stage"; then
-                stage_is_passed "$sid" "$stage" \
-                    || stage_mark "$sid" "$stage" "completed" "auto" "subagent=$agent (Phase 1: footer missing)" "$cwd"
+            local cycle_at
+            cycle_at=$(state_get "$sid" ".last_cycle_at[\"$stage\"] // \"\"" "$cwd")
+
+            if [ -n "$cycle_at" ] && [ "$cycle_at" != "null" ]; then
+                # Aggregation cycle active. Caller (skill/command) explicitly
+                # opted into nonce-aggregation by calling verdict_cycle_init.
+                # A footer-missing response here is most likely a stale Task
+                # from a prior cycle (no cycle_id to validate). Refuse to
+                # populate last_verdicts with a synthetic APPROVE that could
+                # combine with fresh approvals to bypass the gate. Log only.
+                return 0
             fi
+
+            # Legacy mode: no cycle_init ever called. Phase 1 warn promise =
+            # existing reviewers without footer keep working via legacy
+            # stage_mark + history-only stage_is_passed fallback.
+            stage_is_passed "$sid" "$stage" \
+                || stage_mark "$sid" "$stage" "completed" "auto" "subagent=$agent (Phase 1: footer missing)" "$cwd"
             return 0
             ;;
         ok)

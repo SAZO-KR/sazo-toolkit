@@ -124,8 +124,8 @@ else
   FAIL=$((FAIL+1)); echo "  ✗ D.3 stage_is_passed should be true"
 fi
 
-# --- D2: Phase 1 fallback works after verdict_cycle_init ---
-echo "Test D2: Phase 1 fallback after verdict_cycle_init (cycle_at set)"
+# --- D2: Phase 1 fallback REJECTED when aggregation cycle active ---
+echo "Test D2: Phase 1 fallback rejected during active aggregation cycle"
 SID="flow-D2"
 state_init "$SID" "$CWD" "test"
 verdict_cycle_init "$SID" "$CWD" "review" '["code-reviewer","architect-advisor"]'
@@ -134,19 +134,24 @@ verdict_cycle_init "$SID" "$CWD" "review" '["code-reviewer","architect-advisor"]
 N1=$(verdict_nonce_issue "$SID" "$CWD" "code-reviewer" "review")
 process_verdict_tracked_post_task "$SID" "$CWD" "review" "code-reviewer" "$(mk_envelope "$N1" "APPROVE")"
 
-# architect-advisor without footer (Phase 1 warn fallback — synthetic APPROVE)
+# architect-advisor WITHOUT footer (Phase 1 warn fallback)
 unset SAZO_VERDICT_FOOTER_ENFORCE
 process_verdict_tracked_post_task "$SID" "$CWD" "review" "architect-advisor" "no footer prose"
 
-# Stage should pass — both expected reviewers responded (1 real + 1 synthetic), all APPROVE
+# Cycle active → fallback should NOT write synthetic APPROVE.
+# Stage stays incomplete (architect-advisor never properly responded).
+recorded=$(state_jq "$SID" '.last_verdicts.review["architect-advisor"] // null' "$CWD")
+assert_eq "null" "$recorded" "D2.1 cycle active: synthetic APPROVE NOT written"
+
 if stage_is_passed "$SID" "review" "$CWD"; then
-  PASS=$((PASS+1)); echo "  ✓ D2.1 Phase 1 synthetic APPROVE + real APPROVE → stage passed"
+  FAIL=$((FAIL+1)); echo "  ✗ D2.2 stage should NOT pass (architect-advisor missing)"
 else
-  FAIL=$((FAIL+1)); echo "  ✗ D2.1 Phase 1 fallback broken under cycle_init"
+  PASS=$((PASS+1)); echo "  ✓ D2.2 stage stays incomplete — fallback cycle-scoped"
 fi
 
-source_marker=$(state_jq "$SID" '.last_verdicts.review["architect-advisor"].source' "$CWD")
-assert_eq "phase1_fallback" "$source_marker" "D2.2 synthetic verdict marked source=phase1_fallback"
+# verdict_missing_count still incremented (warn signal preserved)
+miss_count=$(state_jq "$SID" '.verdict_missing_count["architect-advisor"]' "$CWD")
+assert_eq "1" "$miss_count" "D2.3 verdict_missing_count incremented (warn signal)"
 
 # --- E: missing footer + Phase 2 block → no stage_mark ---
 echo "Test E: missing footer Phase 2 block → no mark"
