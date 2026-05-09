@@ -45,9 +45,27 @@ description: Use after CI passes and before PR creation — launches independent
 └─────────────────────────────────────────────┘
 ```
 
-## Review Agents
+## Aggregation gate vs. multi-perspective fan-out
 
-Launch **5 parallel agents**, one per perspective below. Each agent receives ONLY:
+There are TWO modes — choose explicitly:
+
+**Mode A: Aggregation gate (DEFAULT, recommended)**
+- Launch **2 Task calls**: one `code-reviewer` (with all 5 perspectives consolidated in the prompt) + one `architect-advisor`.
+- Each call carries one nonce. Hook aggregates verdicts per agent.
+- review_expected_set MUST be `["code-reviewer","architect-advisor"]` (unique agent names).
+- This is what the verdict-footer aggregation gate is designed for.
+
+**Mode B: Multi-perspective fan-out (advisory only, NOT aggregation-tracked)**
+- Launch 5 parallel Task calls (4× code-reviewer + 1× architect-advisor) for prompt-cache savings.
+- All 4 code-reviewer verdicts collapse into the same `last_verdicts.review["code-reviewer"]` slot under per-agent keying. The hook gate cannot distinguish individual perspectives — only the most-recently-arrived verdict survives.
+- DO NOT use this mode as an aggregation gate. Use it only when the main loop manually evaluates each result and the user (not the hook) decides pass/fail.
+- If you use this mode, set `SAZO_VERDICT_FOOTER_ENFORCE=warn` so hook fall-through to legacy stage_mark is preserved.
+
+The remainder of this section describes the perspectives. In Mode A, consolidate them into a single code-reviewer prompt. In Mode B, fan them out across 4 calls (advisory).
+
+## Review Agents (perspectives)
+
+For Mode A consolidate all 5 perspectives in the single `code-reviewer` Task prompt. For Mode B, launch one Task per perspective. Each agent receives ONLY:
 
 - The `git diff` of all changes
 - The list of changed files
@@ -206,16 +224,41 @@ unaffected — the per-call nonce sits in the per-call tail.
 
 ### 3. Launch the parallel Task calls
 
+**Mode A (aggregation gate, default — 2 calls):**
+
+```
+Task(
+  subagent_type="code-reviewer",
+  run_in_background=true,
+  load_skills=[],
+  prompt="[shared prefix + ALL 5 perspectives consolidated + nonce footer for code-reviewer]"
+)
+
+Task(
+  subagent_type="architect-advisor",
+  run_in_background=true,
+  load_skills=[],
+  prompt="[shared prefix + Architecture perspective + nonce footer for architect-advisor]"
+)
+```
+
+Two Task calls, each with its own nonce. Hook aggregates: stage marks `completed` only when both return APPROVE.
+
+**Mode B (advisory, multi-perspective fan-out — 5 calls):**
+
 ```
 For each of the 5 perspectives, use Task tool:
   Task(
     subagent_type="code-reviewer",            # architect-advisor for the Architecture perspective
     run_in_background=true,
     load_skills=[],
-    prompt="[shared prefix + perspective tail + nonce footer instruction]"
+    prompt="[shared prefix + perspective tail + (optional) nonce footer instruction]"
   )
+```
 
-CRITICAL:
+In Mode B, hook aggregation is unreliable (per-agent keying collapses 4 code-reviewer slots) — the main loop must evaluate each result manually and treat the gate as advisory.
+
+**CRITICAL (both modes):**
   - Do NOT pass session_id — each review MUST be a fresh session
   - Do NOT include previous review results in the prompt
   - Each agent returns: PASS or FAIL with specific issues cited by file and line
@@ -224,7 +267,6 @@ CRITICAL:
 Agent selection:
   - Correctness / Security / Performance / Test Quality → `code-reviewer` (diff-based, sonnet)
   - Architecture → `architect-advisor` (depth over breadth, sonnet — escalate to opus only when the main loop identifies architecturally sensitive changes; see CLAUDE.md §0)
-```
 
 ### 4. Verdict aggregation (automatic)
 

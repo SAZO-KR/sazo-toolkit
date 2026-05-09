@@ -627,38 +627,55 @@ verdict_nonce_issue() {
     printf '%s' "$nonce"
 }
 
-# verdict_nonce_consume: validate (nonce exists, agent matches, not yet consumed)
-# and atomically mark consumed. Returns 0 on success, 1 on rejection.
+# verdict_nonce_consume: atomic check-and-set on nonce. Validates (nonce exists,
+# agent matches, not yet consumed) AND flips consumed=true within a single
+# _with_lock guard so two concurrent hooks cannot both observe consumed=false
+# and both pass — single-use defense holds under parallel reviewer flow.
+# Returns 0 on success, 1 on rejection.
 verdict_nonce_consume() {
     local sid="$1" cwd="$2" nonce="$3" agent="$4"
 
-    # Validate nonce format defensively
+    # Validate nonce format defensively (no I/O — safe outside lock).
     case "$nonce" in
         [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
         *) return 1 ;;
     esac
 
-    # Lookup entry
-    local entry
-    entry=$(state_get "$sid" ".verdict_nonces[\"$nonce\"] // null" "$cwd")
-    if [ -z "$entry" ] || [ "$entry" = "null" ]; then
+    local f
+    f=$(state_file "$sid" "$cwd") || return 1
+    [ ! -f "$f" ] && return 1
+
+    _with_lock "$f" _verdict_nonce_consume_inner "$f" "$nonce" "$agent"
+}
+
+_verdict_nonce_consume_inner() {
+    local f="$1" nonce="$2" agent="$3"
+
+    # Read + validate + flip within a single jq invocation against the locked file.
+    local before after
+    before=$(jq -r --arg n "$nonce" --arg a "$agent" '
+        (.verdict_nonces[$n] // null) as $entry |
+        if $entry == null then "missing"
+        elif $entry.agent != $a then "wrong_agent"
+        elif $entry.consumed != false then "already_consumed"
+        else "ok"
+        end
+    ' "$f" 2>/dev/null)
+
+    case "$before" in
+        ok) ;;
+        *) return 1 ;;
+    esac
+
+    # Atomic flip — same locked write that established "ok".
+    local tmp="$f.consume.tmp"
+    if jq --arg n "$nonce" '.verdict_nonces[$n].consumed = true' "$f" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$f"
+        return 0
+    else
+        rm -f "$tmp"
         return 1
     fi
-
-    local registered_agent consumed
-    registered_agent=$(printf '%s' "$entry" | jq -r '.agent // ""')
-    consumed=$(printf '%s' "$entry" | jq -r '.consumed // false')
-
-    if [ "$registered_agent" != "$agent" ]; then
-        return 1
-    fi
-    if [ "$consumed" != "false" ]; then
-        return 1
-    fi
-
-    # Atomically flip consumed (state_set_json wraps with _with_lock)
-    state_set_json "$sid" ".verdict_nonces[\"$nonce\"].consumed" "true" "$cwd" || return 1
-    return 0
 }
 
 # parse_verdict_footer: extract last SAZO verdict envelope from subagent output text.
