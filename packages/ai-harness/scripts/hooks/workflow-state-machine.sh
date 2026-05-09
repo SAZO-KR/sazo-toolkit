@@ -150,6 +150,13 @@ handle_post() {
                     ;;
             esac
             ;;
+        Edit|Write|NotebookEdit)
+            # Plan 04: CI 통과 후 코드 파일 변경되면 ci_passed_at invalidate.
+            # 호출자가 file_path 인자를 jq에서 추출. notebook_path 도 cover.
+            local edit_file_path
+            edit_file_path=$(echo "$SAZO_TOOL_INPUT" | jq -r '.file_path // .notebook_path // ""' 2>/dev/null)
+            ci_invalidate_if_code_changed "$SAZO_SESSION_ID" "$SAZO_CWD" "$edit_file_path" "edit"
+            ;;
         Bash)
             # CI detection: 프로젝트 CLAUDE.md의 CI 커맨드와 정확 매치 시만 ci 마킹.
             # 단순 부분 명령(`yarn lint` 단독)은 무시.
@@ -338,9 +345,45 @@ handle_pre() {
 EOF
             fi
             ;;
+        Task)
+            # Plan 04 §6 (B): subagent fallback for GH #34692. Subagent 내부의
+            # Edit/Write/Bash 호출은 parent hook 미발동 — Task PreToolUse 시점에
+            # mutating 가능 agent 검출 시 ci_passed_at preemptive invalidate.
+            local subagent_pre
+            subagent_pre=$(echo "$SAZO_TOOL_INPUT" | jq -r '.subagent_type // ""' 2>/dev/null)
+            case "$subagent_pre" in
+                plan-executor|ui-engineer)
+                    ci_invalidate_unconditional "$SAZO_SESSION_ID" "$SAZO_CWD" "task_preemptive:$subagent_pre"
+                    ;;
+            esac
+            ;;
         Bash)
             local cmd
             cmd=$(echo "$SAZO_TOOL_INPUT" | jq -r '.command // ""')
+            # Plan 04 §3: git commit defense layer. staged 코드 파일 + ci_passed_at!=null
+            # → invalidate. commit 자체는 차단 안 함 (PR create 시점에 ci 미통과로 잡힘).
+            if echo "$cmd" | grep -qE '(^|[[:space:]&|;()])git[[:space:]]+commit\b'; then
+                if [ "${SAZO_DISABLE_CI_INVALIDATE:-0}" != "1" ]; then
+                    local cur_cp
+                    cur_cp=$(state_get "$SAZO_SESSION_ID" ".ci_passed_at" "$SAZO_CWD")
+                    if [ -n "$cur_cp" ] && [ "$cur_cp" != "null" ]; then
+                        local repo_root
+                        repo_root=$(git -C "$SAZO_CWD" rev-parse --show-toplevel 2>/dev/null)
+                        if [ -n "$repo_root" ]; then
+                            local has_code_staged=0
+                            while IFS= read -r staged_f; do
+                                [ -z "$staged_f" ] && continue
+                                if _is_doc_only_path "$staged_f"; then continue; fi
+                                if _is_code_file "$staged_f"; then has_code_staged=1; break; fi
+                            done < <(git -C "$repo_root" diff --cached --name-only --diff-filter=ACMR 2>/dev/null)
+                            if [ "$has_code_staged" = "1" ]; then
+                                ci_invalidate_unconditional "$SAZO_SESSION_ID" "$SAZO_CWD" "git_commit"
+                            fi
+                        fi
+                    fi
+                fi
+                # commit 자체는 fall-through (block 안 함)
+            fi
             # gh pr create — hard block
             if echo "$cmd" | grep -qE '\bgh[[:space:]]+pr[[:space:]]+create\b'; then
                 if ! stage_is_passed "$SAZO_SESSION_ID" "ci"; then

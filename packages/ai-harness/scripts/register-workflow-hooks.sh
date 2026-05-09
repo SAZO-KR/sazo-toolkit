@@ -83,8 +83,9 @@ register_workflow_hooks() {
     _register_one_hook "PreToolUse" "Write|Edit|NotebookEdit|Bash" \
         "$hooks_dir/workflow-state-machine.sh" "pre"
 
-    # 4) workflow-state-machine post — Task/Bash
-    _register_one_hook "PostToolUse" "Task|Bash" \
+    # 4) workflow-state-machine post — Task/Bash/Edit/Write/NotebookEdit
+    # Edit/Write/NotebookEdit 추가는 Plan 04 — ci_passed_at invalidate 트리거.
+    _register_one_hook "PostToolUse" "Task|Bash|Edit|Write|NotebookEdit" \
         "$hooks_dir/workflow-state-machine.sh" "post"
 
     # 5) user-prompt-approval-detect — UserPromptSubmit (matcher 없음)

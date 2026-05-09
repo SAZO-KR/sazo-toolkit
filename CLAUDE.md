@@ -19,7 +19,7 @@ packages/
 
 | 패키지                                                | 검증 방법                                                          |
 | ----------------------------------------------------- | ------------------------------------------------------------------ |
-| ai-harness                                            | `bash -n scripts/auto-update.sh && bash -n install.sh && bash -n scripts/setup-rtk.sh && bash -n scripts/awake/awake.sh && bash scripts/tests/setup-rtk.smoke.sh && bash scripts/tests/awake.smoke.sh && bash scripts/tests/sleep-guard-cleanup.smoke.sh && bash scripts/tests/workflow-hooks.smoke.sh && bash scripts/tests/footer-parser.smoke.sh && bash scripts/tests/verdict-nonce.smoke.sh && bash scripts/tests/verdict-aggregation.smoke.sh && bash scripts/tests/state-truncate.smoke.sh && bash scripts/tests/verdict-flow.smoke.sh` |
+| ai-harness                                            | `bash -n scripts/auto-update.sh && bash -n install.sh && bash -n scripts/setup-rtk.sh && bash -n scripts/awake/awake.sh && bash scripts/tests/setup-rtk.smoke.sh && bash scripts/tests/awake.smoke.sh && bash scripts/tests/sleep-guard-cleanup.smoke.sh && bash scripts/tests/workflow-hooks.smoke.sh && bash scripts/tests/footer-parser.smoke.sh && bash scripts/tests/verdict-nonce.smoke.sh && bash scripts/tests/verdict-aggregation.smoke.sh && bash scripts/tests/state-truncate.smoke.sh && bash scripts/tests/verdict-flow.smoke.sh && bash scripts/tests/ci-invalidate.smoke.sh` |
 | Go 패키지 (translate-bot, bamboo-forest, shuffle-bot) | `cd packages/{name} && go build ./...`                             |
 | 셸 스크립트 (claude-notify)                           | `bash -n scripts/*.sh`                                             |
 
