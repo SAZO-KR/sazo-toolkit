@@ -95,6 +95,31 @@ Your job is to examine the *changed* code with fresh eyes and flag issues. You d
 - pre-existing issues, nits, or context worth surfacing but not blocking
 ```
 
+## Verdict footer (REQUIRED, machine-parseable)
+
+After the human-readable verdict above, append the following machine-parseable
+footer **exactly**. The harness parses this to gate the review stage.
+
+The caller injects a `SAZO_VERDICT_NONCE` value into the prompt. Echo that
+exact nonce — do not invent or alter it. If the caller did not provide a
+nonce, omit this footer entirely.
+
+```
+---SAZO_FOOTER_BEGIN---
+SAZO_VERDICT_NONCE: <nonce-from-caller>
+SAZO_VERDICT: APPROVE | BLOCK | NEEDS_REVISION
+SAZO_BLOCKING_ISSUES: <integer>
+---SAZO_FOOTER_END---
+```
+
+Mapping from human verdict:
+- `## Verdict: PASS` → `SAZO_VERDICT: APPROVE`
+- `## Verdict: FAIL` (blocking issues) → `SAZO_VERDICT: BLOCK`
+- Borderline / needs minor revision → `SAZO_VERDICT: NEEDS_REVISION`
+
+`SAZO_BLOCKING_ISSUES` = count of high-severity items in your Issues section
+(0 if PASS).
+
 ## FAIL criteria (any one triggers FAIL)
 
 - Bug that will be hit in production
