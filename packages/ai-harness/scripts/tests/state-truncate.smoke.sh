@@ -210,6 +210,51 @@ else
   echo "  ✗ D.1 too many entries kept (total=$total_history); auto-skip should not be preserved"
 fi
 
+# --- E: review/plan user-skipped + completed entries preserved ---
+echo "Test E: review/plan completed and user-skipped entries preserved"
+SID="trunc-test-4"
+state_init "$SID" "$CWD" "test"
+SF=$(state_file "$SID" "$CWD")
+
+jq -nc '
+  [{
+    stage: "review", status: "completed", by: "auto",
+    reason: "verdict aggregation: all APPROVE",
+    ts: "2026-05-09T01:00:00Z"
+  }] +
+  [{
+    stage: "review", status: "skipped", by: "user",
+    reason: "docs only PR",
+    ts: "2026-05-09T01:00:01Z"
+  }] +
+  [{
+    stage: "plan", status: "completed", by: "auto",
+    reason: "verdict aggregation: all APPROVE",
+    ts: "2026-05-09T01:00:02Z"
+  }] +
+  [range(300) | {
+    stage: "research",
+    status: "completed",
+    by: "auto",
+    reason: ("noise " * 1000 + (. | tostring)),
+    ts: ("2026-05-09T00:" + (if . < 10 then "0" + (. | tostring) else (. | tostring) end) + ":00Z")
+  }]
+' > "$SF.history"
+jq --slurpfile h "$SF.history" '.history = $h[0]' "$SF" > "$SF.new"
+mv "$SF.new" "$SF"
+rm -f "$SF.history"
+
+_maybe_truncate_state "$SID" "$CWD"
+
+review_completed=$(state_jq "$SID" '[.history[] | select(.stage=="review" and .status=="completed")] | length' "$CWD")
+assert_eq "1" "$review_completed" "E.1 review completed entry preserved"
+
+review_user_skip=$(state_jq "$SID" '[.history[] | select(.stage=="review" and .status=="skipped" and .by=="user")] | length' "$CWD")
+assert_eq "1" "$review_user_skip" "E.2 review user-skip entry preserved"
+
+plan_completed=$(state_jq "$SID" '[.history[] | select(.stage=="plan" and .status=="completed")] | length' "$CWD")
+assert_eq "1" "$plan_completed" "E.3 plan completed entry preserved"
+
 # --- Summary ---
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"

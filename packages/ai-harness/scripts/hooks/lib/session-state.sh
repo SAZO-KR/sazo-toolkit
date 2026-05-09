@@ -137,7 +137,8 @@ _state_init_inner() {
             verdict_missing_count: {},
             verdict_errors: {},
             verdict_unset_expected_set_count: 0,
-            review_expected_set: []
+            review_expected_set: [],
+            last_cycle_at: {}
         }' > "$f"
 }
 
@@ -317,8 +318,16 @@ stage_is_passed() {
             jq -e --arg s "$stage" --argjson defaultPlan '["plan-critic","plan-auditor"]' '
                 ((.last_verdicts // {})[$s] // {}) as $last |
                 (if $s == "review" then (.review_expected_set // []) else $defaultPlan end) as $expected |
-                # User /skip is an authoritative override
-                (.history | any(.stage == $s and .status == "skipped" and .by == "user"))
+                ((.last_cycle_at // {})[$s] // null) as $cycle_at |
+                # User /skip is an authoritative override (only entries newer
+                # than the most recent cycle_init count — a stale prior-cycle
+                # skip cannot bypass a fresh aggregation cycle).
+                (.history | any(
+                    .stage == $s
+                    and .status == "skipped"
+                    and .by == "user"
+                    and ($cycle_at == null or .ts > $cycle_at)
+                ))
                 or
                 (
                     ($last | to_entries | all(.value.verdict == "APPROVE"))
@@ -326,11 +335,12 @@ stage_is_passed() {
                     (.history | any(.stage == $s and (.status == "completed" or .status == "skipped")))
                     and
                     (
-                        # Phase 1 fallback: empty last_verdicts → skip expected_set check
-                        ($last | length == 0)
+                        # Phase 1 fallback: legacy mode — no aggregation cycle ever started
+                        # (cycle_at is null) AND last_verdicts empty → trust history.
+                        (($cycle_at == null) and ($last | length == 0))
                         or
-                        # Otherwise every expected reviewer must have responded
-                        ($expected | all(. as $a | $last | has($a)))
+                        # Aggregation cycle active: every expected reviewer must have responded
+                        ($expected | length > 0 and ($expected | all(. as $a | $last | has($a))))
                     )
                 )
             ' "$f" >/dev/null 2>&1
@@ -536,13 +546,28 @@ _maybe_truncate_state() {
 _maybe_truncate_state_inner() {
     local f="$1"
     local tmp="$f.trunc.tmp"
+    # Preserve every entry that stage_is_passed could reference:
+    #   - ci/approval completed (auto or user)
+    #   - ci/approval skipped by user (CI override path)
+    #   - review/plan completed (verdict aggregation history requirement)
+    #   - review/plan skipped by user (authoritative override path)
+    # Plus the last 50 entries for recent activity. Anything else
+    # (research, auto-skips, etc.) is droppable.
     if jq '
         .history |= (
             (
                 ([.[-50:][]]) +
                 ([.[]
-                    | select(.stage=="ci" or .stage=="approval")
-                    | select(.status=="completed" or (.status=="skipped" and .by=="user"))
+                    | select(
+                        (.stage == "ci" or .stage == "approval")
+                        and (.status == "completed" or (.status == "skipped" and .by == "user"))
+                      )
+                ]) +
+                ([.[]
+                    | select(
+                        (.stage == "review" or .stage == "plan")
+                        and (.status == "completed" or (.status == "skipped" and .by == "user"))
+                      )
                 ])
             )
             | unique_by([.ts, .stage, .status, .by, .reason])
@@ -650,8 +675,15 @@ verdict_cycle_init() {
 _verdict_cycle_init_inner() {
     local f="$1" stage="$2" expected_json="$3"
     local tmp="$f.cycle.tmp"
-    if jq --arg s "$stage" --argjson exp "$expected_json" '
+    local ts; ts=$(date +%Y-%m-%dT%H:%M:%S%z)
+    # Records last_cycle_at[stage] timestamp so stage_is_passed can
+    # distinguish "fresh cycle pending" from "no aggregation cycle"
+    # (Phase 1 footer-missing fallback). Without this marker, a stale
+    # history "completed" entry from a previous cycle could pass the
+    # gate immediately after cycle_init clears last_verdicts.
+    if jq --arg s "$stage" --argjson exp "$expected_json" --arg ts "$ts" '
         .last_verdicts[$s] = {} |
+        .last_cycle_at[$s] = $ts |
         (if $s == "review" then .review_expected_set = $exp else . end)
     ' "$f" > "$tmp" 2>/dev/null; then
         mv "$tmp" "$f"

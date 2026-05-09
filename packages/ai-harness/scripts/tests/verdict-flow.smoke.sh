@@ -279,6 +279,38 @@ else
   FAIL=$((FAIL+1)); echo "  ✗ L.1 legacy fallback should pass"
 fi
 
+# --- O: cycle_init invalidates prior cycle's stale completion ---
+echo "Test O: cycle_init prevents stale completion from passing fresh cycle"
+SID="flow-O"
+state_init "$SID" "$CWD" "test"
+
+# Round 1: complete cycle
+verdict_cycle_init "$SID" "$CWD" "review" '["code-reviewer","architect-advisor"]'
+N1=$(verdict_nonce_issue "$SID" "$CWD" "code-reviewer" "review")
+N2=$(verdict_nonce_issue "$SID" "$CWD" "architect-advisor" "review")
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "code-reviewer" "$(mk_envelope "$N1" "APPROVE")"
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "architect-advisor" "$(mk_envelope "$N2" "APPROVE")"
+
+if stage_is_passed "$SID" "review" "$CWD"; then
+  PASS=$((PASS+1)); echo "  ✓ O.1 round 1: stage passed"
+else
+  FAIL=$((FAIL+1)); echo "  ✗ O.1 round 1 should pass"
+fi
+
+# Sleep to ensure timestamp difference (BSD/GNU date second precision)
+sleep 1
+
+# Round 2: cycle_init only — no fresh verdicts yet
+verdict_cycle_init "$SID" "$CWD" "review" '["code-reviewer","architect-advisor"]'
+
+# Stage should NOT pass — even though history has "completed" from round 1,
+# cycle_at is now newer than that entry → fresh cycle pending
+if stage_is_passed "$SID" "review" "$CWD"; then
+  FAIL=$((FAIL+1)); echo "  ✗ O.2 stage should NOT pass (fresh cycle pending)"
+else
+  PASS=$((PASS+1)); echo "  ✓ O.2 fresh cycle blocks stale completion"
+fi
+
 # --- N: user /skip overrides BLOCK verdict ---
 echo "Test N: user-skip overrides blocking verdicts"
 SID="flow-N"
@@ -297,6 +329,10 @@ if stage_is_passed "$SID" "review" "$CWD"; then
 else
   PASS=$((PASS+1)); echo "  ✓ N.1 stage NOT passed (BLOCK present)"
 fi
+
+# Sleep to ensure timestamp progression (date precision = 1 second)
+# In real workflow: user types /skip after a delay so this is realistic.
+sleep 1
 
 # User explicitly /skip review (simulated)
 stage_mark "$SID" "review" "skipped" "user" "user override after BLOCK" "$CWD"
