@@ -20,7 +20,7 @@ set -uo pipefail
 
 STATE_DIR="${SAZO_STATE_DIR:-$HOME/.claude/session-state}"
 AUDIT_LOG="$STATE_DIR/audit.log"
-SCHEMA_VERSION=1
+SCHEMA_VERSION=2
 mkdir -p -m 700 "$STATE_DIR" 2>/dev/null || mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR" 2>/dev/null || true
 
@@ -131,7 +131,13 @@ _state_init_inner() {
             plan_approved_at: null,
             approval_nonce: null,
             ci_passed_at: null,
-            review_ts: null
+            review_ts: null,
+            verdict_nonces: {},
+            last_verdicts: {review: {}, plan: {}},
+            verdict_missing_count: {},
+            verdict_errors: {},
+            verdict_unset_expected_set_count: 0,
+            review_expected_set: []
         }' > "$f"
 }
 
@@ -351,6 +357,61 @@ read_hook_payload() {
     SAZO_MODEL=$(echo "$payload" | jq -r '.model // env.CLAUDE_MODEL // ""')
     export SAZO_USER_PROMPT
     SAZO_USER_PROMPT=$(echo "$payload" | jq -r '.prompt // ""')
+}
+
+# verdict_nonce_issue: mint a random nonce bound to (agent, stage). Caller embeds
+# the nonce into the Task prompt so subagent must echo it in its footer.
+# Returns the nonce on stdout (32-hex chars).
+verdict_nonce_issue() {
+    local sid="$1" cwd="$2" agent="$3" stage="$4"
+    local nonce
+    if command -v openssl >/dev/null 2>&1; then
+        nonce=$(openssl rand -hex 16)
+    else
+        nonce=$(LC_ALL=C tr -dc 'a-f0-9' < /dev/urandom | head -c 32)
+    fi
+    local entry
+    entry=$(jq -nc \
+        --arg agent "$agent" \
+        --arg stage "$stage" \
+        --arg ts "$(date +%Y-%m-%dT%H:%M:%S%z)" \
+        '{agent: $agent, stage: $stage, issued_at: $ts, consumed: false}')
+    state_set_json "$sid" ".verdict_nonces[\"$nonce\"]" "$entry" "$cwd" || return 1
+    printf '%s' "$nonce"
+}
+
+# verdict_nonce_consume: validate (nonce exists, agent matches, not yet consumed)
+# and atomically mark consumed. Returns 0 on success, 1 on rejection.
+verdict_nonce_consume() {
+    local sid="$1" cwd="$2" nonce="$3" agent="$4"
+
+    # Validate nonce format defensively
+    case "$nonce" in
+        [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+        *) return 1 ;;
+    esac
+
+    # Lookup entry
+    local entry
+    entry=$(state_get "$sid" ".verdict_nonces[\"$nonce\"] // null" "$cwd")
+    if [ -z "$entry" ] || [ "$entry" = "null" ]; then
+        return 1
+    fi
+
+    local registered_agent consumed
+    registered_agent=$(printf '%s' "$entry" | jq -r '.agent // ""')
+    consumed=$(printf '%s' "$entry" | jq -r '.consumed // false')
+
+    if [ "$registered_agent" != "$agent" ]; then
+        return 1
+    fi
+    if [ "$consumed" != "false" ]; then
+        return 1
+    fi
+
+    # Atomically flip consumed (state_set_json wraps with _with_lock)
+    state_set_json "$sid" ".verdict_nonces[\"$nonce\"].consumed" "true" "$cwd" || return 1
+    return 0
 }
 
 # parse_verdict_footer: extract last SAZO verdict envelope from subagent output text.
