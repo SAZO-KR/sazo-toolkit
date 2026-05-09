@@ -516,17 +516,15 @@ process_verdict_tracked_post_task() {
     verdict=$(printf '%s\n' "$parse" | awk -F= '/^VERDICT=/{print $2; exit}')
     issues=$(printf '%s\n' "$parse" | awk -F= '/^ISSUES=/{print $2; exit}')
 
-    # Validate nonce + agent binding
-    if ! verdict_nonce_consume "$sid" "$cwd" "$nonce" "$agent"; then
+    # Atomic validate + record under single lock — no TOCTOU between
+    # nonce consume and last_verdicts write. If a fresh cycle starts
+    # between the parse here and the locked predicate, the cycle_id
+    # mismatch causes rejection inside the same locked mutation that
+    # would otherwise have written the stale verdict.
+    if ! verdict_consume_and_record "$sid" "$cwd" "$nonce" "$agent" "$stage" "$verdict" "$issues"; then
         simple_audit "verdict_nonce_invalid" "agent=$agent" "stage=$stage" "nonce=$nonce"
         return 0
     fi
-
-    # Record verdict (replace-by-agent)
-    local entry
-    entry=$(jq -nc --arg v "$verdict" --argjson i "${issues:-0}" --arg ts "$(date +%Y-%m-%dT%H:%M:%S%z)" \
-        '{verdict: $v, issues: $i, ts: $ts}')
-    state_set_json "$sid" ".last_verdicts[\"$stage\"][\"$agent\"]" "$entry" "$cwd"
 
     # Evaluate stage completion
     if _evaluate_stage_completion "$sid" "$cwd" "$stage"; then
@@ -763,6 +761,68 @@ verdict_nonce_consume() {
     [ ! -f "$f" ] && return 1
 
     _with_lock "$f" _verdict_nonce_consume_inner "$f" "$nonce" "$agent"
+}
+
+# verdict_consume_and_record: atomic check-and-record. Validates the nonce AND
+# writes last_verdicts[stage][agent] entry under a single _with_lock — eliminates
+# TOCTOU window between consume() and a separate state_set_json. If a fresh
+# cycle starts between the two operations, the late stale verdict cannot bleed
+# into the new cycle. Returns 0 on success, 1 on rejection.
+verdict_consume_and_record() {
+    local sid="$1" cwd="$2" nonce="$3" agent="$4" stage="$5" verdict="$6" issues="$7"
+
+    case "$nonce" in
+        [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+        *) return 1 ;;
+    esac
+
+    local f
+    f=$(state_file "$sid" "$cwd") || return 1
+    [ ! -f "$f" ] && return 1
+
+    _with_lock "$f" _verdict_consume_and_record_inner "$f" "$nonce" "$agent" "$stage" "$verdict" "$issues"
+}
+
+_verdict_consume_and_record_inner() {
+    local f="$1" nonce="$2" agent="$3" stage="$4" verdict="$5" issues="$6"
+    local ts; ts=$(date +%Y-%m-%dT%H:%M:%S%z)
+
+    local before
+    before=$(jq -r --arg n "$nonce" --arg a "$agent" --arg s "$stage" '
+        (.verdict_nonces[$n] // null) as $entry |
+        if $entry == null then "missing"
+        elif $entry.agent != $a then "wrong_agent"
+        elif $entry.stage != $s then "wrong_stage"
+        elif $entry.consumed != false then "already_consumed"
+        else
+          ((.last_cycle_id // {})[$s] // null) as $current_cid |
+          ($entry.cycle_id // null) as $entry_cid |
+          ((.last_cycle_at // {})[$s] // null) as $cycle_at |
+          if ($current_cid != null and $entry_cid != null and $current_cid != $entry_cid) then "stale_cycle"
+          elif ($cycle_at != null and $entry.issued_at < $cycle_at) then "stale_cycle"
+          else "ok"
+          end
+        end
+    ' "$f" 2>/dev/null)
+
+    case "$before" in
+        ok) ;;
+        *) return 1 ;;
+    esac
+
+    # Atomic flip + record under same locked write.
+    local tmp="$f.car.tmp"
+    if jq --arg n "$nonce" --arg s "$stage" --arg a "$agent" \
+          --arg v "$verdict" --argjson i "${issues:-0}" --arg ts "$ts" '
+        .verdict_nonces[$n].consumed = true
+        | .last_verdicts[$s][$a] = {verdict: $v, issues: $i, ts: $ts}
+    ' "$f" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$f"
+        return 0
+    else
+        rm -f "$tmp"
+        return 1
+    fi
 }
 
 _verdict_nonce_consume_inner() {
