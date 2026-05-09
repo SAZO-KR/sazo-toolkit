@@ -298,8 +298,14 @@ stage_is_passed() {
             ' "$f" >/dev/null 2>&1
             ;;
         review|plan)
-            # Verdict-tracked stages need three conditions:
-            #   1. history has a completed/skipped entry (any cycle marked it complete)
+            # Verdict-tracked stages.
+            #
+            # User /skip review or /skip plan is an authoritative override
+            # — passes regardless of last_verdicts state (a user explicitly
+            # accepting risk after a BLOCK verdict).
+            #
+            # Otherwise three conditions must all hold:
+            #   1. history has a completed/skipped entry
             #   2. all currently-recorded verdicts are APPROVE
             #      (later BLOCK downgrades invalidate)
             #   3. if an expected_set is registered for this cycle, every
@@ -308,25 +314,24 @@ stage_is_passed() {
             #       and only some reviewers have responded in the new cycle)
             # Empty last_verdicts → vacuous-truth on (2) and skip (3) so
             # legacy Phase 1 history-only fallback still passes.
-            local expected_set_ref
-            case "$stage" in
-                review) expected_set_ref='.review_expected_set // []';;
-                plan)   expected_set_ref='["plan-critic","plan-auditor"]';;
-            esac
             jq -e --arg s "$stage" --argjson defaultPlan '["plan-critic","plan-auditor"]' '
                 ((.last_verdicts // {})[$s] // {}) as $last |
                 (if $s == "review" then (.review_expected_set // []) else $defaultPlan end) as $expected |
-                ($last | to_entries | all(.value.verdict == "APPROVE"))
-                and
-                (.history | any(.stage == $s and (.status == "completed" or .status == "skipped")))
-                and
+                # User /skip is an authoritative override
+                (.history | any(.stage == $s and .status == "skipped" and .by == "user"))
+                or
                 (
-                    # Phase 1 fallback: empty last_verdicts (no footer ever recorded)
-                    # → skip expected_set completeness check, trust history.
-                    ($last | length == 0)
-                    or
-                    # Otherwise: every expected reviewer must have responded.
-                    ($expected | all(. as $a | $last | has($a)))
+                    ($last | to_entries | all(.value.verdict == "APPROVE"))
+                    and
+                    (.history | any(.stage == $s and (.status == "completed" or .status == "skipped")))
+                    and
+                    (
+                        # Phase 1 fallback: empty last_verdicts → skip expected_set check
+                        ($last | length == 0)
+                        or
+                        # Otherwise every expected reviewer must have responded
+                        ($expected | all(. as $a | $last | has($a)))
+                    )
                 )
             ' "$f" >/dev/null 2>&1
             ;;

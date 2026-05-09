@@ -279,6 +279,49 @@ else
   FAIL=$((FAIL+1)); echo "  ✗ L.1 legacy fallback should pass"
 fi
 
+# --- N: user /skip overrides BLOCK verdict ---
+echo "Test N: user-skip overrides blocking verdicts"
+SID="flow-N"
+state_init "$SID" "$CWD" "test"
+verdict_cycle_init "$SID" "$CWD" "review" '["code-reviewer","architect-advisor"]'
+
+# Both reviewers respond, one BLOCK
+N1=$(verdict_nonce_issue "$SID" "$CWD" "code-reviewer" "review")
+N2=$(verdict_nonce_issue "$SID" "$CWD" "architect-advisor" "review")
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "code-reviewer" "$(mk_envelope "$N1" "BLOCK" 3)"
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "architect-advisor" "$(mk_envelope "$N2" "APPROVE")"
+
+# Stage NOT passed yet (BLOCK present)
+if stage_is_passed "$SID" "review" "$CWD"; then
+  FAIL=$((FAIL+1)); echo "  ✗ N.1 stage should NOT pass with BLOCK"
+else
+  PASS=$((PASS+1)); echo "  ✓ N.1 stage NOT passed (BLOCK present)"
+fi
+
+# User explicitly /skip review (simulated)
+stage_mark "$SID" "review" "skipped" "user" "user override after BLOCK" "$CWD"
+
+# Stage now passes via user override
+if stage_is_passed "$SID" "review" "$CWD"; then
+  PASS=$((PASS+1)); echo "  ✓ N.2 user skip overrides BLOCK"
+else
+  FAIL=$((FAIL+1)); echo "  ✗ N.2 user skip should pass"
+fi
+
+# Auto skip should NOT override (only user)
+SID="flow-N2"
+state_init "$SID" "$CWD" "test"
+verdict_cycle_init "$SID" "$CWD" "review" '["code-reviewer"]'
+N=$(verdict_nonce_issue "$SID" "$CWD" "code-reviewer" "review")
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "code-reviewer" "$(mk_envelope "$N" "BLOCK" 1)"
+stage_mark "$SID" "review" "skipped" "auto" "auto skip" "$CWD"
+
+if stage_is_passed "$SID" "review" "$CWD"; then
+  FAIL=$((FAIL+1)); echo "  ✗ N.3 auto skip should NOT override BLOCK"
+else
+  PASS=$((PASS+1)); echo "  ✓ N.3 auto skip does NOT override BLOCK"
+fi
+
 # --- J: unknown agent rejected by allowlist (defense-in-depth) ---
 echo "Test J: unknown agent name → allowlist reject"
 SID="flow-10"
