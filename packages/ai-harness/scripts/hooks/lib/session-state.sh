@@ -359,6 +359,90 @@ read_hook_payload() {
     SAZO_USER_PROMPT=$(echo "$payload" | jq -r '.prompt // ""')
 }
 
+# simple_audit: temporary audit log helper. plan 02 will replace with JSON Lines audit_log.
+simple_audit() {
+    local event="$1"
+    shift
+    local extras=""
+    while [ $# -gt 0 ]; do
+        extras="$extras $1"
+        shift
+    done
+    printf '[%s] %s%s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$event" "$extras" >> "$AUDIT_LOG" 2>/dev/null || true
+}
+
+# process_verdict_tracked_post_task: end-to-end handler for verdict-tracked subagent
+# Task PostToolUse. Parses footer, validates nonce, records verdict, evaluates
+# stage completion. Honors SAZO_VERDICT_FOOTER_ENFORCE (warn|block).
+#
+# Args: sid cwd stage agent result_text
+# Returns: 0 always (decisions encoded in audit log + state)
+process_verdict_tracked_post_task() {
+    local sid="$1" cwd="$2" stage="$3" agent="$4" result_text="$5"
+
+    local parse status
+    parse=$(parse_verdict_footer "$result_text")
+    status=$(printf '%s\n' "$parse" | awk -F= '/^STATUS=/{print $2; exit}')
+
+    case "$status" in
+        truncated)
+            simple_audit "verdict_truncated" "agent=$agent" "stage=$stage"
+            return 0
+            ;;
+        missing)
+            state_increment "$sid" ".verdict_missing_count[\"$agent\"]" "$cwd"
+            local enforce_global enforce_agent enforce
+            enforce_global="${SAZO_VERDICT_FOOTER_ENFORCE:-warn}"
+            local agent_upper
+            agent_upper=$(printf '%s' "$agent" | tr 'a-z-' 'A-Z_')
+            local agent_var="SAZO_VERDICT_FOOTER_ENFORCE_$agent_upper"
+            enforce_agent=$(eval "printf '%s' \"\${$agent_var:-}\"")
+            enforce="${enforce_agent:-$enforce_global}"
+
+            if [ "$enforce" = "block" ]; then
+                simple_audit "verdict_missing_block" "agent=$agent" "stage=$stage"
+                return 0
+            fi
+            # Phase 1 warn: legacy fallback stage_mark
+            simple_audit "verdict_missing_warn" "agent=$agent" "stage=$stage"
+            stage_is_passed "$sid" "$stage" \
+                || stage_mark "$sid" "$stage" "completed" "auto" "subagent=$agent (Phase 1: footer missing)" "$cwd"
+            return 0
+            ;;
+        ok)
+            ;;
+        *)
+            simple_audit "verdict_parse_error" "agent=$agent" "stage=$stage" "status=$status"
+            return 0
+            ;;
+    esac
+
+    # status=ok — extract fields
+    local nonce verdict issues
+    nonce=$(printf '%s\n' "$parse" | awk -F= '/^NONCE=/{print $2; exit}')
+    verdict=$(printf '%s\n' "$parse" | awk -F= '/^VERDICT=/{print $2; exit}')
+    issues=$(printf '%s\n' "$parse" | awk -F= '/^ISSUES=/{print $2; exit}')
+
+    # Validate nonce + agent binding
+    if ! verdict_nonce_consume "$sid" "$cwd" "$nonce" "$agent"; then
+        simple_audit "verdict_nonce_invalid" "agent=$agent" "stage=$stage" "nonce=$nonce"
+        return 0
+    fi
+
+    # Record verdict (replace-by-agent)
+    local entry
+    entry=$(jq -nc --arg v "$verdict" --argjson i "${issues:-0}" --arg ts "$(date +%Y-%m-%dT%H:%M:%S%z)" \
+        '{verdict: $v, issues: $i, ts: $ts}')
+    state_set_json "$sid" ".last_verdicts[\"$stage\"][\"$agent\"]" "$entry" "$cwd"
+
+    # Evaluate stage completion
+    if _evaluate_stage_completion "$sid" "$cwd" "$stage"; then
+        stage_is_passed "$sid" "$stage" \
+            || stage_mark "$sid" "$stage" "completed" "auto" "verdict aggregation: all APPROVE" "$cwd"
+    fi
+    return 0
+}
+
 # _maybe_truncate_state: cap state.json size to 1MB. Preserve invariants:
 #   1. Last 50 history entries (recent activity)
 #   2. All ci/approval completed entries (stage_is_passed dependency — line 273-300)

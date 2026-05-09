@@ -97,15 +97,22 @@ handle_post() {
             # Claude Code PostToolUse payload의 tool_response에 is_error 또는
             # interrupted=true면 실패. 둘 다 없는 경우(이전 스키마) subagent_type만
             # 보고 진행.
-            local task_error task_interrupted
+            local task_error task_interrupted subagent_type
             task_error=$(echo "$SAZO_TOOL_RESPONSE" | jq -r '.is_error // false' 2>/dev/null)
             task_interrupted=$(echo "$SAZO_TOOL_RESPONSE" | jq -r '.interrupted // false' 2>/dev/null)
+            subagent_type=$(echo "$SAZO_TOOL_INPUT" | jq -r '.subagent_type // ""')
+
             if [ "$task_error" = "true" ] || [ "$task_interrupted" = "true" ]; then
+                # For verdict-tracked agents, record error toward 3-strike escalation.
+                case "$subagent_type" in
+                    code-reviewer|architect-advisor|plan-critic|plan-auditor)
+                        _record_reviewer_error "$SAZO_SESSION_ID" "$SAZO_CWD" "$subagent_type"
+                        ;;
+                esac
                 echo "[workflow] Task failed/interrupted — stage not marked" >&2
                 exit 0
             fi
-            local subagent_type
-            subagent_type=$(echo "$SAZO_TOOL_INPUT" | jq -r '.subagent_type // ""')
+
             case "$subagent_type" in
                 code-searcher|docs-researcher|explore|Explore|\
                 nori-codebase-locator|nori-codebase-analyzer|nori-codebase-pattern-finder|\
@@ -115,11 +122,29 @@ handle_post() {
                     # 위임 보상: explore_count decay
                     state_decrement "$SAZO_SESSION_ID" ".explore_count"
                     ;;
-                plan-drafter|plan-auditor|plan-critic|Plan)
-                    stage_is_passed "$SAZO_SESSION_ID" "plan" \
-                        || stage_mark "$SAZO_SESSION_ID" "plan" "completed" "auto" "subagent=$subagent_type"
+                plan-drafter|Plan)
+                    # plan-drafter not verdict-tracked (produces plan content, not verdict).
+                    # Phase 1 (warn): legacy mark on drafter alone.
+                    # Phase 2 (block): plan-critic + plan-auditor verdict required — drafter alone insufficient.
+                    if [ "${SAZO_VERDICT_FOOTER_ENFORCE:-warn}" != "block" ]; then
+                        stage_is_passed "$SAZO_SESSION_ID" "plan" \
+                            || stage_mark "$SAZO_SESSION_ID" "plan" "completed" "auto" "subagent=$subagent_type"
+                    fi
                     ;;
-                code-reviewer|architect-advisor|nori-code-reviewer)
+                plan-auditor|plan-critic)
+                    # Verdict-tracked. parse footer + validate nonce + record + evaluate.
+                    local result_text
+                    result_text=$(echo "$SAZO_TOOL_RESPONSE" | jq -r '.result // ""' 2>/dev/null)
+                    process_verdict_tracked_post_task "$SAZO_SESSION_ID" "$SAZO_CWD" "plan" "$subagent_type" "$result_text"
+                    ;;
+                code-reviewer|architect-advisor)
+                    # Verdict-tracked.
+                    local result_text
+                    result_text=$(echo "$SAZO_TOOL_RESPONSE" | jq -r '.result // ""' 2>/dev/null)
+                    process_verdict_tracked_post_task "$SAZO_SESSION_ID" "$SAZO_CWD" "review" "$subagent_type" "$result_text"
+                    ;;
+                nori-code-reviewer)
+                    # Not verdict-tracked (separate domain). Legacy mark.
                     stage_is_passed "$SAZO_SESSION_ID" "review" \
                         || stage_mark "$SAZO_SESSION_ID" "review" "completed" "auto" "subagent=$subagent_type"
                     ;;
