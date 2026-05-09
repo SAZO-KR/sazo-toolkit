@@ -167,11 +167,13 @@ Each reviewer returns **PASS** or **FAIL**. The threshold:
 
 ## How to Launch Review Agents
 
-### 1. Set the active reviewer set (verdict footer gate)
+### 1. Initialize the review cycle (clear stale verdicts + set expected reviewers)
 
-Before launching, declare which reviewers will participate so the harness
-can aggregate verdicts correctly. The PostToolUse hook reads this to know
-when stage completion can be evaluated.
+Before launching, atomically clear any leftover verdicts from a previous
+cycle and declare which reviewers will participate. Use
+`verdict_cycle_init` — it does both in a single locked write so a stale
+APPROVE from a prior cycle cannot combine with a fresh APPROVE to pass
+the gate prematurely.
 
 **IMPORTANT — unique agent names only.** `_evaluate_stage_completion`
 keys verdicts by agent name (`last_verdicts.review[<agent>]`). Listing
@@ -179,21 +181,17 @@ the same agent multiple times in `review_expected_set` collapses to one
 key — it does NOT enforce N invocations. Use unique entries.
 
 ```bash
-# Example: code-reviewer + architect-advisor (TWO unique reviewers).
-# To get more breadth from code-reviewer, run multiple parallel Task
-# calls with different perspective tails — but the gate only needs the
-# unique agent names below.
 SESSION_ID="${CLAUDE_SESSION_ID:-${SAZO_SESSION_ID:-}}"
 CWD="$(pwd)"
 bash -c "source ${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}/scripts/hooks/lib/session-state.sh && \
-         state_set_json '$SESSION_ID' '.review_expected_set' \
-         '[\"code-reviewer\",\"architect-advisor\"]' '$CWD'"
+         verdict_cycle_init '$SESSION_ID' '$CWD' 'review' \
+         '[\"code-reviewer\",\"architect-advisor\"]'"
 ```
 
-(In practice, the main loop invokes this via a small helper so it stays
-inline with the Task launches. If you skip this step, the gate falls back
-to fail-open and treats any single APPROVE as success — not what you want
-for multi-perspective review.)
+`verdict_cycle_init` resets `last_verdicts.review` to `{}` and sets
+`review_expected_set` to the supplied list — both under one
+`_with_lock` guard. Skipping this step risks the gate passing on stale
+verdicts.
 
 ### 2. Mint nonces and inject into each prompt
 

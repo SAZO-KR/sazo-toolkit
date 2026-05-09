@@ -101,9 +101,16 @@ into each Task prompt:
 ```bash
 SESSION_ID="${CLAUDE_SESSION_ID:-${SAZO_SESSION_ID:-}}"
 CWD="$(pwd)"
-NONCE_CRITIC=$(bash -c "source ${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}/scripts/hooks/lib/session-state.sh && \
+HARNESS_DIR="${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}"
+
+# Initialize cycle — clear stale verdicts from previous gate
+bash -c "source $HARNESS_DIR/scripts/hooks/lib/session-state.sh && \
+         verdict_cycle_init '$SESSION_ID' '$CWD' 'plan' \
+         '[\"plan-critic\",\"plan-auditor\"]'"
+
+NONCE_CRITIC=$(bash -c "source $HARNESS_DIR/scripts/hooks/lib/session-state.sh && \
                         verdict_nonce_issue '$SESSION_ID' '$CWD' 'plan-critic' 'plan'")
-NONCE_AUDITOR=$(bash -c "source ${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}/scripts/hooks/lib/session-state.sh && \
+NONCE_AUDITOR=$(bash -c "source $HARNESS_DIR/scripts/hooks/lib/session-state.sh && \
                          verdict_nonce_issue '$SESSION_ID' '$CWD' 'plan-auditor' 'plan'")
 ```
 

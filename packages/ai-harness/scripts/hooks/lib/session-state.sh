@@ -298,16 +298,36 @@ stage_is_passed() {
             ' "$f" >/dev/null 2>&1
             ;;
         review|plan)
-            # Verdict-tracked stages: history entry alone is insufficient.
-            # If last_verdicts exists for this stage AND any current verdict is
-            # not APPROVE (e.g., a later reviewer downgraded APPROVE → BLOCK),
-            # the stage is no longer passed even if history has a completed entry.
-            # Vacuous truth: empty last_verdicts → fall back to history-only
-            # logic (Phase 1 fallback when footer is absent).
-            jq -e --arg s "$stage" '
-                (((.last_verdicts // {})[$s] // {}) | to_entries | all(.value.verdict == "APPROVE"))
+            # Verdict-tracked stages need three conditions:
+            #   1. history has a completed/skipped entry (any cycle marked it complete)
+            #   2. all currently-recorded verdicts are APPROVE
+            #      (later BLOCK downgrades invalidate)
+            #   3. if an expected_set is registered for this cycle, every
+            #      expected reviewer must have a verdict in last_verdicts
+            #      (prevents premature pass when stale verdicts are cleared
+            #       and only some reviewers have responded in the new cycle)
+            # Empty last_verdicts → vacuous-truth on (2) and skip (3) so
+            # legacy Phase 1 history-only fallback still passes.
+            local expected_set_ref
+            case "$stage" in
+                review) expected_set_ref='.review_expected_set // []';;
+                plan)   expected_set_ref='["plan-critic","plan-auditor"]';;
+            esac
+            jq -e --arg s "$stage" --argjson defaultPlan '["plan-critic","plan-auditor"]' '
+                ((.last_verdicts // {})[$s] // {}) as $last |
+                (if $s == "review" then (.review_expected_set // []) else $defaultPlan end) as $expected |
+                ($last | to_entries | all(.value.verdict == "APPROVE"))
                 and
                 (.history | any(.stage == $s and (.status == "completed" or .status == "skipped")))
+                and
+                (
+                    # Phase 1 fallback: empty last_verdicts (no footer ever recorded)
+                    # → skip expected_set completeness check, trust history.
+                    ($last | length == 0)
+                    or
+                    # Otherwise: every expected reviewer must have responded.
+                    ($expected | all(. as $a | $last | has($a)))
+                )
             ' "$f" >/dev/null 2>&1
             ;;
         *)
@@ -604,6 +624,37 @@ _evaluate_stage_completion() {
         end
     ' "$sf")
     [ "$result" = "true" ]
+}
+
+# verdict_cycle_init: start a fresh review/plan aggregation cycle. Atomically
+# clears any stale verdicts from a previous cycle and sets review_expected_set
+# to the supplied list. Without this, a prior all-APPROVE cycle could
+# combine with the first new APPROVE to mark the stage passed before
+# remaining reviewers have responded.
+#
+# Args: sid cwd stage expected_set_json
+# Example: verdict_cycle_init "$SID" "$CWD" "review" '["code-reviewer","architect-advisor"]'
+verdict_cycle_init() {
+    local sid="$1" cwd="$2" stage="$3" expected_json="$4"
+    local f
+    f=$(state_file "$sid" "$cwd") || return 1
+    [ -f "$f" ] || state_init "$sid" "$cwd" "${SAZO_MODEL:-unknown}"
+    _with_lock "$f" _verdict_cycle_init_inner "$f" "$stage" "$expected_json"
+}
+
+_verdict_cycle_init_inner() {
+    local f="$1" stage="$2" expected_json="$3"
+    local tmp="$f.cycle.tmp"
+    if jq --arg s "$stage" --argjson exp "$expected_json" '
+        .last_verdicts[$s] = {} |
+        (if $s == "review" then .review_expected_set = $exp else . end)
+    ' "$f" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$f"
+        return 0
+    else
+        rm -f "$tmp"
+        return 1
+    fi
 }
 
 # verdict_nonce_issue: mint a random nonce bound to (agent, stage). Caller embeds

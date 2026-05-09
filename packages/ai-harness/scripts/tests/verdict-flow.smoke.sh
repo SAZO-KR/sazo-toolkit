@@ -180,6 +180,54 @@ process_verdict_tracked_post_task "$SID" "$CWD" "plan" "plan-auditor" "$(mk_enve
 plan_passed=$(state_jq "$SID" '[.history[] | select(.stage=="plan" and .status=="completed")] | length' "$CWD")
 assert_eq "1" "$plan_passed" "I.1 plan completed when critic + auditor both APPROVE"
 
+# --- M: verdict_cycle_init clears stale verdicts ---
+echo "Test M: verdict_cycle_init resets stale verdicts (cycle isolation)"
+SID="flow-M"
+state_init "$SID" "$CWD" "test"
+
+# Round 1: both APPROVE → stage passed
+verdict_cycle_init "$SID" "$CWD" "review" '["code-reviewer","architect-advisor"]'
+N1=$(verdict_nonce_issue "$SID" "$CWD" "code-reviewer" "review")
+N2=$(verdict_nonce_issue "$SID" "$CWD" "architect-advisor" "review")
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "code-reviewer" "$(mk_envelope "$N1" "APPROVE")"
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "architect-advisor" "$(mk_envelope "$N2" "APPROVE")"
+
+if stage_is_passed "$SID" "review" "$CWD"; then
+  PASS=$((PASS+1)); echo "  ✓ M.1 round 1: stage passed"
+else
+  FAIL=$((FAIL+1)); echo "  ✗ M.1 round 1 should pass"
+fi
+
+# Round 2: code change → re-init cycle. Stale verdicts must be cleared.
+verdict_cycle_init "$SID" "$CWD" "review" '["code-reviewer","architect-advisor"]'
+
+# After init, last_verdicts.review should be empty
+last_v_count=$(state_jq "$SID" '.last_verdicts.review | length' "$CWD")
+assert_eq "0" "$last_v_count" "M.2 cycle_init clears last_verdicts.review"
+
+# Only code-reviewer arrives in round 2 (architect-advisor still pending)
+N3=$(verdict_nonce_issue "$SID" "$CWD" "code-reviewer" "review")
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "code-reviewer" "$(mk_envelope "$N3" "APPROVE")"
+
+# Stage should NOT be passed yet — architect-advisor missing
+# (without verdict_cycle_init, the stale architect-advisor APPROVE
+# would combine with new code-reviewer APPROVE and pass prematurely)
+if stage_is_passed "$SID" "review" "$CWD"; then
+  FAIL=$((FAIL+1)); echo "  ✗ M.3 stage should NOT pass (architect-advisor pending after re-init)"
+else
+  PASS=$((PASS+1)); echo "  ✓ M.3 stale verdicts cleared — gate awaits fresh architect-advisor"
+fi
+
+# Now architect-advisor responds
+N4=$(verdict_nonce_issue "$SID" "$CWD" "architect-advisor" "review")
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "architect-advisor" "$(mk_envelope "$N4" "APPROVE")"
+
+if stage_is_passed "$SID" "review" "$CWD"; then
+  PASS=$((PASS+1)); echo "  ✓ M.4 stage passes after fresh APPROVE pair"
+else
+  FAIL=$((FAIL+1)); echo "  ✗ M.4 stage should pass with fresh pair"
+fi
+
 # --- K: stage_is_passed invalidation — APPROVE → BLOCK downgrade ---
 echo "Test K: verdict downgrade invalidates passed stage"
 SID="flow-K"
