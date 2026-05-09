@@ -99,12 +99,12 @@ gate, mint a verdict nonce per call and inject the footer instruction
 into each Task prompt:
 
 ```bash
-SESSION_ID="$CLAUDE_SESSION_ID"
+SESSION_ID="${CLAUDE_SESSION_ID:-${SAZO_SESSION_ID:-}}"
 CWD="$(pwd)"
-NONCE_CRITIC=$(source ~/.claude/scripts/hooks/lib/session-state.sh && \
-               verdict_nonce_issue "$SESSION_ID" "$CWD" "plan-critic" "plan")
-NONCE_AUDITOR=$(source ~/.claude/scripts/hooks/lib/session-state.sh && \
-                verdict_nonce_issue "$SESSION_ID" "$CWD" "plan-auditor" "plan")
+NONCE_CRITIC=$(bash -c "source $HOME/.claude/scripts/hooks/lib/session-state.sh && \
+                        verdict_nonce_issue '$SESSION_ID' '$CWD' 'plan-critic' 'plan'")
+NONCE_AUDITOR=$(bash -c "source $HOME/.claude/scripts/hooks/lib/session-state.sh && \
+                         verdict_nonce_issue '$SESSION_ID' '$CWD' 'plan-auditor' 'plan'")
 ```
 
 Append to each Task prompt the corresponding footer template (see

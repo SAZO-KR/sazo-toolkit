@@ -155,14 +155,21 @@ Before launching, declare which reviewers will participate so the harness
 can aggregate verdicts correctly. The PostToolUse hook reads this to know
 when stage completion can be evaluated.
 
+**IMPORTANT — unique agent names only.** `_evaluate_stage_completion`
+keys verdicts by agent name (`last_verdicts.review[<agent>]`). Listing
+the same agent multiple times in `review_expected_set` collapses to one
+key — it does NOT enforce N invocations. Use unique entries.
+
 ```bash
-# Example: 4 code-reviewer + 1 architect-advisor
-SESSION_ID="$CLAUDE_SESSION_ID"
+# Example: code-reviewer + architect-advisor (TWO unique reviewers).
+# To get more breadth from code-reviewer, run multiple parallel Task
+# calls with different perspective tails — but the gate only needs the
+# unique agent names below.
+SESSION_ID="${CLAUDE_SESSION_ID:-${SAZO_SESSION_ID:-}}"
 CWD="$(pwd)"
-bash "$HOME/.claude/scripts/hooks/lib/session-state.sh" \
-  -c "source ~/.claude/scripts/hooks/lib/session-state.sh && \
-      state_set_json '$SESSION_ID' '.review_expected_set' \
-      '[\"code-reviewer\",\"code-reviewer\",\"code-reviewer\",\"code-reviewer\",\"architect-advisor\"]' '$CWD'"
+bash -c "source $HOME/.claude/scripts/hooks/lib/session-state.sh && \
+         state_set_json '$SESSION_ID' '.review_expected_set' \
+         '[\"code-reviewer\",\"architect-advisor\"]' '$CWD'"
 ```
 
 (In practice, the main loop invokes this via a small helper so it stays
@@ -177,8 +184,8 @@ nonce. Mint one nonce per call from the harness, then append the footer
 template to the prompt:
 
 ```bash
-NONCE=$(source ~/.claude/scripts/hooks/lib/session-state.sh && \
-        verdict_nonce_issue "$SESSION_ID" "$CWD" "code-reviewer" "review")
+NONCE=$(bash -c "source $HOME/.claude/scripts/hooks/lib/session-state.sh && \
+                 verdict_nonce_issue '$SESSION_ID' '$CWD' 'code-reviewer' 'review'")
 
 NONCE_INSTRUCTION="
 

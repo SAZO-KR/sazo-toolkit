@@ -180,6 +180,18 @@ process_verdict_tracked_post_task "$SID" "$CWD" "plan" "plan-auditor" "$(mk_enve
 plan_passed=$(state_jq "$SID" '[.history[] | select(.stage=="plan" and .status=="completed")] | length' "$CWD")
 assert_eq "1" "$plan_passed" "I.1 plan completed when critic + auditor both APPROVE"
 
+# --- J: unknown agent rejected by allowlist (defense-in-depth) ---
+echo "Test J: unknown agent name → allowlist reject"
+SID="flow-10"
+state_init "$SID" "$CWD" "test"
+# Inject an unknown agent — process_verdict_tracked_post_task should
+# silently audit + return without touching state.
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "evil-agent\$(id)" "any text"
+
+# Verify no last_verdicts entry created
+verdict_recorded=$(state_jq "$SID" '.last_verdicts.review // {} | length' "$CWD")
+assert_eq "0" "$verdict_recorded" "J.1 unknown agent → no verdict stored"
+
 # --- Summary ---
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"

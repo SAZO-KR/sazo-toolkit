@@ -380,6 +380,17 @@ simple_audit() {
 process_verdict_tracked_post_task() {
     local sid="$1" cwd="$2" stage="$3" agent="$4" result_text="$5"
 
+    # Allowlist: caller (handle_post Task case statement) already filters, but
+    # defense-in-depth — reject unknown agents to prevent shell injection via
+    # agent name in env var lookup below.
+    case "$agent" in
+        code-reviewer|architect-advisor|plan-critic|plan-auditor) ;;
+        *)
+            simple_audit "verdict_unknown_agent" "agent=$agent"
+            return 0
+            ;;
+    esac
+
     local parse status
     parse=$(parse_verdict_footer "$result_text")
     status=$(printf '%s\n' "$parse" | awk -F= '/^STATUS=/{print $2; exit}')
@@ -393,10 +404,13 @@ process_verdict_tracked_post_task() {
             state_increment "$sid" ".verdict_missing_count[\"$agent\"]" "$cwd"
             local enforce_global enforce_agent enforce
             enforce_global="${SAZO_VERDICT_FOOTER_ENFORCE:-warn}"
+            # Indirect expansion via ${!var} (bash 4+) — no eval needed.
+            # agent already validated by allowlist above; agent_upper is
+            # ASCII-only after tr.
             local agent_upper
             agent_upper=$(printf '%s' "$agent" | tr 'a-z-' 'A-Z_')
-            local agent_var="SAZO_VERDICT_FOOTER_ENFORCE_$agent_upper"
-            enforce_agent=$(eval "printf '%s' \"\${$agent_var:-}\"")
+            local agent_var="SAZO_VERDICT_FOOTER_ENFORCE_${agent_upper}"
+            enforce_agent="${!agent_var:-}"
             enforce="${enforce_agent:-$enforce_global}"
 
             if [ "$enforce" = "block" ]; then
@@ -440,6 +454,10 @@ process_verdict_tracked_post_task() {
         stage_is_passed "$sid" "$stage" \
             || stage_mark "$sid" "$stage" "completed" "auto" "verdict aggregation: all APPROVE" "$cwd"
     fi
+
+    # Cap state.json size (best-effort; failure is non-fatal).
+    _maybe_truncate_state "$sid" "$cwd" || true
+
     return 0
 }
 
@@ -466,7 +484,7 @@ _maybe_truncate_state() {
                 ([.[-50:][]]) +
                 ([.[] | select(.stage=="ci" or .stage=="approval") | select(.status=="completed")])
             )
-            | unique_by(.ts + (.stage // "") + (.status // ""))
+            | unique_by(.ts + "|" + (.stage // "") + "|" + (.status // "") + "|" + (.by // "") + "|" + (.reason // ""))
             | sort_by(.ts)
         )
     ' "$f" > "$tmp" 2>/dev/null; then

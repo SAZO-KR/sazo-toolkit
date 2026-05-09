@@ -101,12 +101,14 @@ _maybe_truncate_state "$SID" "$CWD"
 sz_after=$(wc -c <"$SF")
 echo "  state size after:  $sz_after bytes"
 
-# Should be smaller now (if was over 1MB)
-if [ "$sz_before" -gt 1048576 ]; then
-  assert_le 1500000 "$sz_after" "B.1 truncated below 1.5MB (with safety margin)"
+# Hard precondition: padding MUST exceed 1MB to exercise truncation path
+if [ "$sz_before" -le 1048576 ]; then
+  echo "  ✗ B.0 PRECONDITION: padding insufficient ($sz_before <= 1MB) — increase noise multiplier"
+  FAIL=$((FAIL+1))
 else
-  echo "  (skip B.1 — state didn't exceed cap; padding insufficient)"
   PASS=$((PASS+1))
+  echo "  ✓ B.0 precondition: state exceeds 1MB ($sz_before bytes)"
+  assert_le 1500000 "$sz_after" "B.1 truncated below 1.5MB (with safety margin)"
 fi
 
 # Critical: ci entries preserved
