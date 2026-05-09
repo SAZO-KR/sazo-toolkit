@@ -34,6 +34,23 @@ Integrator plan은 v6에 두 BLOCKER 잔존:
 
 ## Stage 분할
 
+### Stage S0 — Stop hook payload spike (BLOCKING prerequisite)
+
+**산출물**: `proposals/harness-determinism/spike-stop-hook.md` (신규)
+
+Stop hook이 alpha 기능일 가능성. payload 필드 (`session_id`, `started_at`, `ended_at`) 미확인 시 `post-stop-determinism-log.sh`가 silent 실패. 본 plan 진행 전 spike 필수.
+
+조사 항목:
+1. Claude Code Stop hook payload 정확한 schema (docs.anthropic.com 공식 또는 codebase audit)
+2. trigger event — 사용자 종료 vs Claude 종료 vs error?
+3. payload fields — session_id 외 ended_at, duration_ms 등 사용 가능 여부
+
+**Pass/Fail gate**:
+- PASS: spike-stop-hook.md에 모든 필드 CONFIRMED 명시 → Stage A 진입 가능
+- FAIL: 알려진 필드만 CONFIRMED, 나머지는 `tool_response` 패턴 차용 (PR #27 spike 결과 재사용) → Stage A는 minimum subset (session_id만 사용) 으로 제한
+
+S0 완료 없이 Stage A 진입 금지. 0-spike 와 동일한 패턴 적용.
+
 ### Stage A0a — `mark_approval_complete` atomic helper
 
 `/approved` 입력 즉시 처리. 현재는 `user-prompt-approval-detect.sh`이 nonce만 발급 → workflow-state-machine이 소비. 직접 atomic 마킹으로 단순화.
@@ -60,13 +77,39 @@ _mark_approval_complete_inner() {
 }
 ```
 
-**Validator 확장** (bypass 분기):
+**Validator 정확한 변경** (`stage_is_passed` 의 approval 분기, 현 line 294-298):
+
+기존:
 ```jq
 approval)
-    (.plan_approved_at != null)
-    and (.history | any(.stage == "approval" and .status == "completed"
-        and (.by == "user" or .by == "bypass")))
+    jq -e '
+        (.plan_approved_at != null)
+        and (.history | any(.stage == "approval" and .status == "completed" and .by == "user"))
+    ' "$f" >/dev/null 2>&1
+    ;;
 ```
+
+변경 후:
+```jq
+approval)
+    jq -e '
+        (.plan_approved_at != null)
+        and (.history | any(
+            .stage == "approval"
+            and .status == "completed"
+            and (.by == "user" or .by == "bypass")
+        ))
+    ' "$f" >/dev/null 2>&1
+    ;;
+```
+
+Backward compat — 기존 `by="user"` 경로 유지, `by="auto"` 거부 유지.
+
+**Regression 테스트** (`approval-bypass.smoke.sh` 신규):
+- T1: `by="user"` → stage_is_passed=true (기존 동작 보존)
+- T2: `by="bypass"` → stage_is_passed=true (신규)
+- T3: `by="auto"` → stage_is_passed=false (회귀 방어)
+- T4: `mark_approval_complete by="bypass"` 후 후속 Write 통과 — stage 영속성
 
 `user-prompt-approval-detect.sh` 단순화 — nonce 발급 분리 폐기, 직접 호출.
 
@@ -84,20 +127,21 @@ is_known_slash() {
 
 `user-prompt-approval-detect.sh` 확장 — `/approved`, `/skip <stage> <reason>` 파싱.
 
-**Whitespace 처리** (integrator plan 회귀 회피):
+**Whitespace 처리** (integrator plan v6 회귀 회피, 단일 채택):
+
+bash 3.2 `${var#pattern}` 안 `[[:space:]]` 클래스 동작이 환경별 차이 가능 — 보수적으로 `sed -E` 채택.
+
 ```bash
-# bash 3.2 호환, glob 회피
 trim_leading() {
-    local s="$1"
-    while [ "${s#[[:space:]]}" != "$s" ]; do s="${s#[[:space:]]}"; done
-    printf '%s' "$s"
+    printf '%s' "$1" | sed -E 's/^[[:space:]]+//'
 }
 ```
 
-또는 sed:
-```bash
-echo "$rest" | sed -E 's/^[[:space:]]+//'
-```
+Smoke test (`slash-detect.smoke.sh`):
+- TS1: `trim_leading "  /skip foo"` → `"/skip foo"`
+- TS2: `trim_leading "<TAB>/skip"` → `"/skip"`
+- TS3: `trim_leading ""` → `""`
+- TS4: bash `--version` 검증 — 3.2.x로 시작하면 위 행위 동일성 별도 확인 (CI lint 단계)
 
 **Mixed slash 거부**: `/approved /skip` 같은 입력 → 무시.
 
@@ -182,7 +226,15 @@ mark_skip_with_check() {
 }
 ```
 
-기존 `workflow-state-machine.sh`에서 autonomous skip을 호출하는 모든 지점을 `mark_skip_with_check`로 교체.
+**기존 autonomous skip 호출 site 인벤토리** (현 codebase 기준):
+
+| File:Line | 호출 | 변경 |
+|---|---|---|
+| `scripts/hooks/pre-worktree-gate.sh:110` | `stage_mark "$SAZO_SESSION_ID" "worktree" "skipped" "auto" "not a git repo"` | `mark_skip_with_check` 통과 (worktree는 `WRAPPER_EXEMPT_STAGES`로 exempt) |
+
+현재 codebase에 `stage_mark ... "skipped" "auto"` 호출은 위 단일 site만. 향후 추가 site는 `mark_skip_with_check` 사용 강제. CI lint 검토 항목에 추가 — `grep -r 'stage_mark.*skipped.*auto'` 발견 시 직접 사용 차단.
+
+PR #27의 process_verdict_tracked_post_task은 stage_mark "completed" "auto" (skipped 아님) 호출 — 본 wrapper 무관.
 
 ### ADR D2 — Bash 호환성 정책 명시
 
@@ -247,9 +299,35 @@ PR #27의 v2 그대로. `mark_approval_complete`는 기존 필드만 사용. `au
 
 **A**: `stop-metrics.smoke.sh`:
 - session 종료 시 JSONL line 1개
-- hook_healthy 7-check 각 항목
+- hook_healthy 7-check 각 항목 (fixture: `~/.claude/settings.json` mock)
 - 동시 append (3 process) → 모든 line 보존
 - jq missing 시 metric 미작성, audit log entry
+
+**Smoke fixture for hook_healthy check #6** (settings.json 의존):
+```bash
+# 임시 fixture 디렉토리에 settings.json + 가짜 hook command 작성
+TMP_HOME=$(mktemp -d)
+mkdir -p "$TMP_HOME/.claude/scripts/hooks"
+cat > "$TMP_HOME/.claude/settings.json" <<JSON
+{
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "Write", "hooks": [{"command": "scripts/hooks/test-hook.sh"}]}
+    ]
+  }
+}
+JSON
+echo '#!/usr/bin/env bash' > "$TMP_HOME/.claude/scripts/hooks/test-hook.sh"
+chmod +x "$TMP_HOME/.claude/scripts/hooks/test-hook.sh"
+
+# 환경 격리하여 hook_healthy 호출
+HOME="$TMP_HOME" CLAUDE_CONFIG_DIR="$TMP_HOME/.claude" \
+  bash -c "source ... && hook_healthy"
+
+# Negative case — settings.json command path 비실재
+rm "$TMP_HOME/.claude/scripts/hooks/test-hook.sh"
+HOME="$TMP_HOME" hook_healthy  # → false 기대
+```
 
 **A'**: `task-output-audit.sh`:
 - secret pattern detect → warn entry
@@ -294,13 +372,17 @@ PR #27의 v2 그대로. `mark_approval_complete`는 기존 필드만 사용. `au
 
 ## Acceptance criteria
 
+- [ ] **Stage S0 spike 결과 PASS** (Stop hook payload 필드 CONFIRMED)
 - [ ] `mark_approval_complete` + atomic helper 구현
-- [ ] `slash-commands.sh` is_known_slash + parsing whitespace 안전
-- [ ] `post-stop-determinism-log.sh` + hook_healthy 7-check
+- [ ] `stage_is_passed` approval 분기에 `or .by == "bypass"` 추가 (정확 jq 표시)
+- [ ] `slash-commands.sh` is_known_slash + `trim_leading` (sed 채택)
+- [ ] `post-stop-determinism-log.sh` + hook_healthy 7-check (fixture mock 포함)
 - [ ] `post-task-output-audit.sh` + rules lib (warn-only)
-- [ ] `mark_skip_with_check` wrapper, autonomous skip 차단
-- [ ] Approval bypass env 동작
+- [ ] `mark_skip_with_check` wrapper — `pre-worktree-gate.sh:110` 한 곳 교체 + CI lint 추가
+- [ ] Approval bypass env 동작 (T1-T4 regression)
 - [ ] ADR D2 명시
-- [ ] 5 smoke test 모두 GREEN
-- [ ] 71 baseline + PR #27 verdict tests + 신규 GREEN
+- [ ] 5 smoke test (`approval-immediate`, `slash-detect`, `stop-metrics`, `task-output-audit`, `auto-skip-block`, `approval-bypass`) 모두 GREEN
+- [ ] 71 baseline + PR #27 verdict tests + 신규 모두 GREEN
 - [ ] CLAUDE.md MANAGED BLOCK env 매트릭스 추가
+- [ ] **CI 커맨드 갱신** — root `CLAUDE.md` ai-harness 행에 5개 신규 smoke test 추가
+- [ ] **Stage S0 결과 분기**: spike에서 Stop 미지원 확인 시 Stage A를 minimum subset (session_id 1필드만)으로 축소
