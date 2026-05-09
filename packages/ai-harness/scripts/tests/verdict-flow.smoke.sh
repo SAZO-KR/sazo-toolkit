@@ -117,6 +117,37 @@ assert_eq "1" "$stage_passed" "D.1 Phase 1: no footer → legacy stage_mark"
 missing_count=$(state_jq "$SID" '.verdict_missing_count["code-reviewer"]' "$CWD")
 assert_eq "1" "$missing_count" "D.2 verdict_missing_count incremented"
 
+# Verify stage_is_passed (synthetic APPROVE coexists with cycle gate)
+if stage_is_passed "$SID" "review" "$CWD"; then
+  PASS=$((PASS+1)); echo "  ✓ D.3 stage_is_passed true via synthetic phase1_fallback"
+else
+  FAIL=$((FAIL+1)); echo "  ✗ D.3 stage_is_passed should be true"
+fi
+
+# --- D2: Phase 1 fallback works after verdict_cycle_init ---
+echo "Test D2: Phase 1 fallback after verdict_cycle_init (cycle_at set)"
+SID="flow-D2"
+state_init "$SID" "$CWD" "test"
+verdict_cycle_init "$SID" "$CWD" "review" '["code-reviewer","architect-advisor"]'
+
+# code-reviewer with footer (real APPROVE)
+N1=$(verdict_nonce_issue "$SID" "$CWD" "code-reviewer" "review")
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "code-reviewer" "$(mk_envelope "$N1" "APPROVE")"
+
+# architect-advisor without footer (Phase 1 warn fallback — synthetic APPROVE)
+unset SAZO_VERDICT_FOOTER_ENFORCE
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "architect-advisor" "no footer prose"
+
+# Stage should pass — both expected reviewers responded (1 real + 1 synthetic), all APPROVE
+if stage_is_passed "$SID" "review" "$CWD"; then
+  PASS=$((PASS+1)); echo "  ✓ D2.1 Phase 1 synthetic APPROVE + real APPROVE → stage passed"
+else
+  FAIL=$((FAIL+1)); echo "  ✗ D2.1 Phase 1 fallback broken under cycle_init"
+fi
+
+source_marker=$(state_jq "$SID" '.last_verdicts.review["architect-advisor"].source' "$CWD")
+assert_eq "phase1_fallback" "$source_marker" "D2.2 synthetic verdict marked source=phase1_fallback"
+
 # --- E: missing footer + Phase 2 block → no stage_mark ---
 echo "Test E: missing footer Phase 2 block → no mark"
 SID="flow-5"

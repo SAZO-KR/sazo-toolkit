@@ -335,11 +335,14 @@ stage_is_passed() {
                     (.history | any(.stage == $s and (.status == "completed" or .status == "skipped")))
                     and
                     (
-                        # Phase 1 fallback: legacy mode — no aggregation cycle ever started
-                        # (cycle_at is null) AND last_verdicts empty → trust history.
-                        (($cycle_at == null) and ($last | length == 0))
+                        # Legacy mode: no aggregation cycle ever initialized
+                        # (cycle_at == null). Trust history + any APPROVE
+                        # verdicts present (Phase 1 backward compat — works
+                        # whether last_verdicts is empty or synthetic).
+                        ($cycle_at == null)
                         or
-                        # Aggregation cycle active: every expected reviewer must have responded
+                        # Aggregation mode: cycle_init was called; every
+                        # expected reviewer must have responded.
                         ($expected | length > 0 and ($expected | all(. as $a | $last | has($a))))
                     )
                 )
@@ -478,10 +481,24 @@ process_verdict_tracked_post_task() {
                 simple_audit "verdict_missing_block" "agent=$agent" "stage=$stage"
                 return 0
             fi
-            # Phase 1 warn: legacy fallback stage_mark
+            # Phase 1 warn: legacy fallback. Record a synthetic APPROVE in
+            # last_verdicts so aggregation gating works alongside cycle_init.
+            # Without this synthetic entry, last_cycle_at != null forces
+            # stage_is_passed into expected_set completeness mode and a legacy
+            # reviewer without a footer leaves the stage blocked despite the
+            # warn-mode design promise.
             simple_audit "verdict_missing_warn" "agent=$agent" "stage=$stage"
-            stage_is_passed "$sid" "$stage" \
-                || stage_mark "$sid" "$stage" "completed" "auto" "subagent=$agent (Phase 1: footer missing)" "$cwd"
+            local synthetic
+            synthetic=$(jq -nc --arg ts "$(date +%Y-%m-%dT%H:%M:%S%z)" \
+                '{verdict: "APPROVE", issues: 0, ts: $ts, source: "phase1_fallback"}')
+            state_set_json "$sid" ".last_verdicts[\"$stage\"][\"$agent\"]" "$synthetic" "$cwd"
+
+            # Mark stage if aggregation now satisfied (with synthetic + any
+            # real verdicts already recorded).
+            if _evaluate_stage_completion "$sid" "$cwd" "$stage"; then
+                stage_is_passed "$sid" "$stage" \
+                    || stage_mark "$sid" "$stage" "completed" "auto" "subagent=$agent (Phase 1: footer missing)" "$cwd"
+            fi
             return 0
             ;;
         ok)
