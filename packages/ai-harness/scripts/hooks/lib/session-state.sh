@@ -138,7 +138,8 @@ _state_init_inner() {
             verdict_errors: {},
             verdict_unset_expected_set_count: 0,
             review_expected_set: [],
-            last_cycle_at: {}
+            last_cycle_at: {},
+            last_cycle_id: {}
         }' > "$f"
 }
 
@@ -693,14 +694,20 @@ _verdict_cycle_init_inner() {
     local f="$1" stage="$2" expected_json="$3"
     local tmp="$f.cycle.tmp"
     local ts; ts=$(date +%Y-%m-%dT%H:%M:%S%z)
-    # Records last_cycle_at[stage] timestamp so stage_is_passed can
-    # distinguish "fresh cycle pending" from "no aggregation cycle"
-    # (Phase 1 footer-missing fallback). Without this marker, a stale
-    # history "completed" entry from a previous cycle could pass the
-    # gate immediately after cycle_init clears last_verdicts.
-    if jq --arg s "$stage" --argjson exp "$expected_json" --arg ts "$ts" '
+    # cycle_id is a random hex per cycle — independent of timestamp
+    # precision. nonces are tagged with the issuing cycle's id so
+    # consume can reject same-second restarts that timestamp comparison
+    # alone would miss.
+    local cycle_id
+    if command -v openssl >/dev/null 2>&1; then
+        cycle_id=$(openssl rand -hex 8)
+    else
+        cycle_id=$(LC_ALL=C tr -dc 'a-f0-9' < /dev/urandom | head -c 16)
+    fi
+    if jq --arg s "$stage" --argjson exp "$expected_json" --arg ts "$ts" --arg cid "$cycle_id" '
         .last_verdicts[$s] = {} |
         .last_cycle_at[$s] = $ts |
+        .last_cycle_id[$s] = $cid |
         (if $s == "review" then .review_expected_set = $exp else . end)
     ' "$f" > "$tmp" 2>/dev/null; then
         mv "$tmp" "$f"
@@ -722,12 +729,17 @@ verdict_nonce_issue() {
     else
         nonce=$(LC_ALL=C tr -dc 'a-f0-9' < /dev/urandom | head -c 32)
     fi
+    # Tag nonce with the current cycle_id (if any) so consume can reject
+    # same-second stale-cycle restarts that timestamp comparison would miss.
+    local cycle_id
+    cycle_id=$(state_get "$sid" ".last_cycle_id[\"$stage\"] // \"\"" "$cwd")
     local entry
     entry=$(jq -nc \
         --arg agent "$agent" \
         --arg stage "$stage" \
         --arg ts "$(date +%Y-%m-%dT%H:%M:%S%z)" \
-        '{agent: $agent, stage: $stage, issued_at: $ts, consumed: false}')
+        --arg cid "$cycle_id" \
+        '{agent: $agent, stage: $stage, issued_at: $ts, cycle_id: $cid, consumed: false}')
     state_set_json "$sid" ".verdict_nonces[\"$nonce\"]" "$entry" "$cwd" || return 1
     printf '%s' "$nonce"
 }
@@ -757,10 +769,11 @@ _verdict_nonce_consume_inner() {
     local f="$1" nonce="$2" agent="$3"
 
     # Read + validate + flip within a single jq invocation against the locked file.
-    # Stale-cycle defense: reject nonces issued before the current
-    # last_cycle_at[stage]. Without this check, a late response from a
-    # previous cycle could populate last_verdicts after verdict_cycle_init
-    # cleared it, mixing stale verdicts into a fresh cycle.
+    # Stale-cycle defense: reject nonces whose cycle_id no longer matches
+    # the current last_cycle_id[stage]. cycle_id is independent of timestamp
+    # precision so same-second cycle restarts are correctly rejected.
+    # Timestamp comparison is kept as a backstop for nonces issued before
+    # cycle_id existed (legacy state files / no cycle_init ever called).
     local before
     before=$(jq -r --arg n "$nonce" --arg a "$agent" '
         (.verdict_nonces[$n] // null) as $entry |
@@ -769,8 +782,13 @@ _verdict_nonce_consume_inner() {
         elif $entry.consumed != false then "already_consumed"
         else
           ($entry.stage // null) as $st |
+          ((.last_cycle_id // {})[$st] // null) as $current_cid |
+          ($entry.cycle_id // null) as $entry_cid |
           ((.last_cycle_at // {})[$st] // null) as $cycle_at |
-          if ($cycle_at != null and $entry.issued_at < $cycle_at) then "stale_cycle"
+          if ($current_cid != null and $entry_cid != null and $current_cid != $entry_cid) then
+            "stale_cycle"
+          elif ($cycle_at != null and $entry.issued_at < $cycle_at) then
+            "stale_cycle"
           else "ok"
           end
         end

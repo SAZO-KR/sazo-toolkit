@@ -310,6 +310,23 @@ else
   FAIL=$((FAIL+1)); echo "  ✗ L.1 legacy fallback should pass"
 fi
 
+# --- Q: same-second cycle restart rejects via cycle_id ---
+echo "Test Q: cycle_id rejects same-second stale nonce (timestamp precision bypass)"
+SID="flow-Q"
+state_init "$SID" "$CWD" "test"
+
+# Cycle 1: issue + cycle 2 init within same second (no sleep)
+verdict_cycle_init "$SID" "$CWD" "review" '["code-reviewer"]'
+N_OLD=$(verdict_nonce_issue "$SID" "$CWD" "code-reviewer" "review")
+
+verdict_cycle_init "$SID" "$CWD" "review" '["code-reviewer"]'
+
+# Late nonce arrival from cycle 1 — must be rejected via cycle_id mismatch
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "code-reviewer" "$(mk_envelope "$N_OLD" "APPROVE")"
+
+verdict_recorded=$(state_jq "$SID" '.last_verdicts.review["code-reviewer"] // null' "$CWD")
+assert_eq "null" "$verdict_recorded" "Q.1 same-second stale-cycle nonce rejected via cycle_id"
+
 # --- P: stale-cycle nonce rejected after cycle_init ---
 echo "Test P: nonce issued in prior cycle rejected after cycle_init"
 SID="flow-P"
