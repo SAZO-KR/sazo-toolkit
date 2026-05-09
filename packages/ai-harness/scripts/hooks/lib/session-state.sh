@@ -359,6 +359,81 @@ read_hook_payload() {
     SAZO_USER_PROMPT=$(echo "$payload" | jq -r '.prompt // ""')
 }
 
+# _record_reviewer_error: increment per-agent error counter; emit user escalation
+# at threshold 3. Stage gate stays incomplete (no stage_mark). Called by hook when
+# subagent Task returned is_error/interrupted.
+_record_reviewer_error() {
+    local sid="$1" cwd="$2" agent="$3"
+    state_increment "$sid" ".verdict_errors[\"$agent\"]" "$cwd"
+    local count
+    count=$(state_get "$sid" ".verdict_errors[\"$agent\"]" "$cwd")
+    if [ -n "$count" ] && [ "$count" -ge 3 ] 2>/dev/null; then
+        cat >&2 <<EOF
+[workflow-block] reviewer $agent stuck ($count consecutive errors).
+Action required:
+  - Inspect last reviewer Task output
+  - Rerun reviewer Task with same expected output, OR
+  - User: /skip review <reason>
+EOF
+    fi
+}
+
+# _evaluate_stage_completion: returns 0 if stage can be marked completed based on
+# verdict aggregation, 1 otherwise. Reads review_expected_set (or fixed plan set),
+# checks all expected reviewers responded with APPROVE.
+# Honors SAZO_VERDICT_EMPTY_EXPECTED (fail_open|fail_closed, default fail_open)
+# when expected_set is empty.
+_evaluate_stage_completion() {
+    local sid="$1" cwd="$2" stage="$3"
+
+    local expected_json
+    case "$stage" in
+        review)
+            expected_json=$(state_get "$sid" '.review_expected_set // []' "$cwd")
+            [ -z "$expected_json" ] && expected_json='[]'
+            ;;
+        plan)
+            expected_json='["plan-critic","plan-auditor"]'
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    local expected_count
+    expected_count=$(printf '%s' "$expected_json" | jq 'length')
+
+    if [ "$expected_count" -eq 0 ]; then
+        # Empty expected_set — caller (skill/command) didn't declare reviewer set.
+        state_increment "$sid" ".verdict_unset_expected_set_count" "$cwd"
+
+        local mode="${SAZO_VERDICT_EMPTY_EXPECTED:-fail_open}"
+        if [ "$mode" = "fail_closed" ]; then
+            return 1
+        fi
+        # fail_open: pass if any received verdict is APPROVE
+        local any_approve
+        any_approve=$(state_get "$sid" ".last_verdicts[\"$stage\"] // {} | to_entries | map(.value.verdict) | any(. == \"APPROVE\")" "$cwd")
+        # state_get strips false→empty; treat "true" string as success
+        [ "$any_approve" = "true" ]
+        return $?
+    fi
+
+    # Normal path: every expected agent must have APPROVE in last_verdicts.<stage>
+    local sf
+    sf=$(state_file "$sid" "$cwd")
+    local result
+    result=$(jq -r --argjson exp "$expected_json" --arg stage "$stage" '
+        (.last_verdicts[$stage] // {}) as $last |
+        ($exp | map($last[.]?.verdict)) as $vs |
+        if ($vs | any(. == null)) then "false"
+        elif ($vs | all(. == "APPROVE")) then "true"
+        else "false"
+        end
+    ' "$sf")
+    [ "$result" = "true" ]
+}
+
 # verdict_nonce_issue: mint a random nonce bound to (agent, stage). Caller embeds
 # the nonce into the Task prompt so subagent must echo it in its footer.
 # Returns the nonce on stdout (32-hex chars).
