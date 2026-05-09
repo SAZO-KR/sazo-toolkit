@@ -297,6 +297,19 @@ stage_is_passed() {
                 )
             ' "$f" >/dev/null 2>&1
             ;;
+        review|plan)
+            # Verdict-tracked stages: history entry alone is insufficient.
+            # If last_verdicts exists for this stage AND any current verdict is
+            # not APPROVE (e.g., a later reviewer downgraded APPROVE → BLOCK),
+            # the stage is no longer passed even if history has a completed entry.
+            # Vacuous truth: empty last_verdicts → fall back to history-only
+            # logic (Phase 1 fallback when footer is absent).
+            jq -e --arg s "$stage" '
+                (((.last_verdicts // {})[$s] // {}) | to_entries | all(.value.verdict == "APPROVE"))
+                and
+                (.history | any(.stage == $s and (.status == "completed" or .status == "skipped")))
+            ' "$f" >/dev/null 2>&1
+            ;;
         *)
             jq -e --arg s "$stage" '
                 .history | any(.stage == $s and (.status == "completed" or .status == "skipped"))

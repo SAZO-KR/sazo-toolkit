@@ -180,6 +180,57 @@ process_verdict_tracked_post_task "$SID" "$CWD" "plan" "plan-auditor" "$(mk_enve
 plan_passed=$(state_jq "$SID" '[.history[] | select(.stage=="plan" and .status=="completed")] | length' "$CWD")
 assert_eq "1" "$plan_passed" "I.1 plan completed when critic + auditor both APPROVE"
 
+# --- K: stage_is_passed invalidation — APPROVE → BLOCK downgrade ---
+echo "Test K: verdict downgrade invalidates passed stage"
+SID="flow-K"
+state_init "$SID" "$CWD" "test"
+state_set_json "$SID" ".review_expected_set" '["code-reviewer","architect-advisor"]' "$CWD"
+N1=$(verdict_nonce_issue "$SID" "$CWD" "code-reviewer" "review")
+N2=$(verdict_nonce_issue "$SID" "$CWD" "architect-advisor" "review")
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "code-reviewer" "$(mk_envelope "$N1" "APPROVE")"
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "architect-advisor" "$(mk_envelope "$N2" "APPROVE")"
+
+# Stage should be passed
+if stage_is_passed "$SID" "review" "$CWD"; then
+  PASS=$((PASS+1)); echo "  ✓ K.1 stage passed after both APPROVE"
+else
+  FAIL=$((FAIL+1)); echo "  ✗ K.1 stage should be passed"
+fi
+
+# Re-issue + downgrade code-reviewer to BLOCK
+N3=$(verdict_nonce_issue "$SID" "$CWD" "code-reviewer" "review")
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "code-reviewer" "$(mk_envelope "$N3" "BLOCK" 5)"
+
+# Stage should now be NOT passed (despite history "completed")
+if stage_is_passed "$SID" "review" "$CWD"; then
+  FAIL=$((FAIL+1)); echo "  ✗ K.2 stage should be invalidated after BLOCK downgrade"
+else
+  PASS=$((PASS+1)); echo "  ✓ K.2 stage invalidated by BLOCK downgrade"
+fi
+
+# Re-approve and verify stage passes again
+N4=$(verdict_nonce_issue "$SID" "$CWD" "code-reviewer" "review")
+process_verdict_tracked_post_task "$SID" "$CWD" "review" "code-reviewer" "$(mk_envelope "$N4" "APPROVE")"
+if stage_is_passed "$SID" "review" "$CWD"; then
+  PASS=$((PASS+1)); echo "  ✓ K.3 stage re-passed after BLOCK → APPROVE"
+else
+  FAIL=$((FAIL+1)); echo "  ✗ K.3 stage should pass again"
+fi
+
+# --- L: legacy fallback — history-only when last_verdicts empty ---
+echo "Test L: legacy phase 1 fallback (no last_verdicts entries)"
+SID="flow-L"
+state_init "$SID" "$CWD" "test"
+# Manually mark stage completed (simulating Phase 1 missing footer fallback)
+stage_mark "$SID" "review" "completed" "auto" "Phase 1 fallback" "$CWD"
+
+# No last_verdicts yet — stage_is_passed should return true (vacuous truth)
+if stage_is_passed "$SID" "review" "$CWD"; then
+  PASS=$((PASS+1)); echo "  ✓ L.1 legacy fallback: history entry alone passes"
+else
+  FAIL=$((FAIL+1)); echo "  ✗ L.1 legacy fallback should pass"
+fi
+
 # --- J: unknown agent rejected by allowlist (defense-in-depth) ---
 echo "Test J: unknown agent name → allowlist reject"
 SID="flow-10"
