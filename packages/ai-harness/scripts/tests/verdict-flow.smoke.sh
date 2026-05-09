@@ -438,6 +438,71 @@ else
   PASS=$((PASS+1)); echo "  ✓ N.3 auto skip does NOT override BLOCK"
 fi
 
+# --- R: same-second cycle_init + /skip race (Codex Round 14 P2) ---
+# When verdict_cycle_init and a user /skip happen in the same wall-clock
+# second, second-precision timestamp comparison .ts > $cycle_at would
+# silently drop the skip. The fix is cycle_id-based identity: stage_mark
+# captures the active cycle_id, and stage_is_passed accepts a /skip whose
+# cycle_id matches the current one regardless of timestamp precision.
+echo "Test R: same-second cycle_init + /skip race accepted"
+SID="flow-R"
+state_init "$SID" "$CWD" "test"
+verdict_cycle_init "$SID" "$CWD" "review" '["code-reviewer","architect-advisor"]'
+
+# Force a same-second condition: take the cycle_at timestamp from state and
+# inject a user /skip history entry with an identical .ts. This simulates
+# stage_mark and verdict_cycle_init firing within one second.
+SF=$(state_file "$SID" "$CWD")
+CYCLE_AT=$(jq -r '.last_cycle_at.review' "$SF")
+CYCLE_ID=$(jq -r '.last_cycle_id.review' "$SF")
+TMP_R=$(mktemp)
+jq --arg ts "$CYCLE_AT" --arg cid "$CYCLE_ID" '
+  .history += [{stage:"review",status:"skipped",by:"user",reason:"same-second skip",ts:$ts,cycle_id:$cid}]
+' "$SF" > "$TMP_R" && mv "$TMP_R" "$SF"
+
+if stage_is_passed "$SID" "review" "$CWD"; then
+  PASS=$((PASS+1)); echo "  ✓ R.1 same-second user skip accepted via cycle_id match"
+else
+  FAIL=$((FAIL+1)); echo "  ✗ R.1 same-second user skip dropped — cycle_id matching broken"
+fi
+
+# Negative: a /skip carrying a different cycle_id (prior cycle leftover)
+# must NOT be honored even if its timestamp equals the current cycle_at.
+SID="flow-R2"
+state_init "$SID" "$CWD" "test"
+verdict_cycle_init "$SID" "$CWD" "review" '["code-reviewer","architect-advisor"]'
+SF2=$(state_file "$SID" "$CWD")
+CYCLE_AT2=$(jq -r '.last_cycle_at.review' "$SF2")
+TMP_R2=$(mktemp)
+jq --arg ts "$CYCLE_AT2" '
+  .history += [{stage:"review",status:"skipped",by:"user",reason:"prior cycle skip",ts:$ts,cycle_id:"deadbeefdeadbeef"}]
+' "$SF2" > "$TMP_R2" && mv "$TMP_R2" "$SF2"
+
+if stage_is_passed "$SID" "review" "$CWD"; then
+  FAIL=$((FAIL+1)); echo "  ✗ R.2 prior-cycle /skip with mismatched cycle_id should be rejected"
+else
+  PASS=$((PASS+1)); echo "  ✓ R.2 prior-cycle /skip rejected via cycle_id mismatch"
+fi
+
+# Backward-compat: legacy history entry (no cycle_id field) under modern
+# state must still pass when its .ts >= cycle_at — second-level tolerance
+# preserved for entries written before this fix.
+SID="flow-R3"
+state_init "$SID" "$CWD" "test"
+verdict_cycle_init "$SID" "$CWD" "review" '["code-reviewer","architect-advisor"]'
+SF3=$(state_file "$SID" "$CWD")
+CYCLE_AT3=$(jq -r '.last_cycle_at.review' "$SF3")
+TMP_R3=$(mktemp)
+jq --arg ts "$CYCLE_AT3" '
+  .history += [{stage:"review",status:"skipped",by:"user",reason:"legacy no cycle_id",ts:$ts}]
+' "$SF3" > "$TMP_R3" && mv "$TMP_R3" "$SF3"
+
+if stage_is_passed "$SID" "review" "$CWD"; then
+  PASS=$((PASS+1)); echo "  ✓ R.3 legacy history entry accepted via .ts >= cycle_at fallback"
+else
+  FAIL=$((FAIL+1)); echo "  ✗ R.3 legacy history entry incorrectly rejected"
+fi
+
 # --- J: unknown agent rejected by allowlist (defense-in-depth) ---
 echo "Test J: unknown agent name → allowlist reject"
 SID="flow-10"

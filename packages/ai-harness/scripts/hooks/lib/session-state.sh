@@ -255,9 +255,15 @@ _stage_mark_inner() {
     local tmp ts
     tmp=$(mktemp)
     ts=$(date +%Y-%m-%dT%H:%M:%S%z)
+    # Capture the current cycle_id for review/plan stages so a same-second
+    # /skip+cycle_init race (Codex Round 14 P2) cannot let a stale skip
+    # bypass the new cycle. cycle_id is read from the locked state; if no
+    # cycle was ever initialized for this stage the value is "" — which
+    # stage_is_passed treats as legacy mode.
     if jq --arg stage "$stage" --arg status "$status" --arg by "$by" \
         --arg reason "$reason" --arg ts "$ts" '
-        .history += [{stage: $stage, status: $status, by: $by, reason: $reason, ts: $ts}]
+        ((.last_cycle_id // {})[$stage] // "") as $cid |
+        .history += [{stage: $stage, status: $status, by: $by, reason: $reason, ts: $ts, cycle_id: $cid}]
         | .stage = $stage
     ' "$f" > "$tmp"; then
         mv "$tmp" "$f"
@@ -320,14 +326,41 @@ stage_is_passed() {
                 ((.last_verdicts // {})[$s] // {}) as $last |
                 (if $s == "review" then (.review_expected_set // []) else $defaultPlan end) as $expected |
                 ((.last_cycle_at // {})[$s] // null) as $cycle_at |
-                # User /skip is an authoritative override (only entries newer
-                # than the most recent cycle_init count — a stale prior-cycle
-                # skip cannot bypass a fresh aggregation cycle).
+                ((.last_cycle_id // {})[$s] // "") as $cycle_id |
+                # User /skip is an authoritative override. Same-second
+                # cycle_init + user /skip races (Codex Round 14 P2):
+                # second-precision .ts > $cycle_at fails when both timestamps
+                # land on the same wall-clock second. cycle_id (random hex,
+                # rotated every verdict_cycle_init) is the precision-independent
+                # identity. stage_mark captures the current cycle_id into each
+                # history entry, so we can match a /skip to its cycle directly.
+                #
+                # Acceptance rules (any one matches → skip is authoritative):
+                #   a. legacy state with no cycle_id ever set ($cycle_id == ""):
+                #      fall back to timestamp comparison (cycle_at can be null
+                #      pre-cycle_init too — old state files).
+                #   b. modern state with cycle_id: skip entry must carry the
+                #      same cycle_id, which proves it was recorded under the
+                #      currently-active cycle (or a later one). A skip from a
+                #      prior cycle has a different cycle_id and is rejected.
+                #      Skips lacking cycle_id (older entries before this fix)
+                #      fall back to .ts >= $cycle_at — same-second tolerant.
                 (.history | any(
                     .stage == $s
                     and .status == "skipped"
                     and .by == "user"
-                    and ($cycle_at == null or .ts > $cycle_at)
+                    and (
+                        ($cycle_id == "" and ($cycle_at == null or .ts > $cycle_at))
+                        or
+                        (
+                            $cycle_id != ""
+                            and (
+                                ((.cycle_id // "") == $cycle_id)
+                                or
+                                ((.cycle_id // "") == "" and ($cycle_at == null or .ts >= $cycle_at))
+                            )
+                        )
+                    )
                 ))
                 or
                 (
