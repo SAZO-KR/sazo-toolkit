@@ -185,7 +185,7 @@ key — it does NOT enforce N invocations. Use unique entries.
 # unique agent names below.
 SESSION_ID="${CLAUDE_SESSION_ID:-${SAZO_SESSION_ID:-}}"
 CWD="$(pwd)"
-bash -c "source $HOME/.claude/scripts/hooks/lib/session-state.sh && \
+bash -c "source ${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}/scripts/hooks/lib/session-state.sh && \
          state_set_json '$SESSION_ID' '.review_expected_set' \
          '[\"code-reviewer\",\"architect-advisor\"]' '$CWD'"
 ```
@@ -205,9 +205,9 @@ reject one of the verdicts and the gate will never complete.
 Mode A — mint TWO nonces, one per agent:
 
 ```bash
-NONCE_CR=$(bash -c "source $HOME/.claude/scripts/hooks/lib/session-state.sh && \
+NONCE_CR=$(bash -c "source ${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}/scripts/hooks/lib/session-state.sh && \
                     verdict_nonce_issue '$SESSION_ID' '$CWD' 'code-reviewer' 'review'")
-NONCE_AA=$(bash -c "source $HOME/.claude/scripts/hooks/lib/session-state.sh && \
+NONCE_AA=$(bash -c "source ${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}/scripts/hooks/lib/session-state.sh && \
                     verdict_nonce_issue '$SESSION_ID' '$CWD' 'architect-advisor' 'review'")
 
 # Build per-agent footer instruction

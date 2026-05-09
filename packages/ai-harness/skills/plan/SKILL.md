@@ -101,9 +101,9 @@ into each Task prompt:
 ```bash
 SESSION_ID="${CLAUDE_SESSION_ID:-${SAZO_SESSION_ID:-}}"
 CWD="$(pwd)"
-NONCE_CRITIC=$(bash -c "source $HOME/.claude/scripts/hooks/lib/session-state.sh && \
+NONCE_CRITIC=$(bash -c "source ${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}/scripts/hooks/lib/session-state.sh && \
                         verdict_nonce_issue '$SESSION_ID' '$CWD' 'plan-critic' 'plan'")
-NONCE_AUDITOR=$(bash -c "source $HOME/.claude/scripts/hooks/lib/session-state.sh && \
+NONCE_AUDITOR=$(bash -c "source ${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}/scripts/hooks/lib/session-state.sh && \
                          verdict_nonce_issue '$SESSION_ID' '$CWD' 'plan-auditor' 'plan'")
 ```
 
