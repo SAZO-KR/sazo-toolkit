@@ -211,8 +211,11 @@ for i in $(seq 1 20); do
   # `gh api --jq`는 단일 문자열만 받고 `--arg` 지원 안 함 → bash 변수 expansion으로
   # 봇 로그인을 jq 문자열 리터럴에 직접 삽입. bot login에 `[bot]` 브래킷이 있어도
   # jq 문자열 == 비교이므로 정규식 특수문자 이슈 없음.
+  # --paginate에서 array/count 연산을 --jq 안에 넣으면 페이지별 count가 여러 줄로
+  # 출력되어 `[ "$NEW_REVIEWS" -gt 0 ]` 정수 비교가 깨진다. raw emit → jq -s length.
   NEW_REVIEWS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews --paginate \
-    --jq "[.[] | select(.submitted_at > \"$PUSH_TIME\" and (.user.login == \"$CODEX_BOT_LOGIN\" or .user.login == \"$GEMINI_BOT_LOGIN\"))] | length")
+    --jq ".[] | select(.submitted_at > \"$PUSH_TIME\" and (.user.login == \"$CODEX_BOT_LOGIN\" or .user.login == \"$GEMINI_BOT_LOGIN\")) | .id" \
+    | jq -s 'length')
 
   # Codex는 리뷰를 submit하지 않고 reaction만 업데이트할 때가 많다. eyes(리뷰 중)
   # 또는 +1(승인) 변화도 "진전 있음"으로 감지해 polling을 조기 종료.
@@ -313,7 +316,8 @@ fi
 ```bash
 # CRITICAL: --paginate 필수! 기본 30건만 반환 → 코멘트 많은 PR에서 최신 답변 누락
 REPLIED_IDS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/comments --paginate \
-  --jq '[.[] | select(.in_reply_to_id != null) | .in_reply_to_id]')
+  --jq '.[] | select(.in_reply_to_id != null) | .in_reply_to_id' \
+  | jq -s '.')
 
 # 모든 리뷰의 코멘트에서 미답변만 필터
 UNANSWERED_CODEX=$(echo "$CODEX_ALL_COMMENTS" \
@@ -366,7 +370,7 @@ fi
 #    "pending(무반응)"과 "reviewing(활발히 검토)"을 합쳐 stale로 처리해
 #    불필요한 Gemini fallback 또는 user escalation이 발생.
 #    → 최신 reaction의 content를 읽어 approved/reviewing/pending 3-state 분기.
-# CODEX_BOT_LOGIN / GEMINI_BOT_LOGIN은 Step 2에서 이미 정의됨. 여기서 재사용.
+# CODEX_BOT_LOGIN / GEMINI_BOT_LOGIN은 Step 1에서 이미 정의됨. 여기서 재사용.
 # PUSH_TIME은 Step 2에서 `gh api repos/$OWNER/$REPO --jq .pushed_at`으로
 # 캡쳐한 서버 권위 시각 (reaction.created_at과 동일한 서버 클록).
 CODEX_LATEST=$(gh api "repos/$OWNER/$REPO/issues/$PR_NUM/reactions" --paginate \
@@ -752,6 +756,7 @@ PR이 머지 가능한 상태입니다. / 사용자 확인이 필요합니다.
 | 테스트 없이 push                                             | 반드시 test/lint/build 통과 후 push                                         |
 | 사이클 중간 진입 시 처음부터 다시 시작                       | 현재 상태를 파악하고 적절한 Step부터 진입                                   |
 | `gh api` 조회 시 `--paginate` 누락 (reviews, comments 모두!) | 기본 30건 → 최신 리뷰/답변 누락. **모든 `gh api` 호출에** `--paginate` 사용 |
+| `--paginate`와 array/count `--jq`를 한 번에 사용             | 페이지별 배열/카운트가 여러 줄로 출력되어 JSON/정수 비교가 깨짐. raw emit 후 `jq -s`로 전 페이지를 합산 |
 | Bot login substring 매칭 (`test("codex")` / `test("gemini")`)         | 정확 매칭 상수 사용 — `CODEX_BOT_LOGIN="chatgpt-codex-connector[bot]"`, `GEMINI_BOT_LOGIN="gemini-code-assist[bot]"`를 Step 1에서 정의 후 모든 step에서 재사용. substring 매칭은 `fake-codex` 같은 이름의 사용자가 봇으로 위장 가능 (identity spoofing) |
 | Gemini 미설정 repo에서 Gemini 대기                           | `GEMINI_ENABLED` 플래그로 Gemini 관련 로직 분기                             |
 | polling 타임아웃 후 같은 리뷰 무한 재평가                    | 봇별 stale 카운터(`CODEX_STALE_COUNT`, `GEMINI_STALE_COUNT`)로 독립 감지, `>= MAX_STALE`(=2) 도달 시 fallback/알림 (stale=1 트리거 → stale=2 fallback). 단일 카운터는 cross-bot 누적으로 한 봇이 1라운드만 무반응이어도 MAX_STALE 도달로 오판되는 오염 발생 |

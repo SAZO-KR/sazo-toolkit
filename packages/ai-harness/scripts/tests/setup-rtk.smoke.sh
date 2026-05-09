@@ -71,6 +71,13 @@ assert_file_present() {
     fi
 }
 
+stat_mtime() {
+    local path="$1"
+    # GNU stat also accepts -f, but that reports filesystem metadata instead of file
+    # mtime. Try GNU's -c first, then fall back to BSD/macOS -f.
+    stat -c %Y "$path" 2>/dev/null || stat -f %m "$path"
+}
+
 assert_file_content() {
     local label="$1" path="$2" expected="$3"
     local actual
@@ -414,10 +421,10 @@ aws_kept=$("$JQ_BIN" -r '.permissions.allow | contains(["Bash(rtk aws * describe
 assert_equal "pre-existing canonical entry retained" "true" "$aws_kept"
 
 # 이번 실행 직후 재호출 시 이미 complete한 상태이므로 settings.json mtime이 바뀌면 안 됨 (no-op mv)
-mtime1=$(stat -f %m "$H/.claude/settings.json" 2>/dev/null || stat -c %Y "$H/.claude/settings.json")
+mtime1=$(stat_mtime "$H/.claude/settings.json")
 sleep 1
 run_setup_quiet "$H" "$STUB_PATH" >/dev/null 2>&1
-mtime2=$(stat -f %m "$H/.claude/settings.json" 2>/dev/null || stat -c %Y "$H/.claude/settings.json")
+mtime2=$(stat_mtime "$H/.claude/settings.json")
 assert_equal "settings.json mtime unchanged on 2nd run (no-op mv)" "$mtime1" "$mtime2"
 
 # ─── Case 12: BG upgrade — rtk+brew 있음 + quiet + 마커 없음 → 마커 생성 ───
