@@ -109,6 +109,21 @@ sync_precommit_lint_hook() {
     fi
 }
 
+sync_workflow_cli() {
+    local target="$HOME/.local/bin/sazo-workflow"
+    local source="$HARNESS_DIR/scripts/sazo-workflow.sh"
+    [ -f "$source" ] || return 0
+    mkdir -p "$HOME/.local/bin" 2>/dev/null || return 0
+    if [ -L "$target" ] && [ "$(readlink "$target")" = "$source" ]; then
+        return 0
+    fi
+    if [ -e "$target" ] && [ ! -L "$target" ]; then
+        # User-owned non-symlink — never overwrite. install.sh warns; auto-update is silent.
+        return 0
+    fi
+    ln -sfn "$source" "$target" 2>/dev/null || true
+}
+
 sync_workflow_hooks() {
     local register_script="$HARNESS_DIR/scripts/register-workflow-hooks.sh"
     local settings="$HOME/.claude/settings.json"
@@ -272,10 +287,11 @@ if [ ! -d "$INSTALL_DIR/.git" ]; then
     sync_precommit_lint_hook
     sync_workflow_hooks
     sync_awake
+    sync_workflow_cli
     exit 0
 fi
 
-cd "$INSTALL_DIR" || { log "ERROR: Cannot cd to $INSTALL_DIR"; sync_skill_permissions; sync_rtk_setup; sync_precommit_lint_hook; sync_workflow_hooks; sync_awake; exit 0; }
+cd "$INSTALL_DIR" || { log "ERROR: Cannot cd to $INSTALL_DIR"; sync_skill_permissions; sync_rtk_setup; sync_precommit_lint_hook; sync_workflow_hooks; sync_awake; sync_workflow_cli; exit 0; }
 
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 if [ "$CURRENT_BRANCH" != "main" ]; then
@@ -285,6 +301,7 @@ if [ "$CURRENT_BRANCH" != "main" ]; then
     sync_precommit_lint_hook
     sync_workflow_hooks
     sync_awake
+    sync_workflow_cli
     exit 0
 fi
 
@@ -295,6 +312,7 @@ if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; th
     sync_precommit_lint_hook
     sync_workflow_hooks
     sync_awake
+    sync_workflow_cli
     exit 0
 fi
 
@@ -310,6 +328,7 @@ if [ -f "$LAST_FETCH_FILE" ]; then
         sync_precommit_lint_hook
         sync_workflow_hooks
         sync_awake
+        sync_workflow_cli
         exit 0
     fi
 fi
@@ -386,5 +405,6 @@ sync_rtk_setup
 sync_precommit_lint_hook
 sync_workflow_hooks
 sync_awake
+sync_workflow_cli
 
 exit 0

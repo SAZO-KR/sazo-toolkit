@@ -591,6 +591,42 @@ else
 fi
 
 # ===================================
+# sazo-workflow CLI
+# ===================================
+
+# sync_workflow_cli: idempotent symlink to ~/.local/bin/sazo-workflow.
+# Warns (does not auto-modify) when ~/.local/bin is not on PATH —
+# user can opt to add to ~/.zshrc themselves.
+sync_workflow_cli() {
+    local target="$HOME/.local/bin/sazo-workflow"
+    local source="$HARNESS_DIR/scripts/sazo-workflow.sh"
+    [ -f "$source" ] || return 0
+    mkdir -p "$HOME/.local/bin"
+    if [ -L "$target" ] && [ "$(readlink "$target")" = "$source" ]; then
+        :  # already correct
+    elif [ -e "$target" ] && [ ! -L "$target" ]; then
+        echo "  WARN: $target exists and is not a symlink — skipping CLI install." >&2
+        return 1
+    else
+        ln -sfn "$source" "$target"
+        echo "  Linked: $target -> $source"
+    fi
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*) ;;
+        *)
+            cat >&2 <<EOF2
+  NOTE: ~/.local/bin is not on your PATH. To use 'sazo-workflow' from anywhere:
+    echo 'export PATH="\$HOME/.local/bin:\$PATH"' >> ~/.zshrc
+EOF2
+            ;;
+    esac
+}
+
+echo ""
+echo "Setting up sazo-workflow CLI..."
+sync_workflow_cli
+
+# ===================================
 # Done
 # ===================================
 
