@@ -352,3 +352,50 @@ read_hook_payload() {
     export SAZO_USER_PROMPT
     SAZO_USER_PROMPT=$(echo "$payload" | jq -r '.prompt // ""')
 }
+
+# parse_verdict_footer: extract last SAZO verdict envelope from subagent output text.
+# Robust against JSONL leak (GH #20531): only the LAST complete envelope is parsed.
+# Outputs key=value lines on stdout. Fields: STATUS, NONCE, VERDICT, ISSUES.
+# STATUS values:
+#   ok        - envelope complete and well-formed
+#   truncated - BEGIN marker found but END missing, or envelope present but missing required fields
+#   missing   - no BEGIN marker found
+parse_verdict_footer() {
+    local text="$1"
+
+    # Extract last complete BEGIN..END block via awk sentinel pattern.
+    local envelope
+    envelope=$(printf '%s\n' "$text" | awk '
+        /^---SAZO_FOOTER_BEGIN---$/{ buf=""; flag=1; next }
+        /^---SAZO_FOOTER_END---$/{
+            if (flag) { last=buf; have=1 }
+            flag=0; next
+        }
+        flag{ buf = buf $0 "\n" }
+        END{ if (have) printf "%s", last }
+    ')
+
+    if [ -z "$envelope" ]; then
+        # Distinguish truncated (BEGIN seen, no END) vs fully missing.
+        if printf '%s\n' "$text" | grep -q '^---SAZO_FOOTER_BEGIN---$'; then
+            printf 'STATUS=truncated\n'
+            return 0
+        fi
+        printf 'STATUS=missing\n'
+        return 0
+    fi
+
+    # Parse fields from envelope. Strict regex — anything else = malformed.
+    local nonce verdict issues
+    nonce=$(printf '%s\n' "$envelope" | grep -oE '^SAZO_VERDICT_NONCE: [0-9a-f]{32}$' | awk '{print $2}')
+    verdict=$(printf '%s\n' "$envelope" | grep -oE '^SAZO_VERDICT: (APPROVE|BLOCK|NEEDS_REVISION)$' | awk '{print $2}')
+    issues=$(printf '%s\n' "$envelope" | grep -oE '^SAZO_BLOCKING_ISSUES: [0-9]+$' | awk '{print $2}')
+
+    if [ -z "$nonce" ] || [ -z "$verdict" ]; then
+        printf 'STATUS=truncated\n'
+        return 0
+    fi
+
+    printf 'STATUS=ok\nNONCE=%s\nVERDICT=%s\nISSUES=%s\n' \
+        "$nonce" "$verdict" "${issues:-0}"
+}
