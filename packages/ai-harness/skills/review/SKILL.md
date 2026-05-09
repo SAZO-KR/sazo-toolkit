@@ -149,24 +149,90 @@ Each reviewer returns **PASS** or **FAIL**. The threshold:
 
 ## How to Launch Review Agents
 
+### 1. Set the active reviewer set (verdict footer gate)
+
+Before launching, declare which reviewers will participate so the harness
+can aggregate verdicts correctly. The PostToolUse hook reads this to know
+when stage completion can be evaluated.
+
+```bash
+# Example: 4 code-reviewer + 1 architect-advisor
+SESSION_ID="$CLAUDE_SESSION_ID"
+CWD="$(pwd)"
+bash "$HOME/.claude/scripts/hooks/lib/session-state.sh" \
+  -c "source ~/.claude/scripts/hooks/lib/session-state.sh && \
+      state_set_json '$SESSION_ID' '.review_expected_set' \
+      '[\"code-reviewer\",\"code-reviewer\",\"code-reviewer\",\"code-reviewer\",\"architect-advisor\"]' '$CWD'"
+```
+
+(In practice, the main loop invokes this via a small helper so it stays
+inline with the Task launches. If you skip this step, the gate falls back
+to fail-open and treats any single APPROVE as success — not what you want
+for multi-perspective review.)
+
+### 2. Mint nonces and inject into each prompt
+
+Each Task call must end with a verdict footer carrying a session-issued
+nonce. Mint one nonce per call from the harness, then append the footer
+template to the prompt:
+
+```bash
+NONCE=$(source ~/.claude/scripts/hooks/lib/session-state.sh && \
+        verdict_nonce_issue "$SESSION_ID" "$CWD" "code-reviewer" "review")
+
+NONCE_INSTRUCTION="
+
+---
+At the end of your response, append exactly this footer (do not omit, do
+not modify the nonce):
+---SAZO_FOOTER_BEGIN---
+SAZO_VERDICT_NONCE: $NONCE
+SAZO_VERDICT: APPROVE | BLOCK | NEEDS_REVISION
+SAZO_BLOCKING_ISSUES: <integer>
+---SAZO_FOOTER_END---
+"
+```
+
+Append `$NONCE_INSTRUCTION` to the **end** of each Task `prompt` argument
+(after the perspective-specific tail). The shared cached prefix is
+unaffected — the per-call nonce sits in the per-call tail.
+
+### 3. Launch the parallel Task calls
+
 ```
 For each of the 5 perspectives, use Task tool:
   Task(
     subagent_type="code-reviewer",            # architect-advisor for the Architecture perspective
     run_in_background=true,
     load_skills=[],
-    prompt="[Review perspective + git diff + requirements]"
+    prompt="[shared prefix + perspective tail + nonce footer instruction]"
   )
 
 CRITICAL:
   - Do NOT pass session_id — each review MUST be a fresh session
   - Do NOT include previous review results in the prompt
   - Each agent returns: PASS or FAIL with specific issues cited by file and line
+  - Each agent ALSO returns the SAZO_VERDICT footer (machine-parseable)
 
 Agent selection:
   - Correctness / Security / Performance / Test Quality → `code-reviewer` (diff-based, sonnet)
   - Architecture → `architect-advisor` (depth over breadth, sonnet — escalate to opus only when the main loop identifies architecturally sensitive changes; see CLAUDE.md §0)
 ```
+
+### 4. Verdict aggregation (automatic)
+
+The PostToolUse hook (workflow-state-machine.sh) parses each reviewer's
+footer, validates the nonce against the issued pool, and records the
+verdict in state. When **every** expected reviewer has responded with
+`APPROVE`, the review stage is automatically marked complete. Any single
+`BLOCK` keeps the stage incomplete — proceed to "Handling Review Results"
+below.
+
+If the SAZO_VERDICT_FOOTER_ENFORCE env is `warn` (Phase 1 default), a
+missing footer falls back to legacy stage_mark — but the
+`verdict_missing_count` metric increments, so callers omitting the footer
+are detectable. Switch per-agent to `block` once dogfooding shows footer
+compliance.
 
 ## Handling Review Results
 

@@ -91,3 +91,31 @@ types. Your tests should NOT simply test mocks. Always test actual behavior.</sy
 
 ---
 ```
+
+## Plan-stage gate (verdict footer)
+
+When the main loop invokes `plan-critic` or `plan-auditor` as a plan-stage
+gate, mint a verdict nonce per call and inject the footer instruction
+into each Task prompt:
+
+```bash
+SESSION_ID="$CLAUDE_SESSION_ID"
+CWD="$(pwd)"
+NONCE_CRITIC=$(source ~/.claude/scripts/hooks/lib/session-state.sh && \
+               verdict_nonce_issue "$SESSION_ID" "$CWD" "plan-critic" "plan")
+NONCE_AUDITOR=$(source ~/.claude/scripts/hooks/lib/session-state.sh && \
+                verdict_nonce_issue "$SESSION_ID" "$CWD" "plan-auditor" "plan")
+```
+
+Append to each Task prompt the corresponding footer template (see
+`agents/plan-critic.md` and `agents/plan-auditor.md` for the exact
+envelope format).
+
+The PostToolUse hook aggregates: plan stage marks `completed` only when
+**both** plan-critic AND plan-auditor return `SAZO_VERDICT: APPROVE`.
+Plan-auditor `NEEDS_REVISION` indicates a route-back to `plan-drafter`
+(main loop responsibility).
+
+When invoking plan-critic/auditor for purposes outside the gate
+(advisory, exploration), omit the nonce — agent then omits the footer
+and the hook records nothing.
