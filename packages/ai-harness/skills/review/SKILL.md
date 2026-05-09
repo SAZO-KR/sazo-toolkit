@@ -197,30 +197,46 @@ for multi-perspective review.)
 
 ### 2. Mint nonces and inject into each prompt
 
-Each Task call must end with a verdict footer carrying a session-issued
-nonce. Mint one nonce per call from the harness, then append the footer
-template to the prompt:
+**CRITICAL: each Task call needs its own nonce bound to that exact agent.**
+`verdict_nonce_consume` rejects a footer whose nonce was minted for a
+different agent. Reusing one nonce across both agents will silently
+reject one of the verdicts and the gate will never complete.
+
+Mode A — mint TWO nonces, one per agent:
 
 ```bash
-NONCE=$(bash -c "source $HOME/.claude/scripts/hooks/lib/session-state.sh && \
-                 verdict_nonce_issue '$SESSION_ID' '$CWD' 'code-reviewer' 'review'")
+NONCE_CR=$(bash -c "source $HOME/.claude/scripts/hooks/lib/session-state.sh && \
+                    verdict_nonce_issue '$SESSION_ID' '$CWD' 'code-reviewer' 'review'")
+NONCE_AA=$(bash -c "source $HOME/.claude/scripts/hooks/lib/session-state.sh && \
+                    verdict_nonce_issue '$SESSION_ID' '$CWD' 'architect-advisor' 'review'")
 
-NONCE_INSTRUCTION="
+# Build per-agent footer instruction
+mk_footer_instruction() {
+  cat <<EOF
 
 ---
 At the end of your response, append exactly this footer (do not omit, do
 not modify the nonce):
 ---SAZO_FOOTER_BEGIN---
-SAZO_VERDICT_NONCE: $NONCE
+SAZO_VERDICT_NONCE: $1
 SAZO_VERDICT: APPROVE | BLOCK | NEEDS_REVISION
 SAZO_BLOCKING_ISSUES: <integer>
 ---SAZO_FOOTER_END---
-"
+EOF
+}
+
+CR_INSTRUCTION=$(mk_footer_instruction "$NONCE_CR")
+AA_INSTRUCTION=$(mk_footer_instruction "$NONCE_AA")
 ```
 
-Append `$NONCE_INSTRUCTION` to the **end** of each Task `prompt` argument
-(after the perspective-specific tail). The shared cached prefix is
+Append `$CR_INSTRUCTION` to the `code-reviewer` Task prompt and
+`$AA_INSTRUCTION` to the `architect-advisor` Task prompt — each at the
+end (after the perspective-specific tail). The shared cached prefix is
 unaffected — the per-call nonce sits in the per-call tail.
+
+Mode B (advisory): mint one nonce per agent type as needed; the gate
+treats the result as advisory only, so the strictness above doesn't
+apply, but minting per-call nonces still prevents replay.
 
 ### 3. Launch the parallel Task calls
 
