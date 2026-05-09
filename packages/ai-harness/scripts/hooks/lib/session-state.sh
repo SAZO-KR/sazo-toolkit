@@ -359,6 +359,40 @@ read_hook_payload() {
     SAZO_USER_PROMPT=$(echo "$payload" | jq -r '.prompt // ""')
 }
 
+# _maybe_truncate_state: cap state.json size to 1MB. Preserve invariants:
+#   1. Last 50 history entries (recent activity)
+#   2. All ci/approval completed entries (stage_is_passed dependency — line 273-300)
+# Drop oldest non-essential entries. audit.log untouched (separate file).
+SAZO_STATE_MAX_BYTES="${SAZO_STATE_MAX_BYTES:-1048576}"  # 1MB
+
+_maybe_truncate_state() {
+    local sid="$1" cwd="$2"
+    local f
+    f=$(state_file "$sid" "$cwd") || return 1
+    [ -f "$f" ] || return 0
+
+    local sz
+    sz=$(wc -c <"$f" | tr -d ' ')
+    [ "$sz" -lt "$SAZO_STATE_MAX_BYTES" ] && return 0
+
+    local tmp="$f.trunc.tmp"
+    if jq '
+        .history |= (
+            (
+                ([.[-50:][]]) +
+                ([.[] | select(.stage=="ci" or .stage=="approval") | select(.status=="completed")])
+            )
+            | unique_by(.ts + (.stage // "") + (.status // ""))
+            | sort_by(.ts)
+        )
+    ' "$f" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$f"
+    else
+        rm -f "$tmp"
+        return 1
+    fi
+}
+
 # _record_reviewer_error: increment per-agent error counter; emit user escalation
 # at threshold 3. Stage gate stays incomplete (no stage_mark). Called by hook when
 # subagent Task returned is_error/interrupted.
