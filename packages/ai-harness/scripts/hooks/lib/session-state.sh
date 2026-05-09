@@ -404,13 +404,26 @@ process_verdict_tracked_post_task() {
             state_increment "$sid" ".verdict_missing_count[\"$agent\"]" "$cwd"
             local enforce_global enforce_agent enforce
             enforce_global="${SAZO_VERDICT_FOOTER_ENFORCE:-warn}"
-            # Indirect expansion via ${!var} (bash 4+) — no eval needed.
-            # agent already validated by allowlist above; agent_upper is
-            # ASCII-only after tr.
-            local agent_upper
-            agent_upper=$(printf '%s' "$agent" | tr 'a-z-' 'A-Z_')
-            local agent_var="SAZO_VERDICT_FOOTER_ENFORCE_${agent_upper}"
-            enforce_agent="${!agent_var:-}"
+            # Bash 3.2 compatible — no ${!var} (bash 4+) or eval.
+            # agent already validated by allowlist above so this case is
+            # exhaustive for verdict-tracked agents.
+            case "$agent" in
+                code-reviewer)
+                    enforce_agent="${SAZO_VERDICT_FOOTER_ENFORCE_CODE_REVIEWER:-}"
+                    ;;
+                architect-advisor)
+                    enforce_agent="${SAZO_VERDICT_FOOTER_ENFORCE_ARCHITECT_ADVISOR:-}"
+                    ;;
+                plan-critic)
+                    enforce_agent="${SAZO_VERDICT_FOOTER_ENFORCE_PLAN_CRITIC:-}"
+                    ;;
+                plan-auditor)
+                    enforce_agent="${SAZO_VERDICT_FOOTER_ENFORCE_PLAN_AUDITOR:-}"
+                    ;;
+                *)
+                    enforce_agent=""
+                    ;;
+            esac
             enforce="${enforce_agent:-$enforce_global}"
 
             if [ "$enforce" = "block" ]; then
@@ -463,8 +476,10 @@ process_verdict_tracked_post_task() {
 
 # _maybe_truncate_state: cap state.json size to 1MB. Preserve invariants:
 #   1. Last 50 history entries (recent activity)
-#   2. All ci/approval completed entries (stage_is_passed dependency — line 273-300)
+#   2. ci/approval completed entries (stage_is_passed dependency — line 273-300)
+#   3. ci/approval user-skipped entries (stage_is_passed accepts skipped+by=user)
 # Drop oldest non-essential entries. audit.log untouched (separate file).
+# Mutation runs under _with_lock to avoid races with concurrent state writes.
 SAZO_STATE_MAX_BYTES="${SAZO_STATE_MAX_BYTES:-1048576}"  # 1MB
 
 _maybe_truncate_state() {
@@ -477,14 +492,22 @@ _maybe_truncate_state() {
     sz=$(wc -c <"$f" | tr -d ' ')
     [ "$sz" -lt "$SAZO_STATE_MAX_BYTES" ] && return 0
 
+    _with_lock "$f" _maybe_truncate_state_inner "$f"
+}
+
+_maybe_truncate_state_inner() {
+    local f="$1"
     local tmp="$f.trunc.tmp"
     if jq '
         .history |= (
             (
                 ([.[-50:][]]) +
-                ([.[] | select(.stage=="ci" or .stage=="approval") | select(.status=="completed")])
+                ([.[]
+                    | select(.stage=="ci" or .stage=="approval")
+                    | select(.status=="completed" or (.status=="skipped" and .by=="user"))
+                ])
             )
-            | unique_by(.ts + "|" + (.stage // "") + "|" + (.status // "") + "|" + (.by // "") + "|" + (.reason // ""))
+            | unique_by([.ts, .stage, .status, .by, .reason])
             | sort_by(.ts)
         )
     ' "$f" > "$tmp" 2>/dev/null; then

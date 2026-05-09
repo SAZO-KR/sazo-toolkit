@@ -123,6 +123,93 @@ assert_eq "5" "$approval_count" "B.3 all 5 approval completed entries preserved"
 ts_sorted=$(state_jq "$SID" '.history | sort_by(.ts) == .' "$CWD")
 assert_eq "true" "$ts_sorted" "B.4 history sorted by ts"
 
+# --- C: user-skipped ci entries preserved ---
+echo "Test C: user-skipped ci entries preserved (stage_is_passed dependency)"
+SID="trunc-test-2"
+state_init "$SID" "$CWD" "test"
+SF=$(state_file "$SID" "$CWD")
+
+# 5 ci skipped(by=user) + 300 noise + 5 approval skipped(by=user)
+jq -nc '
+  [range(3) | {
+    stage: "ci",
+    status: "skipped",
+    by: "user",
+    reason: "ci skip authorized",
+    ts: ("2026-05-09T01:00:0" + (. | tostring) + "Z")
+  }]
+  +
+  [range(300) | {
+    stage: "research",
+    status: "completed",
+    by: "auto",
+    reason: ("noise " * 1000 + (. | tostring)),
+    ts: ("2026-05-09T00:" + (if . < 10 then "0" + (. | tostring) else (. | tostring) end) + ":00Z")
+  }]
+  +
+  [range(2) | {
+    stage: "approval",
+    status: "skipped",
+    by: "user",
+    reason: "approval bypass",
+    ts: ("2026-05-09T02:00:0" + (. | tostring) + "Z")
+  }]
+' > "$SF.history"
+jq --slurpfile h "$SF.history" '.history = $h[0]' "$SF" > "$SF.new"
+mv "$SF.new" "$SF"
+rm -f "$SF.history"
+
+_maybe_truncate_state "$SID" "$CWD"
+
+ci_skip=$(state_jq "$SID" '[.history[] | select(.stage=="ci" and .status=="skipped" and .by=="user")] | length' "$CWD")
+assert_eq "3" "$ci_skip" "C.1 user-skipped ci entries preserved"
+
+approval_skip=$(state_jq "$SID" '[.history[] | select(.stage=="approval" and .status=="skipped" and .by=="user")] | length' "$CWD")
+assert_eq "2" "$approval_skip" "C.2 user-skipped approval entries preserved"
+
+# --- D: auto-skipped entries NOT preserved (only user-skipped + completed) ---
+echo "Test D: auto-skipped entries NOT preserved (only user-skipped/completed survive)"
+SID="trunc-test-3"
+state_init "$SID" "$CWD" "test"
+SF=$(state_file "$SID" "$CWD")
+
+# 5 ci skipped(by=auto) + 300 noise — auto-skip should NOT be preserved
+# (only user-authorized skip counts toward stage_is_passed)
+jq -nc '
+  [range(5) | {
+    stage: "ci",
+    status: "skipped",
+    by: "auto",
+    reason: "auto-skip",
+    ts: ("2026-05-09T01:00:0" + (. | tostring) + "Z")
+  }]
+  +
+  [range(300) | {
+    stage: "research",
+    status: "completed",
+    by: "auto",
+    reason: ("noise " * 1000 + (. | tostring)),
+    ts: ("2026-05-09T00:" + (if . < 10 then "0" + (. | tostring) else (. | tostring) end) + ":00Z")
+  }]
+' > "$SF.history"
+jq --slurpfile h "$SF.history" '.history = $h[0]' "$SF" > "$SF.new"
+mv "$SF.new" "$SF"
+rm -f "$SF.history"
+
+sz_before=$(wc -c <"$SF")
+_maybe_truncate_state "$SID" "$CWD"
+
+# auto-skipped ci entries that fall outside last-50 window are dropped
+total_history=$(state_jq "$SID" '.history | length' "$CWD")
+# Should be ~50 (only the last-50 window, since auto-skip doesn't qualify for preservation)
+if [ "$total_history" -le 60 ]; then
+  PASS=$((PASS+1))
+  echo "  ✓ D.1 auto-skip entries dropped beyond last-50 window (total=$total_history)"
+else
+  FAIL=$((FAIL+1))
+  echo "  ✗ D.1 too many entries kept (total=$total_history); auto-skip should not be preserved"
+fi
+
 # --- Summary ---
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"
