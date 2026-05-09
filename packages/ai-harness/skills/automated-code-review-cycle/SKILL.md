@@ -1,7 +1,7 @@
 ---
 name: Automated-Code-Review-Cycle
 description: PR에 대해 Codex/Gemini 코드 리뷰를 자동으로 받고, 피드백 수정 → 재리뷰 사이클을 사용자 개입 없이 반복. 활성 리뷰어 전부 통과하면 완료. Gemini 미설정 repo는 Codex만으로 판단.
-version: 1.7.0
+version: 1.8.0
 when_to_use: PR 생성 후 코드 리뷰 사이클을 자동화하고 싶을 때
 ---
 
@@ -111,11 +111,20 @@ GEMINI_BOT_LOGIN="gemini-code-assist[bot]"
 #           race를 막는 핵심 — initial snapshot만 신뢰하면 새 review 누락.
 # CRITICAL: --paginate 필수! 기본 30건만 반환 → 리뷰 많은 PR에서 누락
 # CRITICAL: 최신 리뷰만이 아니라 모든 리뷰를 수집해야 이전 리뷰의 미답변 코멘트를 놓치지 않음
+# CRITICAL: bot login 정확 매칭 필수. substring `test("codex|gemini")`은 login에
+#           해당 substring을 포함한 임의 사용자(`fake-codex` 등)를 허용해
+#           identity spoofing 가능. `GEMINI_ENABLED`는 이 query 결과로 한 번만
+#           결정되므로 spoof된 사용자가 fake review를 남기면 Gemini 미설정 repo가
+#           활성으로 오판되어 cycle 내내 spurious /gemini review가 발사된다.
+# CRITICAL: --paginate + 단일 array-emitting --jq는 페이지마다 분리 array를
+#           생성한다. Step 3-1과 동일한 2-stage 패턴(`raw emit → jq -s`)으로 통일.
 ALL_CODEX_REVIEW_IDS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews --paginate \
-  --jq '[.[] | select(.user.login | test("codex"))] | sort_by(.submitted_at) | [.[].id]')
+  --jq ".[] | select(.user.login == \"$CODEX_BOT_LOGIN\") | {id, submitted_at}" \
+  | jq -s 'sort_by(.submitted_at) | [.[].id]')
 
 ALL_GEMINI_REVIEW_IDS=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews --paginate \
-  --jq '[.[] | select(.user.login | test("gemini"))] | sort_by(.submitted_at) | [.[].id]')
+  --jq ".[] | select(.user.login == \"$GEMINI_BOT_LOGIN\") | {id, submitted_at}" \
+  | jq -s 'sort_by(.submitted_at) | [.[].id]')
 
 # 최신 리뷰 ID (통과 조건 확인용)
 LATEST_CODEX_REVIEW=$(echo "$ALL_CODEX_REVIEW_IDS" | jq 'last')
@@ -428,9 +437,14 @@ if [ "$CODEX_STATE" = "approved" ]; then
 fi
 
 # Gemini 통과 확인 (활성 시에만 평가, 미설정 시 자동 통과)
+# CRITICAL: Step 3-2에서 정의된 `UNANSWERED_GEMINI_COUNT`를 사용한다.
+# 이전 버전은 `GEMINI_COMMENTS`(미정의 변수)를 참조해 `${...:-0}` 기본값으로 항상 0 →
+# GEMINI_PASSED=true가 되어 미답변 코멘트가 있어도 통과 판정되는 버그가 있었음.
+# 이 변수 오타가 수정되면서 Step 6의 `gemini_stale` / `not GEMINI_PASSED` 분기가
+# 비로소 의도대로 동작한다.
 if [ "$GEMINI_ENABLED" = true ]; then
   GEMINI_PASSED=false
-  if [ "${GEMINI_COMMENTS:-0}" -eq "0" ]; then
+  if [ "${UNANSWERED_GEMINI_COUNT:-0}" -eq "0" ]; then
     GEMINI_PASSED=true
   fi
 else
@@ -542,9 +556,21 @@ fi
 ROUND=0
 MAX_ROUNDS=10          # 각 라운드 = (리뷰 polling + fix + push + reply) ≈ 4-6회 LLM 호출.
                        # 10 라운드면 최대 ~60회 호출 — 비용 상한. 초과 시 사용자에게 에스컬레이트.
-STALE_COUNT=0          # 새 리뷰 없이 같은 review를 재평가한 연속 횟수
-MAX_STALE=2            # 이 횟수 초과 시 리뷰어 무응답으로 판단
-PREV_LATEST_REVIEW=""  # 이전 라운드의 최신 review ID
+CODEX_STALE_COUNT=0    # Codex가 무반응한 연속 라운드 수 (Gemini와 독립)
+GEMINI_STALE_COUNT=0   # Gemini가 무반응한 연속 라운드 수 (Codex와 독립)
+MAX_STALE=2            # 이 횟수 도달 시 fallback. 시퀀스: stale=1(수동 트리거) → stale=2(fallback).
+                       # CRITICAL: 봇별 카운터로 분리. 단일 STALE_COUNT는 Round A(Gemini stale)
+                       # → Round B(Codex stale) 같은 cross-bot 시퀀스에서 누적이 합산되어
+                       # 한 봇이 사실상 1라운드만 stale인데 MAX_STALE 도달로 잘못 판정되는
+                       # 오염이 발생. effective wait per bot = polling 2회 ≈ 20분.
+PREV_CODEX_LATEST_REVIEW=""    # 이전 라운드의 Codex 최신 review ID
+PREV_GEMINI_LATEST_REVIEW=""   # 이전 라운드의 Gemini 최신 review ID (활성 시)
+CODEX_STATE="pending"   # Step 3-3에서 갱신. Step 6 stale 판정이 Round 1에 Step 3-3
+                        # 실행 전에 참조하므로 loop 진입 전 명시적 초기화 필수.
+CODEX_FALLBACK_DONE=false  # Codex stale로 인해 Gemini fallback이 한 번이라도 발사됐는지.
+                           # 이후 라운드에서 codex_stale을 무시해 매 ~20분마다
+                           # spurious @codex review / /gemini review 재발사를 차단.
+                           # Codex가 늦게나마 응답해 codex_progressed=true가 되면 reset.
 WALL_CLOCK_START=now()   # bash 구현 시 now()는 `$(date +%s)`
 WALL_CLOCK_BUDGET=1800   # 30분 — 초과 시 진행 중이라도 사용자 확인 요청
 
@@ -562,35 +588,114 @@ while ROUND < MAX_ROUNDS:
     notify_user("Codex quota 초과, Gemini 미설정. 대기 필요.")
     break
 
-  # ── Stale review 감지 ──
-  # CODEX_STATE를 먼저 평가해 "활발히 리뷰 중(eyes)"와 "실제 무응답(pending)"을 구분.
-  # reviewing 상태는 stale 아님 → polling 계속, STALE_COUNT 증가 유보.
-  # pending 상태이거나 최신 review ID가 동일(= bot 진전 없음)일 때만 stale 증가.
+  # ── Stale review 감지 (per-bot) ──
+  # CODEX_STATE를 먼저 평가해 "활발히 리뷰 중(eyes)"과 "실제 무응답(pending)"을 구분.
+  # reviewing 상태는 stale 아님 → polling 계속.
+  # pending 상태이거나 최신 review ID가 동일(= bot 진전 없음)일 때만 stale로 인정.
   #
   # NOTE: CODEX_STATE는 Step 3-3에서 갱신된다. 이 stale 판정 시점에는 이전 라운드의
   # 값을 참조한다. Step 2 polling이 reaction 변화를 감지하면 NEW_REVIEW_FOUND=true로
   # break하므로 `not NEW_REVIEW_FOUND` 가드가 이전 CODEX_STATE 값에 의한 오판을
   # 차단한다 (Step 2 → Step 6 → Step 3 순서로 방어 계층화). CODEX_STATE 참조를
   # 이동하거나 Step 3-3을 stale 판정 앞으로 당기면 이 의존이 깨지므로 주의.
-  current_latest_review = get_latest_codex_review_id()
+  current_codex_latest = get_latest_codex_review_id()    # 없으면 ""
+  current_gemini_latest = get_latest_gemini_review_id()  # 미활성/없으면 ""
   codex_progressed = (CODEX_STATE in {"reviewing", "approved"})
-  if not NEW_REVIEW_FOUND and current_latest_review == PREV_LATEST_REVIEW and not codex_progressed:
-    STALE_COUNT++
-    log("리뷰어 무응답 (stale #{STALE_COUNT}/{MAX_STALE}, CODEX_STATE=${CODEX_STATE})")
-    if STALE_COUNT > MAX_STALE:
-      if GEMINI_ENABLED:
-        log("Codex 무응답 → Gemini fallback")
-        gh pr comment $PR_NUM --body "/gemini review"
-        STALE_COUNT = 0   # Gemini trigger 후 카운트 리셋
-        continue           # Gemini 리뷰 대기를 위해 다음 라운드로
-      else:
-        notify_user("Codex가 ${MAX_STALE}회 연속 무응답. 수동 확인 필요.")
-        break
+  # CRITICAL: `current_*_latest != ""` 가드 필수.
+  # 봇이 한 번도 review를 submit하지 않은 경우 current=PREV="" → "" == "" 으로
+  # 불필요한 stale 판정이 발생, 첫 polling timeout 직후 spurious 트리거가 나간다.
+  # ID가 실제로 존재하고 변동 없을 때만 stale로 본다.
+  # CRITICAL: `not CODEX_FALLBACK_DONE` 필수. fallback 후에도 Codex가 무응답이면
+  # 매 stale streak마다 @codex review + /gemini review가 영구 재발사된다 (PR에 봇
+  # 코멘트 spam). 한 번 fallback한 Codex는 자연 회복(codex_progressed)까지 stale 분류 제외.
+  codex_stale = (not CODEX_FALLBACK_DONE
+                 and current_codex_latest != ""
+                 and current_codex_latest == PREV_CODEX_LATEST_REVIEW
+                 and not codex_progressed)
+  # Gemini는 reaction state 머신이 없으므로 "미통과 + 최신 review ID 미변동"으로 stale 추정.
+  # 활성이 아니면 stale 아님으로 취급 (Gemini 미설정 repo는 영향 없음).
+  gemini_stale = (GEMINI_ENABLED and not GEMINI_PASSED
+                  and current_gemini_latest != ""
+                  and current_gemini_latest == PREV_GEMINI_LATEST_REVIEW)
+
+  # ── 봇별 카운터 갱신 ──
+  # CRITICAL: 봇별 카운터 분리. 한 봇이 progress하면 그 봇의 카운터만 0으로,
+  # 다른 봇의 stale streak에는 영향 없음.
+  if not NEW_REVIEW_FOUND and codex_stale:
+    CODEX_STALE_COUNT++
   else:
-    STALE_COUNT = 0        # 새 리뷰가 왔거나 Codex가 reviewing/approved로 진전
-    if CODEX_STATE == "reviewing":
-      log("Codex 리뷰 진행 중 (👀) — polling 계속")
-  PREV_LATEST_REVIEW = current_latest_review
+    CODEX_STALE_COUNT = 0
+    if codex_progressed:
+      CODEX_FALLBACK_DONE = false   # Codex 자연 회복 → fallback 락 해제
+
+  if not NEW_REVIEW_FOUND and gemini_stale:
+    GEMINI_STALE_COUNT++
+  else:
+    GEMINI_STALE_COUNT = 0
+
+  if codex_stale or gemini_stale:
+    log("리뷰어 무응답 (codex=${CODEX_STALE_COUNT}/${MAX_STALE}, gemini=${GEMINI_STALE_COUNT}/${MAX_STALE})")
+
+  # ── stale=1 수동 트리거 (silent-drop 회복 시도) ──
+  # polling 1회 ≈ 10분(30s × 20회). 1회 무반응 시 GitHub 측 silent-drop
+  # (quota 코멘트도 안 뜨고 멈춘 케이스) 가능성 → 실제 stale인 봇만 재호출.
+  # NOTE: dedup은 봇별 ==1 비교 자체로 보장. 카운터는 매 stale 라운드 ++만 되고
+  #       stale 아닌 라운드에서 0으로 리셋되므로 한 streak 내 ==1은 정확히 1회만 hit.
+  trigger_sent = false
+  if CODEX_STALE_COUNT == 1:
+    # Codex 공식 manual trigger: PR 코멘트에 `@codex review`.
+    gh pr comment $PR_NUM --body "@codex review"
+    log("Codex 수동 재트리거 발송 (@codex review)")
+    trigger_sent = true
+  if GEMINI_STALE_COUNT == 1:
+    gh pr comment $PR_NUM --body "/gemini review"
+    log("Gemini 수동 재트리거 발송 (/gemini review)")
+    trigger_sent = true
+  if trigger_sent:
+    # CRITICAL: continue 전에 PREV_*_LATEST_REVIEW 갱신 필수.
+    # 갱신을 빠뜨리면 다음 라운드에서도 동일 ID로 stale 판정이 즉시 true가 되어
+    # 카운터가 race past하며 트리거의 "한 번 더 polling 대기" 의도가 무효화됨.
+    PREV_CODEX_LATEST_REVIEW = current_codex_latest
+    PREV_GEMINI_LATEST_REVIEW = current_gemini_latest
+    continue   # 수동 트리거 후 다음 polling 라운드 대기
+
+  # ── stale ≥ MAX_STALE fallback (per-bot) ──
+  # CRITICAL: 봇별 카운터 기반 분기. 수동 트리거 후에도 회복 안 된 봇만 처리.
+  # - Codex만 max + Gemini 활성·미통과·미stale → Gemini fallback (Codex 자리 메움)
+  # - Codex max + Gemini도 max → 양쪽 무응답, fallback 불가, escalate
+  # - Gemini만 max → escalate
+  # - Codex만 max + Gemini 사용 불가 → escalate
+  codex_at_max = (CODEX_STALE_COUNT >= MAX_STALE)
+  gemini_at_max = (GEMINI_STALE_COUNT >= MAX_STALE)
+
+  if codex_at_max and gemini_at_max:
+    notify_user("Codex + Gemini 모두 ${MAX_STALE}회 연속 무응답. Gemini fallback 불가. 수동 확인 필요.")
+    break
+  elif codex_at_max:
+    if GEMINI_ENABLED and not GEMINI_PASSED and not gemini_stale:
+      log("Codex 무응답 지속 → Gemini fallback")
+      gh pr comment $PR_NUM --body "/gemini review"
+      CODEX_STALE_COUNT = 0
+      CODEX_FALLBACK_DONE = true   # 이후 라운드에서 Codex stale 재인식 차단
+      PREV_CODEX_LATEST_REVIEW = current_codex_latest
+      PREV_GEMINI_LATEST_REVIEW = current_gemini_latest
+      continue
+    else:
+      notify_user("Codex가 ${MAX_STALE}회 연속 무응답. 수동 확인 필요.")
+      break
+  elif gemini_at_max:
+    notify_user("Gemini가 ${MAX_STALE}회 연속 무응답. 수동 확인 필요.")
+    break
+
+  # ── 매 라운드 PREV_* 갱신 ──
+  # break/continue로 빠지지 않은 모든 경로(non-stale, 또는 stale이지만 trigger·fallback
+  # 양쪽 다 안 걸린 중간 카운터 — MAX_STALE>2 가정)를 커버. detection이 frozen ID로
+  # corrupt되는 것을 구조적으로 방어.
+  PREV_CODEX_LATEST_REVIEW = current_codex_latest
+  PREV_GEMINI_LATEST_REVIEW = current_gemini_latest
+
+  if CODEX_STATE == "reviewing":
+    log("Codex 리뷰 진행 중 (👀) — polling 계속")
 
   fetch_review_feedback()       # Step 3 — review → review comments 구조로 조회
   filter_unanswered()           # in_reply_to_id로 미답변만
@@ -614,7 +719,8 @@ while ROUND < MAX_ROUNDS:
 - 최대 라운드 수: 10 (각 라운드 ~4-6 LLM 호출 → 총 ~60 호출 상한)
 - Wall-clock budget: 30분 — 초과 시 사용자에게 진행 여부 확인
 - 같은 피드백 3회 반복 시: decline하고 다음으로
-- **Stale review**: 2회 연속 같은 리뷰 → Gemini fallback 또는 사용자 알림
+- **Stale review (stale=1, ≈10분 무반응)**: 실제 stale인 봇만 골라 `@codex review` / `/gemini review` 수동 트리거 1회 발송 후 다음 polling 대기 (GitHub silent-drop 회복 시도). 진행 중인 봇에 spurious 재트리거 보내지 않음.
+- **Stale review (stale≥MAX_STALE, ≈20분 무반응)**: 수동 트리거 후에도 무반응 → Gemini fallback 또는 사용자 알림
 - 총 소요 시간 모니터링 (각 라운드 로그)
 
 ## Step 7: Final Report
@@ -646,9 +752,9 @@ PR이 머지 가능한 상태입니다. / 사용자 확인이 필요합니다.
 | 테스트 없이 push                                             | 반드시 test/lint/build 통과 후 push                                         |
 | 사이클 중간 진입 시 처음부터 다시 시작                       | 현재 상태를 파악하고 적절한 Step부터 진입                                   |
 | `gh api` 조회 시 `--paginate` 누락 (reviews, comments 모두!) | 기본 30건 → 최신 리뷰/답변 누락. **모든 `gh api` 호출에** `--paginate` 사용 |
-| Codex bot 이름 하드코딩 (`codex-gh[bot]`)                    | `test("codex")`로 동적 감지 (이름 변경 대응)                                |
+| Bot login substring 매칭 (`test("codex")` / `test("gemini")`)         | 정확 매칭 상수 사용 — `CODEX_BOT_LOGIN="chatgpt-codex-connector[bot]"`, `GEMINI_BOT_LOGIN="gemini-code-assist[bot]"`를 Step 1에서 정의 후 모든 step에서 재사용. substring 매칭은 `fake-codex` 같은 이름의 사용자가 봇으로 위장 가능 (identity spoofing) |
 | Gemini 미설정 repo에서 Gemini 대기                           | `GEMINI_ENABLED` 플래그로 Gemini 관련 로직 분기                             |
-| polling 타임아웃 후 같은 리뷰 무한 재평가                    | `STALE_COUNT`로 무응답 감지, 2회 초과 시 fallback/알림                      |
+| polling 타임아웃 후 같은 리뷰 무한 재평가                    | 봇별 stale 카운터(`CODEX_STALE_COUNT`, `GEMINI_STALE_COUNT`)로 독립 감지, `>= MAX_STALE`(=2) 도달 시 fallback/알림 (stale=1 트리거 → stale=2 fallback). 단일 카운터는 cross-bot 누적으로 한 봇이 1라운드만 무반응이어도 MAX_STALE 도달로 오판되는 오염 발생 |
 | 최신 리뷰만 확인하여 이전 리뷰 미답변 누락                   | `ALL_*_REVIEW_IDS`로 모든 리뷰의 코멘트를 스캔                              |
 | 동의 답변에 리뷰어 멘션 포함                                 | 동의 시 멘션 생략 (재트리거 불필요, 토큰 낭비)                              |
 | 반대(decline) 답변에 리뷰어 멘션 누락                        | `@<reviewer_login>` 멘션으로 재검토 트리거                                  |
@@ -661,6 +767,7 @@ PR이 머지 가능한 상태입니다. / 사용자 확인이 필요합니다.
 | Codex가 review submit과 +1 reaction을 거의 동시에 처리할 때, reaction만 먼저 보고 review-comments 미답변을 놓침 | Step 3-1에서 `ALL_*_REVIEW_IDS`를 매 라운드 재조회 + Step 3-3에서 CODEX_STATE=approved 직후 final sweep으로 reviews/review-comments 한 번 더 fetch |
 | `ALL_*_REVIEW_IDS`를 Step 1의 cycle-start snapshot만 신뢰 | 매 라운드 Step 3-1 진입 시 재조회 — 사이클 도중 submit된 review를 누락하지 않도록 |
 | Step 2 polling에서 PR 작성자의 리뷰 reply도 "새 리뷰"로 카운트 | `gh api .../reviews`에 bot 로그인 **정확 매칭** 필수 (`select(.user.login == $codex or .user.login == $gemini)`). substring `test("codex\|gemini")`는 identity spoofing 위험 있음 — Step 3-3의 가드와 일관되게 exact match 사용 |
+| 봇이 quota 코멘트도 안 남기고 silent하게 멈춘 상태에서 무한 대기/즉시 fallback | polling 1회(≈10분) 무반응 시 stale=1 단계에서 `@codex review`(Codex) / `/gemini review`(Gemini) 코멘트로 **수동 재트리거 1회** 발송 후 다음 polling 대기. fallback/escalation은 그 후에도 무반응일 때만 |
 
 ## Related Skills
 
