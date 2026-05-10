@@ -144,13 +144,13 @@ sync_awake() {
     chmod +x "$awake_script" 2>/dev/null || true
     local awake_symlink="$HOME/.local/bin/awake"
     mkdir -p "$HOME/.local/bin" 2>/dev/null || true
-    # symlink target이 이미 정확하면 ln 호출 자체 skip — noise 감소.
-    if [ -L "$awake_symlink" ] && [ "$(readlink "$awake_symlink")" = "$awake_script" ]; then
-        return 0
+    # symlink 갱신 (target 이미 정확하면 ln 호출 자체 skip — noise 감소).
+    if [ ! -L "$awake_symlink" ] || [ "$(readlink "$awake_symlink")" != "$awake_script" ]; then
+        ln -sfn "$awake_script" "$awake_symlink" 2>>"$LOG_FILE" || true
     fi
-    ln -sfn "$awake_script" "$awake_symlink" 2>>"$LOG_FILE" || true
-    # 신규 사용자에게 PATH 안내. install.sh 만 거치고 auto-update는 받지 않는
-    # 사용자가 없도록 24h throttle로 1회 알림 — `~/.local/bin` 미포함 시.
+    # PATH 안내는 symlink 상태와 독립 — `~/.local/bin` 미포함이면 매번 검사,
+    # 24h throttle로 noise 감소. symlink stabilize 후에도 PATH 문제가 지속되면
+    # 사용자가 안내를 못 받는 case 방지 (Round 3 review catch).
     case ":${PATH:-}:" in
         *":$HOME/.local/bin:"*) ;;
         *) sync_awake_notify_path_missing ;;
