@@ -748,6 +748,59 @@ else
     fail "29." "rc=$rc_29 out=$OUT_29"
 fi
 
+# 30. Self-review M1 (PR #29): stats 의 verdict_missing_count 가 audit.log +
+# state file 합산이면 같은 event 가 2회 카운트됨 (handle_verdict 가 양쪽 다
+# write). state file 만 truth 로 사용해야 함. audit.log 에 verdict_missing_*
+# 라인이 있어도 state aggregate 와 합산되지 않음을 확인.
+rm -f "$TMP_STATE"/*.json "$TMP_STATE/audit.log"
+# state file: code-reviewer 1, architect-advisor 2 → aggregate = 3
+jq -n '{verdict_missing_count: {"code-reviewer": 1, "architect-advisor": 2}}' \
+    > "$TMP_STATE/sessDup1--hDup1.json"
+# audit.log: simple_audit 가 같은 event 마다 한 줄 emit 했다고 가정 — 3줄.
+# (실제 production 흐름: state_increment + simple_audit 가 한 호출에서 둘 다 발생)
+{
+    printf '[2026-05-10T11:00:00+0900] verdict_missing_block agent=code-reviewer stage=review\n'
+    printf '[2026-05-10T11:01:00+0900] verdict_missing_warn agent=architect-advisor stage=review\n'
+    printf '[2026-05-10T11:02:00+0900] verdict_missing_warn agent=architect-advisor stage=review\n'
+} > "$TMP_STATE/audit.log"
+OUT_30=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" stats --days 7 2>&1)
+rc_30=$?
+# 합산 시 6 이 나왔을 것. state-only 면 3.
+if [ "$rc_30" = "0" ] && echo "$OUT_30" | grep -qE "verdict_missing_count:[[:space:]]+3[[:space:]]"; then
+    pass "30. stats: verdict_missing_count uses state-only (no audit double-count)"
+else
+    fail "30." "rc=$rc_30 out=$OUT_30"
+fi
+
+# 31. Self-review N1 (PR #29): cmd_audit --filter freeform branch must do
+# exact event match (was substring → `verdict_missing` matched _block/_warn).
+rm -f "$TMP_STATE/audit.log"
+{
+    printf '[2026-05-10T11:00:00+0900] verdict_missing agent=x stage=y\n'
+    printf '[2026-05-10T11:01:00+0900] verdict_missing_block agent=x stage=y\n'
+    printf '[2026-05-10T11:02:00+0900] verdict_missing_warn agent=x stage=y\n'
+} > "$TMP_STATE/audit.log"
+run_cli audit --filter verdict_missing --last 50
+n_exact=$(printf '%s\n' "$OUT" | grep -c 'verdict_missing ')
+n_block=$(printf '%s\n' "$OUT" | grep -c 'verdict_missing_block')
+n_warn=$(printf '%s\n' "$OUT" | grep -c 'verdict_missing_warn')
+if [ "$RC" = "0" ] && [ "$n_exact" = "1" ] && [ "$n_block" = "0" ] && [ "$n_warn" = "0" ]; then
+    pass "31. audit --filter freeform: exact event match (not substring)"
+else
+    fail "31." "rc=$RC exact=$n_exact block=$n_block warn=$n_warn out=$OUT"
+fi
+
+# 32. Self-review N1 follow-up: freeform exact filter still matches the
+# specific event when chosen.
+run_cli audit --filter verdict_missing_block --last 50
+n_block_only=$(printf '%s\n' "$OUT" | grep -c 'verdict_missing_block')
+n_other=$(printf '%s\n' "$OUT" | grep -cE 'verdict_missing |verdict_missing_warn')
+if [ "$RC" = "0" ] && [ "$n_block_only" = "1" ] && [ "$n_other" = "0" ]; then
+    pass "32. audit --filter freeform: precise suffix event matches only itself"
+else
+    fail "32." "rc=$RC block_only=$n_block_only other=$n_other out=$OUT"
+fi
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"

@@ -118,7 +118,18 @@ sync_workflow_cli() {
         return 0
     fi
     if [ -e "$target" ] && [ ! -L "$target" ]; then
-        # User-owned non-symlink — never overwrite. install.sh warns; auto-update is silent.
+        # Self-review L3 (PR #29): user-owned non-symlink — never overwrite.
+        # install.sh emits a stderr WARN; auto-update.sh runs in SessionStart
+        # (non-interactive) so stderr is invisible. Emit an audit.log line so
+        # operators can later diagnose "why is sazo-workflow stale?". One
+        # entry per run is fine — sync_workflow_cli is idempotent and short
+        # enough that re-emitting on every session is acceptable noise.
+        local audit_log="${SAZO_STATE_DIR:-$HOME/.claude/session-state}/audit.log"
+        mkdir -p "$(dirname "$audit_log")" 2>/dev/null || true
+        printf '[%s] cli_sync_skipped target=%s reason=non_symlink\n' \
+            "$(date +%Y-%m-%dT%H:%M:%S%z)" "$target" \
+            >> "$audit_log" 2>/dev/null || true
+        log "WARN: $target exists and is not a symlink — skipping CLI install (audit logged)"
         return 0
     fi
     ln -sfn "$source" "$target" 2>/dev/null || true

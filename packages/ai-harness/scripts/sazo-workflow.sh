@@ -180,15 +180,20 @@ EOF
 
 resolve_session() {
     local arg="${1:-}"
+    # Self-review L2 (PR #29): use `find -maxdepth 1` instead of shell glob
+    # — same rationale as `resolve_state_file` (round 14): ARG_MAX limits and
+    # literal-glob (no-match) semantics are caller's responsibility with raw
+    # `ls`. `find ... -name` exits 0 with no output on no-match; pipe to head
+    # -1 + `[ -n ... ]` for boolean check.
     if [ -n "$arg" ]; then
-        if ls "$STATE_DIR/${arg}--"*.json >/dev/null 2>&1; then
+        if [ -n "$(find "$STATE_DIR" -maxdepth 1 -type f -name "${arg}--*.json" 2>/dev/null | head -1)" ]; then
             printf '%s' "$arg"
             return 0
         fi
         return 2
     fi
     if [ -n "${SAZO_SESSION_ID:-}" ]; then
-        if ls "$STATE_DIR/${SAZO_SESSION_ID}--"*.json >/dev/null 2>&1; then
+        if [ -n "$(find "$STATE_DIR" -maxdepth 1 -type f -name "${SAZO_SESSION_ID}--*.json" 2>/dev/null | head -1)" ]; then
             printf '%s' "$SAZO_SESSION_ID"
             return 0
         fi
@@ -474,13 +479,18 @@ cmd_audit() {
     [ -z "$lines" ] && return 2
 
     if [ -n "$filter" ]; then
-        # JSON entries: filter by event field; freeform: substring match.
+        # Self-review N1 (PR #29): JSON branch already does exact match on
+        # event field; freeform branch previously did substring → `--filter
+        # verdict_missing` matched both `verdict_missing_block` and
+        # `_missing_warn`. Align freeform to exact match by tokenising on
+        # whitespace and comparing field 2 (simple_audit format:
+        # `[ts] event key=val ...`). Lines with <2 fields are dropped.
         lines=$(printf '%s\n' "$lines" | awk -v f="$filter" '
             /^\{/ {
                 if (index($0, "\"event\":\"" f "\"") > 0) print
                 next
             }
-            { if (index($0, f) > 0) print }
+            { if (NF >= 2 && $2 == f) print }
         ')
     fi
 
@@ -612,21 +622,18 @@ cmd_stats() {
     fi
     lock_timeouts=$(_count_pattern 'lock_timeout' "$AUDIT_LOG")
     jq_errors=$(_count_pattern 'jq_error' "$AUDIT_LOG")
-    # Codex PR #29 round 16 P2: audit.log 에서만 count 시 audit 파일 부재/rotated
-    # 환경에서 state file 의 .verdict_missing_count (object: reviewer→int) 가
-    # 무시됨. status 출력은 state-derived 로 표시하면서 stats 만 audit-only 면
-    # 일관성 깨짐. verdict_unset_expected_set_count 와 동일 패턴으로 state file
-    # aggregate 합산.
-    local audit_vm
-    audit_vm=$(_count_pattern 'verdict_missing' "$AUDIT_LOG")
-    local state_vm
-    state_vm=$(find "$STATE_DIR" -maxdepth 1 -name '*.json' -type f \
+    # Self-review M1 (PR #29): state file `.verdict_missing_count` 는
+    # session-state.sh::handle_verdict 가 `state_increment` 로 갱신한다. 같은 호출
+    # 경로가 audit.log 에도 `verdict_missing_block`/`verdict_missing_warn` 라인을
+    # append 하므로, audit substring count + state aggregate 를 합산하면 동일
+    # event 가 2회 카운트된다. state file 을 single source of truth 로 사용하고
+    # audit.log 는 (rotated/missing 가능한) 보조 채널로만 둔다.
+    verdict_missing=$(find "$STATE_DIR" -maxdepth 1 -name '*.json' -type f \
         -exec jq -r '(.verdict_missing_count // {}) | to_entries | map(.value) | add // 0' {} + 2>/dev/null \
         | awk '{s+=$1} END {print s+0}')
-    case "$state_vm" in
-        ''|*[!0-9]*) state_vm=0 ;;
+    case "$verdict_missing" in
+        ''|*[!0-9]*) verdict_missing=0 ;;
     esac
-    verdict_missing=$((audit_vm + state_vm))
     state_corruptions=$(_count_pattern 'state_corruption' "$AUDIT_LOG")
 
     # Gemini PR #29 round 10 P2: 다중 state file 마다 jq 프로세스 spawn → 단일 호출 합산.

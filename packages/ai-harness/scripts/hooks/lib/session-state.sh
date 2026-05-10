@@ -76,8 +76,14 @@ _with_lock() {
     local i=0
     while ! mkdir "$lockdir" 2>/dev/null; do
         # stale lock detection — both stat variants must succeed
+        # Self-review L1 (PR #29): GNU-first probe (`stat -c %Y`) — BSD-first
+        # chain is unsafe on Linux because GNU stat's `-f` means
+        # `--file-system` (multi-line filesystem report, exit 0), so the
+        # chain captures garbage instead of an integer and breaks the
+        # numeric `age` comparison. Same rationale as `_file_mtime` in
+        # sazo-workflow.sh.
         local mtime
-        mtime=$(stat -f %m "$lockdir" 2>/dev/null || stat -c %Y "$lockdir" 2>/dev/null || echo "")
+        mtime=$(stat -c %Y "$lockdir" 2>/dev/null || stat -f %m "$lockdir" 2>/dev/null || echo "")
         if [ -n "$mtime" ]; then
             local age=$(( $(date +%s) - mtime ))
             if [ "$age" -gt 60 ]; then
