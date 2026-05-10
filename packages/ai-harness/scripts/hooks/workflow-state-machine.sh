@@ -605,6 +605,27 @@ EOF_RT
             fi
             # gh pr create — hard block
             if echo "$cmd" | grep -qE '\bgh[[:space:]]+pr[[:space:]]+create\b'; then
+                # Codex PR #30 round 5 P2: chain `... && gh pr create` can stage
+                # newly-created code BEFORE pr create runs (e.g., python -c
+                # 'open(...)write(...)' && git add . && git commit && gh pr create).
+                # PreToolUse defense's git status sees nothing yet; PostToolUse
+                # commit invalidate fires AFTER PR create already passed.
+                # Conservative: if `gh pr create` is preceded in the same Bash
+                # by ANY chain operator (`&&`, `;`, `||`) AND the chain contains
+                # opaque-stage primitives (`git add`, `git commit -a`), force
+                # invalidate ci_passed_at before the gate so PR is blocked.
+                if [ "${SAZO_DISABLE_CI_INVALIDATE:-0}" != "1" ]; then
+                    local pre_chain
+                    pre_chain=$(printf '%s' "$cmd" | sed -E 's/\bgh[[:space:]]+pr[[:space:]]+create.*$//')
+                    if echo "$pre_chain" | grep -qE '[[:space:]](&&|\|\||;)[[:space:]]' \
+                        && echo "$pre_chain" | grep -qE '\bgit[[:space:]]+(add\b|commit[[:space:]]+-[aA-Za-z]*[aA])'; then
+                        local cur_cp_chain
+                        cur_cp_chain=$(state_get "$SAZO_SESSION_ID" ".ci_passed_at" "$SAZO_CWD")
+                        if [ -n "$cur_cp_chain" ] && [ "$cur_cp_chain" != "null" ]; then
+                            ci_invalidate_unconditional "$SAZO_SESSION_ID" "$SAZO_CWD" "pr_create_chain_opaque"
+                        fi
+                    fi
+                fi
                 if ! stage_is_passed "$SAZO_SESSION_ID" "ci"; then
                     if [ "${SAZO_ALLOW_CI_SKIP:-0}" = "1" ]; then
                         stage_mark "$SAZO_SESSION_ID" "ci" "skipped" "user" "SAZO_ALLOW_CI_SKIP=1"

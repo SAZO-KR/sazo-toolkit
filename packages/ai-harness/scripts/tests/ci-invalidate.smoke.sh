@@ -185,6 +185,34 @@ run_hook_post "{\"session_id\":\"t8\",\"cwd\":\"/tmp\",\"tool_name\":\"Edit\",\"
 rc=$(run_hook_pre "{\"session_id\":\"t8\",\"cwd\":\"/tmp\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"gh pr create --title foo\"}}")
 assert_eq "2" "$rc" "8. gh pr create blocked after invalidate"
 
+# 8b. Codex PR #30 round 5 P2: chain `... && git add . && git commit && gh pr create`
+#     pre-hook git status 안 보이는 inline 코드 작성을 conservative invalidate 로 차단.
+reset_state
+mark_ci_passed "t8b" "/tmp"
+# Chain pattern: opaque file creation + git add + gh pr create. ci_passed_at
+# should be invalidated BEFORE PR gate, then PR gate blocks (exit 2).
+rc=$(run_hook_pre "{\"session_id\":\"t8b\",\"cwd\":\"/tmp\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"python -c 'open(\\\"foo.go\\\",\\\"w\\\").write(\\\"package main\\\")' && git add . && git commit -m x && gh pr create --title foo\"}}")
+assert_eq "2" "$rc" "8b. opaque chain (pyfile + git add . + commit + pr create) blocked"
+val=$(get_ci_passed_at "t8b" "/tmp")
+assert_null "$val" "8b2. ci_passed_at invalidated by chain detector"
+
+# 8c. git commit -am chain + gh pr create → invalidate + block
+reset_state
+mark_ci_passed "t8c" "/tmp"
+rc=$(run_hook_pre "{\"session_id\":\"t8c\",\"cwd\":\"/tmp\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -am inline && gh pr create --title foo\"}}")
+assert_eq "2" "$rc" "8c. chain (commit -am + pr create) blocked"
+
+# 8d. plain `gh pr create` (no chain) — no preemptive invalidate, normal gate
+# (ci_passed_at + review must be set; this case ci is set so just review missing → block)
+reset_state
+mark_ci_passed "t8d" "/tmp"
+rc=$(run_hook_pre "{\"session_id\":\"t8d\",\"cwd\":\"/tmp\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"gh pr create --title foo\"}}")
+# Should block on review (not on ci) — but result is exit 2 either way; verify
+# ci_passed_at NOT touched (only chain triggers preemptive invalidate).
+val=$(get_ci_passed_at "t8d" "/tmp")
+[ -n "$val" ] && [ "$val" != "null" ]
+assert_exit "0" "$?" "8d. plain gh pr create — ci_passed_at NOT touched by chain detector"
+
 # 9. CI 재실행 → 다시 set + PR create 통과
 # 모킹: invalidate 후 CI 통과 강제 마킹 → review도 마킹 → PR create pass
 reset_state
