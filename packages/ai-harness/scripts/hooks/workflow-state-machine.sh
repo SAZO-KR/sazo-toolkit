@@ -556,18 +556,32 @@ EOF
                             # the same repo are redundant since `marker..HEAD`
                             # range still covers all new commits.
                             if [ -n "$pre_commit_head" ]; then
-                                # jq path needs the key escaped (slashes/dots ok).
-                                # Use ensure-then-skip-if-set semantics.
+                                # Codex PR #30 round 13 P2 (#3215096087): when
+                                # `.pre_commit_markers` is absent on a fresh
+                                # state, `state_get` emits no stdin to jq, and
+                                # the piped `// {} | .[k]=v` produces empty
+                                # output → state_set_json silently fails and
+                                # the dict stays null forever. Bootstrap with
+                                # `{}` literal when reader returns empty/null.
                                 local _marker_existing
                                 _marker_existing=$(state_get "$SAZO_SESSION_ID" \
                                     ".pre_commit_markers[\"$repo_root\"]" "$SAZO_CWD" 2>/dev/null)
                                 if [ -z "$_marker_existing" ] || [ "$_marker_existing" = "null" ]; then
-                                    # ensure dict exists, then set repo entry.
-                                    state_set_json "$SAZO_SESSION_ID" \
-                                        ".pre_commit_markers" \
-                                        "$(state_get "$SAZO_SESSION_ID" ".pre_commit_markers" "$SAZO_CWD" 2>/dev/null \
-                                            | jq -c --arg k "$repo_root" --arg v "$pre_commit_head" '. // {} | .[$k] = $v')" \
-                                        "$SAZO_CWD" 2>/dev/null || true
+                                    local _markers_current _markers_next
+                                    _markers_current=$(state_get "$SAZO_SESSION_ID" \
+                                        ".pre_commit_markers" "$SAZO_CWD" 2>/dev/null)
+                                    if [ -z "$_markers_current" ] || [ "$_markers_current" = "null" ]; then
+                                        _markers_current="{}"
+                                    fi
+                                    _markers_next=$(printf '%s' "$_markers_current" \
+                                        | jq -c --arg k "$repo_root" --arg v "$pre_commit_head" \
+                                            '. + {($k): $v}')
+                                    if [ -n "$_markers_next" ]; then
+                                        state_set_json "$SAZO_SESSION_ID" \
+                                            ".pre_commit_markers" \
+                                            "$_markers_next" \
+                                            "$SAZO_CWD" 2>/dev/null || true
+                                    fi
                                 fi
                                 # Legacy single-marker write for back-compat with
                                 # post-hook fallback (kept for transition; post-hook

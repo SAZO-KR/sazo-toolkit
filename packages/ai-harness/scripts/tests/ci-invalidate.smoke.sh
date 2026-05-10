@@ -1086,6 +1086,49 @@ val=$(get_ci_passed_at "t12o" "$REPO_A")
 assert_null "$val" "12o. per-repo marker dict survives multi-repo chain (A code commit detected even after B overwrites legacy marker)"
 rm -rf "$REPO_A" "$REPO_B"
 
+# 12p. Per-repo marker dict bootstrap when state lacks `.pre_commit_markers`
+# (Codex round 13 #3215096087). Chain `commit-A-code && commit-A-docs && commit-B`:
+#   - dict must record A's baseline so post-hook range covers BOTH A commits
+#     (last is docs-only; without dict, HEAD-only fallback misses earlier code).
+#   - legacy marker is overwritten by B; only the dict can save A.
+REPO_A="/tmp/sazo-ci-invalidate-mdict-a-$$"
+REPO_B="/tmp/sazo-ci-invalidate-mdict-b-$$"
+rm -rf "$REPO_A" "$REPO_B"
+mkdir -p "$REPO_A" "$REPO_B"
+for r in "$REPO_A" "$REPO_B"; do (
+    cd "$r"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    git commit -q --allow-empty -m init
+); done
+mark_ci_passed "t12p" "$REPO_A"
+# Pre fires once on the chain — must populate dict for repoA AND repoB.
+run_hook_pre "{\"session_id\":\"t12p\",\"cwd\":\"$REPO_A\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $REPO_A commit -m a-code && git -C $REPO_A commit -m a-docs && git -C $REPO_B commit -m b-docs\"}}" >/dev/null
+# Verify dict populated (regression guard for empty-stdin jq bug).
+DICT=$(bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_get 't12p' '.pre_commit_markers' '$REPO_A'
+")
+if [ -n "$DICT" ] && [ "$DICT" != "null" ]; then
+    PASS=$((PASS + 1)); echo "  ✓ 12p-dict. .pre_commit_markers dict populated on first segment (bootstrap from absent state)"
+else
+    FAIL=$((FAIL + 1)); echo "  ✗ 12p-dict. dict still null (Codex round 13 bug: empty-stdin jq pipeline)"
+fi
+
+# Now actually create the commits — repoA gets code FIRST then docs, repoB docs.
+( cd "$REPO_A" && echo 'package main' > foo.go && git add foo.go && git commit -q -m a-code )
+( cd "$REPO_A" && echo doc > A.md && git add A.md && git commit -q -m a-docs )
+( cd "$REPO_B" && echo doc > B.md && git add B.md && git commit -q -m b-docs )
+bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_set_str 't12p' '.ci_passed_at' '2026-05-09T10:00:00+0900' '$REPO_A'
+"
+run_hook_post "{\"session_id\":\"t12p\",\"cwd\":\"$REPO_A\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $REPO_A commit -m a-code && git -C $REPO_A commit -m a-docs && git -C $REPO_B commit -m b-docs\"},\"tool_response\":{\"exit_code\":0}}" >/dev/null
+val=$(get_ci_passed_at "t12p" "$REPO_A")
+assert_null "$val" "12p. multi-commit in same repo + cross-repo chain — dict-based marker covers earlier code commit (HEAD is docs-only)"
+rm -rf "$REPO_A" "$REPO_B"
+
 # 13. PreToolUse Task subagent_type=plan-executor + ci_passed_at!=null → invalidate
 reset_state
 mark_ci_passed "t13" "/tmp"
