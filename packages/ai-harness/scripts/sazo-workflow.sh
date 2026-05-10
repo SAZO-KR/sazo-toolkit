@@ -83,6 +83,20 @@ EOF
         | awk '!seen[$0]++'
 }
 
+# _require_arg_value: value-taking option 다음에 값이 실제로 있는지 확인.
+# 인자 부재 시 stderr + rc=1. caller는 `|| return 1` 으로 escape.
+# Codex PR #29 round 3 P2: `--session` 같은 옵션 뒤 값이 없을 때 `shift 2`가 실패해도
+# bash가 args를 변경하지 않아 while loop가 무한 회전 (set -e 미사용 환경).
+# 호출자는 shift 전에 이 helper 통과시켜야 함.
+_require_arg_value() {
+    local opt="$1"; shift
+    if [ "$#" -lt 1 ]; then
+        echo "sazo-workflow: option '$opt' requires a value" >&2
+        return 1
+    fi
+    return 0
+}
+
 # Validate positive integer (defense-in-depth — prevents arithmetic injection
 # via $days/$last reaching `date -d`, `awk` etc.).
 _require_positive_int() {
@@ -189,7 +203,7 @@ cmd_status() {
     local sid_arg=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --session) sid_arg="${2:-}"; shift 2;;
+            --session) shift; _require_arg_value "--session" "$@" || return 1; sid_arg="$1"; shift;;
             --json) JSON_MODE=1; shift;;
             *) shift;;
         esac
@@ -254,8 +268,8 @@ cmd_history() {
     local sid_arg="" last=20
     while [ $# -gt 0 ]; do
         case "$1" in
-            --session) sid_arg="${2:-}"; shift 2;;
-            --last) last="${2:-20}"; shift 2;;
+            --session) shift; _require_arg_value "--session" "$@" || return 1; sid_arg="$1"; shift;;
+            --last) shift; _require_arg_value "--last" "$@" || return 1; last="$1"; shift;;
             --json) JSON_MODE=1; shift;;
             *) shift;;
         esac
@@ -277,7 +291,7 @@ cmd_why_blocked() {
     local sid_arg=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --session) sid_arg="${2:-}"; shift 2;;
+            --session) shift; _require_arg_value "--session" "$@" || return 1; sid_arg="$1"; shift;;
             --json) JSON_MODE=1; shift;;
             *) shift;;
         esac
@@ -366,8 +380,8 @@ cmd_audit() {
     local last=50 filter=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --last) last="${2:-50}"; shift 2;;
-            --filter) filter="${2:-}"; shift 2;;
+            --last) shift; _require_arg_value "--last" "$@" || return 1; last="$1"; shift;;
+            --filter) shift; _require_arg_value "--filter" "$@" || return 1; filter="$1"; shift;;
             --json) JSON_MODE=1; shift;;
             *) shift;;
         esac
@@ -406,7 +420,7 @@ cmd_sessions() {
     local days=7
     while [ $# -gt 0 ]; do
         case "$1" in
-            --days) days="${2:-7}"; shift 2;;
+            --days) shift; _require_arg_value "--days" "$@" || return 1; days="$1"; shift;;
             --json) JSON_MODE=1; shift;;
             *) shift;;
         esac
@@ -446,7 +460,7 @@ cmd_stats() {
     local days=30
     while [ $# -gt 0 ]; do
         case "$1" in
-            --days) days="${2:-30}"; shift 2;;
+            --days) shift; _require_arg_value "--days" "$@" || return 1; days="$1"; shift;;
             --json) JSON_MODE=1; shift;;
             *) shift;;
         esac

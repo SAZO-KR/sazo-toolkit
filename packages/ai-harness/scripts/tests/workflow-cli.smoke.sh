@@ -402,6 +402,23 @@ else
     fail "17." "rc=$RC gnu=$gnu_ok bsd=$bsd_ok"
 fi
 
+# 18. value-taking option without value must not hang (Codex PR #29 round 3 P2)
+# `--session` / `--last` / `--days` / `--filter` 인자 없이 호출 시 빠르게 rc=1 + stderr.
+# 이전 패턴 (`shift 2`)은 args 1개 남았을 때 실패해도 args 변경 안 해서 while 무한 loop.
+# timeout 으로 hang 검출 — 정상 동작은 1초 안에 끝남.
+for opt_case in "status --session" "history --last" "audit --filter" "sessions --days" "stats --days"; do
+    set -- $opt_case
+    sub="$1"; opt="$2"
+    OUT_18=$(SAZO_STATE_DIR="$TMP_STATE" timeout 3 "$CLI" "$sub" "$opt" 2>&1)
+    rc_18=$?
+    if [ "$rc_18" != "124" ] && [ "$rc_18" != "0" ] \
+        && echo "$OUT_18" | grep -qi "requires a value"; then
+        pass "18.$sub$opt $opt 인자 누락 → rc=$rc_18 + 'requires a value' (no hang)"
+    else
+        fail "18.$sub$opt" "rc=$rc_18 (124=hung) out=$OUT_18"
+    fi
+done
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"
