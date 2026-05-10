@@ -975,10 +975,50 @@ parse_verdict_footer() {
 # _is_doc_only_path: doc/markdown 전용 경로면 0 (skip 대상). 우선 평가 — 호출자는
 # _is_doc_only_path 먼저 → true면 invalidate skip. 그래야 docs/foo.go 처럼
 # 코드 확장자라도 docs 경로에 있으면 docs로 다룸 (Risk R2 완화).
+#
+# Codex PR #30 round 2 P2: Edit/Write payload는 absolute path. 절대 경로에서
+# `*/docs/*`만 매치하면 `/home/me/docs/proj/src/foo.go` 같은 워크스페이스 상위에
+# `docs` 디렉토리가 있는 경우 코드 파일도 docs로 오인되어 invalidate가 누락된다.
+# 따라서 입력 경로가 absolute면 가능한 한 repo root(또는 SAZO_CWD) 기준 relative로
+# 정규화 후 매칭한다. 호출자는 file_path만 넘기고 SAZO_CWD/SAZO_REPO_ROOT 환경
+# 변수로 base를 추론.
 _is_doc_only_path() {
-    case "$1" in
+    local p="$1"
+    # extension은 위치 무관 — 먼저 처리.
+    case "$p" in
         *.md) return 0 ;;
-        docs/*|*/docs/*) return 0 ;;
+    esac
+    # absolute path → repo root 기준 relative로 변환.
+    # Codex PR #30 round 2 P2: SAZO_CWD가 repo 안의 임의 subdir(또는 repo의
+    # parent)일 수 있어 SAZO_CWD를 base로 쓰면 `~/docs/proj/src/foo.go`
+    # (cwd=`~`) 같은 경로가 `docs/proj/src/foo.go`로 normalize되어 docs/*에
+    # 잘못 매칭됨. git rev-parse로 실제 repo root를 우선 사용한다.
+    if [ "${p#/}" != "$p" ]; then
+        local base="${SAZO_REPO_ROOT:-}"
+        if [ -z "$base" ]; then
+            # SAZO_REPO_ROOT 미지정 → SAZO_CWD에서 git repo root 추론.
+            base=$(git -C "${SAZO_CWD:-.}" rev-parse --show-toplevel 2>/dev/null || true)
+        fi
+        if [ -z "$base" ]; then
+            base="${SAZO_CWD:-}"  # 마지막 fallback
+        fi
+        if [ -n "$base" ] && [ -d "$base" ]; then
+            local resolved_base
+            resolved_base=$(cd "$base" 2>/dev/null && pwd -P) || resolved_base="$base"
+            case "$p" in
+                "$resolved_base"/*) p="${p#$resolved_base/}" ;;
+                "$base"/*) p="${p#$base/}" ;;
+                *)
+                    # path가 base 밖 → 다른 repo 또는 외부 파일. 보수적으로
+                    # absolute path 그대로 두면 docs/* 매칭 안 됨 → 코드 취급
+                    # (invalidate). 안전 default.
+                    ;;
+            esac
+        fi
+    fi
+    # relative 경로 기준 매칭 — repo root에서 출발하는 docs/* 만 doc-only로 인정.
+    case "$p" in
+        docs/*) return 0 ;;
         *) return 1 ;;
     esac
 }

@@ -155,7 +155,12 @@ handle_post() {
             # 호출자가 file_path 인자를 jq에서 추출. notebook_path 도 cover.
             local edit_file_path
             edit_file_path=$(echo "$SAZO_TOOL_INPUT" | jq -r '.file_path // .notebook_path // ""' 2>/dev/null)
-            ci_invalidate_if_code_changed "$SAZO_SESSION_ID" "$SAZO_CWD" "$edit_file_path" "edit"
+            # Codex PR #30 round 2 P2: _is_doc_only_path 가 absolute path를 repo
+            # root 기준 relative로 변환하기 위해 SAZO_REPO_ROOT export.
+            local _edit_repo_root
+            _edit_repo_root=$(git -C "$SAZO_CWD" rev-parse --show-toplevel 2>/dev/null)
+            SAZO_REPO_ROOT="${_edit_repo_root:-$SAZO_CWD}" \
+                ci_invalidate_if_code_changed "$SAZO_SESSION_ID" "$SAZO_CWD" "$edit_file_path" "edit"
             ;;
         Bash)
             # CI detection: 프로젝트 CLAUDE.md의 CI 커맨드와 정확 매치 시만 ci 마킹.
@@ -374,8 +379,24 @@ EOF
                     local cur_cp
                     cur_cp=$(state_get "$SAZO_SESSION_ID" ".ci_passed_at" "$SAZO_CWD")
                     if [ -n "$cur_cp" ] && [ "$cur_cp" != "null" ]; then
+                        # Codex PR #30 P2: `git -C <path> commit` runs git in <path>,
+                        # not SAZO_CWD. Extract `-C <path>` from cmd and use that as
+                        # the diff target. Without this, staged code in the actual
+                        # target repo is invisible to our defense layer.
+                        local git_target="$SAZO_CWD"
+                        local c_path
+                        c_path=$(printf '%s' "$cmd" \
+                            | sed -E -n 's/.*[[:space:]]-C[[:space:]]+([^[:space:]]+).*/\1/p' \
+                            | head -1)
+                        if [ -n "$c_path" ]; then
+                            # Resolve relative -C path against SAZO_CWD
+                            case "$c_path" in
+                                /*) git_target="$c_path" ;;
+                                *) git_target="$SAZO_CWD/$c_path" ;;
+                            esac
+                        fi
                         local repo_root
-                        repo_root=$(git -C "$SAZO_CWD" rev-parse --show-toplevel 2>/dev/null)
+                        repo_root=$(git -C "$git_target" rev-parse --show-toplevel 2>/dev/null)
                         if [ -n "$repo_root" ]; then
                             local has_code_staged=0
                             # `--name-status -M`: 각 라인 = `<status>\t<path>` 또는
