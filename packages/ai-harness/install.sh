@@ -605,8 +605,12 @@ sync_workflow_cli() {
     if [ -L "$target" ] && [ "$(readlink "$target")" = "$source" ]; then
         :  # already correct
     elif [ -e "$target" ] && [ ! -L "$target" ]; then
+        # Warn-and-skip: returning non-zero would abort install.sh under `set -e`,
+        # so users with an existing wrapper/binary at this path could no longer
+        # update the harness (Codex P2 — install.sh runs `sync_workflow_cli` as a
+        # bare command, so any non-zero exit propagates).
         echo "  WARN: $target exists and is not a symlink — skipping CLI install." >&2
-        return 1
+        return 0
     else
         ln -sfn "$source" "$target"
         echo "  Linked: $target -> $source"

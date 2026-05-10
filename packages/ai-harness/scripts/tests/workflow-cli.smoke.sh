@@ -302,13 +302,17 @@ if [ -L "$target" ] && [ "$(readlink "$target")" = "$expected_link" ]; then
     if [ -L "$target" ] \
         && [ "$(readlink "$target")" = "$expected_link" ] \
         && [ "$invoke_sync_rc2" = "0" ]; then
-        # Negative case: replace link with regular file, expect rc=1 + warn
+        # Negative case: replace link with regular file, expect rc=0 + warn
+        # (must NOT abort under install.sh's `set -e`).
         rm -f "$target"
         echo "stub" > "$target"
         invoke_sync_negative_rc=0
         STDERR_OUT=$(invoke_sync 2>&1 1>/dev/null) || invoke_sync_negative_rc=$?
-        if [ "$invoke_sync_negative_rc" != "0" ] && echo "$STDERR_OUT" | grep -qi "warn"; then
-            pass "13. sync_workflow_cli: symlink + idempotent + non-symlink warn (rc=1)"
+        # Existing stub must remain (skipped, not overwritten).
+        if [ "$invoke_sync_negative_rc" = "0" ] \
+            && echo "$STDERR_OUT" | grep -qi "warn" \
+            && [ -f "$target" ] && [ ! -L "$target" ]; then
+            pass "13. sync_workflow_cli: symlink + idempotent + non-symlink warn (rc=0, no abort)"
         else
             fail "13. negative case" "rc=$invoke_sync_negative_rc stderr=$STDERR_OUT"
         fi

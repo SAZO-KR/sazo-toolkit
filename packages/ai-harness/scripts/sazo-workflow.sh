@@ -171,8 +171,7 @@ resolve_state_file() {
     while IFS= read -r f; do
         [ -z "$f" ] && continue
         local mt
-        mt=$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f" 2>/dev/null)
-        [ -z "$mt" ] && continue
+        mt=$(_file_mtime "$f") || continue
         if [ "$mt" -gt "$newest_mt" ]; then
             newest_mt="$mt"
             newest="$f"
