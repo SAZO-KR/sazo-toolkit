@@ -613,6 +613,47 @@ val=$(get_ci_passed_at "t11s" "$WORK_REPO")
 assert_null "$val" "11s. -C extraction bound to commit segment (chain 의 다른 -C 우회 차단)"
 rm -rf "$WORK_REPO" "$OTHER_REPO"
 
+# 11s2. Quoted global option value (Codex PR #30 round 10 P2).
+# `git -c user.name='Bot User' commit foo.go -m x` — `'Bot User'` 안 공백이
+# 옵션 토큰 정규식을 깨서 commit 도달 못함 → defense 우회. 새 GIT_OPTS_RE 는
+# single/double quoted run 도 옵션 값으로 인정.
+WORK_REPO="/tmp/sazo-ci-invalidate-quoted-opt-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    echo "package main" > foo.go
+    git add foo.go
+    git commit -q -m init
+    echo "// edit" >> foo.go
+)
+mark_ci_passed "t11s2" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11s2\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -c user.name='Bot User' -C $WORK_REPO commit foo.go -m x\"}}" >/dev/null
+val=$(get_ci_passed_at "t11s2" "$WORK_REPO")
+assert_null "$val" "11s2. ci_passed_at invalidated by 'git -c user.name=<quoted>' commit (quoted value with internal space)"
+rm -rf "$WORK_REPO"
+
+# 11s3. Quoted opt value + `&& gh pr create` chain — opaque-chain guard 도 동일 regex 사용.
+WORK_REPO="/tmp/sazo-ci-invalidate-quoted-prchain-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    echo "package main" > foo.go
+    git add foo.go
+    git commit -q -m init
+    echo "// edit" >> foo.go
+)
+mark_ci_passed "t11s3" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11s3\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -c user.name=\\\"Bot User\\\" -C $WORK_REPO commit -am quoted && gh pr create --title quoted\"}}" >/dev/null 2>&1
+val=$(get_ci_passed_at "t11s3" "$WORK_REPO")
+assert_null "$val" "11s3. opaque-chain guard catches 'git -c name=\"quoted value\" commit -am ... && gh pr create'"
+rm -rf "$WORK_REPO"
+
 # 11t. Pathspec commit form (Codex PR #30 round 8 P2)
 # `git commit foo.go -m x` — git docs: `git commit [<pathspec>...]`. 기본 동작은
 # `--only` 로, working-tree 의 해당 path 변경을 stage 없이 직접 commit. 사전 `git add`

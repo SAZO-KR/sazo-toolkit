@@ -36,6 +36,25 @@ read_hook_payload
 
 state_init "$SAZO_SESSION_ID" "$SAZO_CWD" "$SAZO_MODEL"
 
+# ----- shared regex: git invocation chain before subcommand -----
+#
+# Codex PR #30 round 10 P2: prior precision regex `[^-[:space:]][^[:space:]]*`
+# only matched whitespace-free option values, so `git -c user.name='Bot User'
+# commit` (quoted value with internal spaces) split into multiple whitespace
+# tokens and the chain never reached `commit`/`add`/`rm`/`mv`. Real shells
+# accept quoted values (`git -h` documents `-c <name>=<value>`), so the
+# trigger silently missed them and a same-line `gh pr create` saw stale
+# `ci_passed_at`. ERE cannot model balanced quoting cleanly, so instead of
+# precision-modeling each option/value pair we accept any sequence of tokens
+# between `git` and the target subcommand. Chain segmentation (`tr ';|&'
+# '\n'`) at the call sites already constrains matches to a single git
+# invocation, and over-matching here is fail-safe (extra invalidate vs.
+# silent bypass). Use `[[:space:]].*` rather than `.*` to ensure at least one
+# token (i.e. at least one option) sits between `git` and the subcommand —
+# `git commit` already matches via the leading `[[:space:]]+(.*[[:space:]]+)?`
+# zero-token alternation in the build below.
+GIT_OPTS_RE="(.*[[:space:]]+)?"
+
 # ----- soft warn helper -----
 # stage별 카운터 분리 — research/plan/approval 동시 fail 시 한 Write 호출에서
 # 카운터가 3번 증가해 즉시 block되는 버그 방지.
@@ -191,7 +210,7 @@ handle_post() {
             # for code files and invalidate if any.
             if [ "$exit_code" = "0" ] \
                 && [ "${SAZO_DISABLE_CI_INVALIDATE:-0}" != "1" ] \
-                && echo "$cmd" | grep -qE '(^|[[:space:]&|;()])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*commit\b'; then
+                && echo "$cmd" | grep -qE "(^|[[:space:]&|;()])git[[:space:]]+${GIT_OPTS_RE}commit\b"; then
                 local cur_cp_post
                 cur_cp_post=$(state_get "$SAZO_SESSION_ID" ".ci_passed_at" "$SAZO_CWD")
                 if [ -n "$cur_cp_post" ] && [ "$cur_cp_post" != "null" ]; then
@@ -202,7 +221,7 @@ handle_post() {
                     local git_target_post="$SAZO_CWD"
                     local commit_segment_post c_path_post
                     commit_segment_post=$(printf '%s\n' "$cmd" | tr ';|&' '\n' \
-                        | grep -E '(^|[[:space:]])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*commit\b' \
+                        | grep -E "(^|[[:space:]])git[[:space:]]+${GIT_OPTS_RE}commit\b" \
                         | head -1)
                     if [ -n "$commit_segment_post" ]; then
                         c_path_post=$(printf '%s' "$commit_segment_post" \
@@ -455,7 +474,7 @@ EOF
             # 매칭: `git commit`, 그리고 `git -C <path> commit`, `git -c k=v commit`,
             # `git --git-dir=... commit` 등 global options(-* / --*)가 subcommand 앞에
             # 끼는 케이스 (Codex PR #30 P2 — 누락 시 해당 commit이 invalidate path를 우회).
-            if echo "$cmd" | grep -qE '(^|[[:space:]&|;()])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*commit\b'; then
+            if echo "$cmd" | grep -qE "(^|[[:space:]&|;()])git[[:space:]]+${GIT_OPTS_RE}commit\b"; then
                 if [ "${SAZO_DISABLE_CI_INVALIDATE:-0}" != "1" ]; then
                     local cur_cp
                     cur_cp=$(state_get "$SAZO_SESSION_ID" ".ci_passed_at" "$SAZO_CWD")
@@ -475,7 +494,7 @@ EOF
                         local git_target="$SAZO_CWD"
                         local commit_segment c_path
                         commit_segment=$(printf '%s\n' "$cmd" | tr ';|&' '\n' \
-                            | grep -E '(^|[[:space:]])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*commit\b' \
+                            | grep -E "(^|[[:space:]])git[[:space:]]+${GIT_OPTS_RE}commit\b" \
                             | head -1)
                         if [ -n "$commit_segment" ]; then
                             c_path=$(printf '%s' "$commit_segment" \
@@ -557,7 +576,7 @@ EOF
                                 # Codex PR #30 round 5 P2.
                                 local rm_args_block rm_tokens
                                 rm_args_block=$(printf '%s\n' "$cmd" | tr ';|&' '\n' \
-                                    | grep -E '(^|[[:space:]])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*rm\b' \
+                                    | grep -E "(^|[[:space:]])git[[:space:]]+${GIT_OPTS_RE}rm\b" \
                                     | sed -E 's/.*\brm\b[[:space:]]+//')
                                 rm_tokens=$(printf '%s\n' "$rm_args_block" \
                                     | tr ' ' '\n' \
@@ -590,7 +609,7 @@ EOF_RM
                                 # `git add` 토큰 뒤 단어들을 옵션 제외하고 path로 취급.
                                 local add_args_block
                                 add_args_block=$(printf '%s\n' "$cmd" | tr ';|&' '\n' \
-                                    | grep -E '(^|[[:space:]])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*add\b' \
+                                    | grep -E "(^|[[:space:]])git[[:space:]]+${GIT_OPTS_RE}add\b" \
                                     | sed -E 's/.*\badd\b[[:space:]]+//')
                                 local add_tokens
                                 add_tokens=$(printf '%s\n' "$add_args_block" \
@@ -797,7 +816,7 @@ EOF_PST
                     # 케이스 (commit_segment 안에 -- 또는 non-flag 토큰 존재).
                     local has_opaque=0
                     if echo "$pre_chain" | grep -qE '[[:space:]](&&|\|\||;)[[:space:]]' \
-                        && echo "$pre_chain" | grep -qE '\bgit[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*(add\b|rm\b|mv\b|commit[[:space:]]+-[aA-Za-z]*[aA])'; then
+                        && echo "$pre_chain" | grep -qE "\bgit[[:space:]]+${GIT_OPTS_RE}(add\b|rm\b|mv\b|commit[[:space:]]+-[aA-Za-z]*[aA])"; then
                         has_opaque=1
                     fi
                     if [ "$has_opaque" != "1" ] \
@@ -805,7 +824,7 @@ EOF_PST
                         # Pathspec commit detection in pre_chain.
                         local pre_commit_segment
                         pre_commit_segment=$(printf '%s\n' "$pre_chain" | tr ';|&' '\n' \
-                            | grep -E '(^|[[:space:]])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*commit\b' \
+                            | grep -E "(^|[[:space:]])git[[:space:]]+${GIT_OPTS_RE}commit\b" \
                             | head -1)
                         if [ -n "$pre_commit_segment" ]; then
                             local has_pathspec
