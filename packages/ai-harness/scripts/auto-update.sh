@@ -149,6 +149,32 @@ sync_awake() {
         return 0
     fi
     ln -sfn "$awake_script" "$awake_symlink" 2>>"$LOG_FILE" || true
+    # 신규 사용자에게 PATH 안내. install.sh 만 거치고 auto-update는 받지 않는
+    # 사용자가 없도록 24h throttle로 1회 알림 — `~/.local/bin` 미포함 시.
+    case ":${PATH:-}:" in
+        *":$HOME/.local/bin:"*) ;;
+        *) sync_awake_notify_path_missing ;;
+    esac
+}
+
+# `~/.local/bin` 이 PATH 에 없을 때 SessionStart 출력으로 1회 안내. 24h throttle —
+# auto-update.sh가 매 세션 시작마다 호출되므로 매번 띄우면 noise.
+sync_awake_notify_path_missing() {
+    local throttle="$HOME/.config/sazo-ai-harness/.awake-path-notify-throttle"
+    mkdir -p "$(dirname "$throttle")" 2>/dev/null || true
+    local now last
+    now=$(date +%s)
+    if ! ( set -C; echo "$now" > "$throttle" ) 2>/dev/null; then
+        last=$(cat "$throttle" 2>/dev/null || echo 0)
+        case "$last" in ''|*[!0-9]*) last=0 ;; esac
+        [ $(( now - last )) -lt 86400 ] && return 0
+        echo "$now" > "$throttle"
+    fi
+    cat <<EOF
+ℹ️  [awake] ~/.local/bin 이 PATH 에 없어 'awake' 명령을 찾지 못할 수 있습니다.
+~/.zshrc 또는 ~/.bashrc 에 추가:
+  export PATH=\$HOME/.local/bin:\$PATH
+EOF
 }
 
 # 구 sleep-guard 잔재 자동 정리 — 다른 팀원이 새 버전을 auto-update로 받았을 때
@@ -205,13 +231,19 @@ sync_awake_cleanup_legacy() {
             # 결과 빈 array 매처는 매처에서 제거, 결과 빈 array 키는 키째 제거.
             # 이전 패턴 `.hooks //= {}` + `.hooks.X = ((... // []) | ...)` 은 원래
             # 없던 키를 `[]`로 삽입하는 부작용이 있었음.
+            #
+            # jq 구조 참고: settings.json의 "hooks" 키는 top-level object이며,
+            # 각 hook type (UserPromptSubmit/PostToolUse/Stop)은 matcher object의 array.
+            # 각 matcher는 자체 "hooks" array(command object의 list)를 가짐.
+            # 따라서 `.hooks` 가 두 단계로 nested — 외부 `.hooks[hook_type]` 은
+            # matcher list, 내부 `.hooks` 는 command list.
             if jq '
-                def clean_hook_type(k):
-                    if has("hooks") and (.hooks | type) == "object" and (.hooks | has(k)) then
-                        .hooks[k] = (.hooks[k] | map(
+                def clean_hook_type(hook_type):
+                    if has("hooks") and (.hooks | type) == "object" and (.hooks | has(hook_type)) then
+                        .hooks[hook_type] = (.hooks[hook_type] | map(
                             .hooks = ((.hooks // []) | map(select(.command | test("sazo-caffeinate-session\\.sh") | not)))
                           ) | map(select((.hooks // []) | length > 0)))
-                        | if (.hooks[k] | length) == 0 then del(.hooks[k]) else . end
+                        | if (.hooks[hook_type] | length) == 0 then del(.hooks[hook_type]) else . end
                     else . end;
                 clean_hook_type("UserPromptSubmit")
                 | clean_hook_type("PostToolUse")

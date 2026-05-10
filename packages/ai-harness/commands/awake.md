@@ -42,3 +42,6 @@ awake "${ARGV[@]}"
 - 이 커맨드는 자동으로 발동하지 않음. 사용자가 명시적으로 호출해야 함.
 - TTL이 지나면 caffeinate 자동 종료 → sleep 정상 복귀.
 - 터미널 닫아도 살아있음 (`nohup` + `disown`). 강제 종료: `awake off`.
+- `extend`는 caffeinate `-t` 변경 불가 제약상 기존 프로세스 kill + 신규 시작
+  (~250ms disablesleep drop window 발생). 실 사용엔 영향 없음 (macOS sleep
+  delay > 30s).
