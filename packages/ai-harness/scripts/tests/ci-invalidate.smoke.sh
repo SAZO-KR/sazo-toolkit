@@ -926,6 +926,86 @@ val=$(get_ci_passed_at "t12h" "$WORK_REPO_NM")
 assert_null "$val" "12h. post-commit marker-missing → HEAD-only fallback still invalidates"
 rm -rf "$WORK_REPO_NM"
 
+# 12i. PreToolUse multi-commit chain: first segment in unrelated repo,
+# second commits code in SAZO_CWD repo. Old `head -1` only inspected the
+# first segment → second commit's staged code missed (Codex PR #30 round 11 P2).
+WORK_REPO_MAIN="/tmp/sazo-ci-invalidate-multi-pre-main-$$"
+OTHER_REPO="/tmp/sazo-ci-invalidate-multi-pre-other-$$"
+rm -rf "$WORK_REPO_MAIN" "$OTHER_REPO"
+mkdir -p "$WORK_REPO_MAIN" "$OTHER_REPO"
+(
+    cd "$WORK_REPO_MAIN"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    git commit -q --allow-empty -m init
+    echo 'package main' > foo.go
+    git add foo.go
+)
+(
+    cd "$OTHER_REPO"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    echo doc > README.md
+    git add README.md
+    git commit -q -m doc
+)
+mark_ci_passed "t12i" "$WORK_REPO_MAIN"
+# Chain: first commit targets OTHER_REPO (docs), second commits foo.go in MAIN.
+run_hook_pre "{\"session_id\":\"t12i\",\"cwd\":\"$WORK_REPO_MAIN\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $OTHER_REPO commit -m docs && git commit -m code\"}}" >/dev/null
+val=$(get_ci_passed_at "t12i" "$WORK_REPO_MAIN")
+assert_null "$val" "12i. multi-commit chain pre-hook scans every segment (other-repo docs + main-repo code)"
+rm -rf "$WORK_REPO_MAIN" "$OTHER_REPO"
+
+# 12j. PostToolUse multi-commit chain: same shape, post-hook side.
+WORK_REPO_MAIN="/tmp/sazo-ci-invalidate-multi-post-main-$$"
+OTHER_REPO="/tmp/sazo-ci-invalidate-multi-post-other-$$"
+rm -rf "$WORK_REPO_MAIN" "$OTHER_REPO"
+mkdir -p "$WORK_REPO_MAIN" "$OTHER_REPO"
+(
+    cd "$WORK_REPO_MAIN"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    git commit -q --allow-empty -m init
+)
+(
+    cd "$OTHER_REPO"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    git commit -q --allow-empty -m init
+)
+mark_ci_passed "t12j" "$WORK_REPO_MAIN"
+# Actually run the chain — first commit in OTHER (docs), second in MAIN (code).
+(
+    cd "$OTHER_REPO"
+    echo doc > README.md && git add README.md && git commit -q -m docs
+)
+(
+    cd "$WORK_REPO_MAIN"
+    echo 'package main' > foo.go && git add foo.go && git commit -q -m code
+)
+# Restore ci_passed_at — we want to verify post-hook fallback isolated.
+bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_set_str 't12j' '.ci_passed_at' '2026-05-09T10:00:00+0900' '$WORK_REPO_MAIN'
+"
+run_hook_post "{\"session_id\":\"t12j\",\"cwd\":\"$WORK_REPO_MAIN\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $OTHER_REPO commit -m docs && git commit -m code\"},\"tool_response\":{\"exit_code\":0}}" >/dev/null
+val=$(get_ci_passed_at "t12j" "$WORK_REPO_MAIN")
+assert_null "$val" "12j. multi-commit chain post-hook scans every segment (other-repo docs + main-repo code via HEAD fallback)"
+rm -rf "$WORK_REPO_MAIN" "$OTHER_REPO"
+
+# 12k. PR-chain pathspec scan: first commit -m only, second commit pathspec
+# (no -a, no add) — must trigger opaque-chain block before gh pr create.
+WORK_REPO="/tmp/sazo-ci-invalidate-prchain-pathspec2-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    echo 'package main' > foo.go && git add foo.go && git commit -q -m init
+    echo "// edit" >> foo.go
+)
+mark_ci_passed "t12k" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t12k\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO commit --allow-empty -m wrap && git -C $WORK_REPO commit foo.go -m pathspec && gh pr create --title x\"}}" >/dev/null 2>&1
+val=$(get_ci_passed_at "t12k" "$WORK_REPO")
+assert_null "$val" "12k. PR-chain pathspec scan finds 2nd-segment pathspec commit (head -1 ignored 1st-only)"
+rm -rf "$WORK_REPO"
+
 # 13. PreToolUse Task subagent_type=plan-executor + ci_passed_at!=null → invalidate
 reset_state
 mark_ci_passed "t13" "/tmp"

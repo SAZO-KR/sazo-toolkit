@@ -214,62 +214,63 @@ handle_post() {
                 local cur_cp_post
                 cur_cp_post=$(state_get "$SAZO_SESSION_ID" ".ci_passed_at" "$SAZO_CWD")
                 if [ -n "$cur_cp_post" ] && [ "$cur_cp_post" != "null" ]; then
-                    # Resolve git target same way as pre-hook (-C respect).
-                    # Codex PR #30 round 7 P2: bind `-C` extraction to the commit
-                    # invocation segment (chain 안 다른 git 호출의 `-C` 가 잘못
-                    # 매치되지 않도록).
-                    local git_target_post="$SAZO_CWD"
-                    local commit_segment_post c_path_post
-                    commit_segment_post=$(printf '%s\n' "$cmd" | tr ';|&' '\n' \
-                        | grep -E "(^|[[:space:]])git[[:space:]]+${GIT_OPTS_RE}commit\b" \
-                        | head -1)
-                    if [ -n "$commit_segment_post" ]; then
+                    # Codex PR #30 round 11 P2: iterate **every** `git commit`
+                    # segment in the Bash chain. Prior `head -1` made the
+                    # defense inspect only the first commit invocation; if that
+                    # one targeted an unrelated repo (`git -C /tmp/other commit
+                    # -m docs`) or was docs-only, a later in-repo code commit
+                    # (`&& git commit -m code && gh pr create`) bypassed the
+                    # invalidation entirely.
+                    local invalidated_post=0
+                    local marker_json marker_head marker_repo
+                    marker_json=$(state_get "$SAZO_SESSION_ID" ".pre_commit_marker" "$SAZO_CWD" 2>/dev/null)
+                    if [ -n "$marker_json" ] && [ "$marker_json" != "null" ]; then
+                        marker_head=$(echo "$marker_json" | jq -r '.head // ""' 2>/dev/null)
+                        marker_repo=$(echo "$marker_json" | jq -r '.repo_root // ""' 2>/dev/null)
+                    fi
+
+                    # Iterate every commit segment. tr-newline split keeps each
+                    # `git ... commit ...` invocation on its own line so we can
+                    # extract its own `-C` and inspect its own target repo.
+                    local commit_segment_post
+                    while IFS= read -r commit_segment_post; do
+                        [ -z "$commit_segment_post" ] && continue
+                        local git_target_post="$SAZO_CWD" c_path_post
                         c_path_post=$(printf '%s' "$commit_segment_post" \
                             | sed -E -n 's/.*[[:space:]]-C[[:space:]]+([^[:space:]]+).*/\1/p' \
                             | head -1)
-                    else
-                        c_path_post=""
-                    fi
-                    if [ -n "$c_path_post" ]; then
-                        case "$c_path_post" in
-                            /*) git_target_post="$c_path_post" ;;
-                            *) git_target_post="$SAZO_CWD/$c_path_post" ;;
-                        esac
-                    fi
-                    local repo_root_post
-                    repo_root_post=$(git -C "$git_target_post" rev-parse --show-toplevel 2>/dev/null)
-                    if [ -n "$repo_root_post" ]; then
-                        local has_code_committed=0
-                        # Codex PR #30 round 9 P2: scan every commit created by this
-                        # Bash invocation. Pre-hook stored repo HEAD before the cmd
-                        # ran; range `<marker>..HEAD` covers all new commits even when
-                        # one Bash chains multiple commits and the last one is docs-only
-                        # (`commit code && commit docs`). Without this, the prior
-                        # `diff-tree --root HEAD` only inspected the final commit and
-                        # missed the earlier code commit.
-                        local marker_json marker_head marker_repo commit_range=""
-                        marker_json=$(state_get "$SAZO_SESSION_ID" ".pre_commit_marker" "$SAZO_CWD" 2>/dev/null)
-                        if [ -n "$marker_json" ] && [ "$marker_json" != "null" ]; then
-                            marker_head=$(echo "$marker_json" | jq -r '.head // ""' 2>/dev/null)
-                            marker_repo=$(echo "$marker_json" | jq -r '.repo_root // ""' 2>/dev/null)
-                            # Only trust marker when same repo and ref still resolves
-                            # (a commit/reset between pre and post could orphan it).
-                            if [ -n "$marker_head" ] \
-                                && [ "$marker_repo" = "$repo_root_post" ] \
-                                && git -C "$repo_root_post" cat-file -e "$marker_head" 2>/dev/null; then
-                                # marker..HEAD enumerates only commits created after
-                                # pre-hook fired. Same as HEAD when no new commits.
-                                commit_range="${marker_head}..HEAD"
-                            fi
+                        if [ -n "$c_path_post" ]; then
+                            case "$c_path_post" in
+                                /*) git_target_post="$c_path_post" ;;
+                                *) git_target_post="$SAZO_CWD/$c_path_post" ;;
+                            esac
                         fi
-                        # Fallback: marker missing/stale → inspect HEAD only (legacy
-                        # behavior; covers single-commit case which is the common path).
+                        local repo_root_post
+                        repo_root_post=$(git -C "$git_target_post" rev-parse --show-toplevel 2>/dev/null)
+                        [ -z "$repo_root_post" ] && continue
+
+                        # Codex PR #30 round 9 P2: scan every new commit created
+                        # by this Bash invocation, not just HEAD. Pre-hook stored
+                        # repo HEAD before the cmd ran; range `<marker>..HEAD`
+                        # covers all commits even when the last is docs-only.
+                        # Marker is per-session-state and recorded once per pre,
+                        # so it's only authoritative for its own repo. For other
+                        # repos in the chain (e.g. `git -C /tmp/other commit`),
+                        # fall back to HEAD-only — that's the legacy behavior and
+                        # is sufficient for the common single-commit-per-repo case.
+                        local commit_range=""
+                        if [ -n "${marker_head:-}" ] \
+                            && [ "${marker_repo:-}" = "$repo_root_post" ] \
+                            && git -C "$repo_root_post" cat-file -e "$marker_head" 2>/dev/null; then
+                            commit_range="${marker_head}..HEAD"
+                        fi
                         local diff_args
                         if [ -n "$commit_range" ]; then
                             diff_args=("diff-tree" "--no-commit-id" "--name-only" "-r" "$commit_range")
                         else
                             diff_args=("diff-tree" "--no-commit-id" "--name-only" "-r" "--root" "HEAD")
                         fi
+                        local has_code_committed=0
                         while IFS= read -r p; do
                             [ -z "$p" ] && continue
                             if _is_doc_only_path "$p"; then continue; fi
@@ -277,11 +278,16 @@ handle_post() {
                         done < <(git -C "$repo_root_post" "${diff_args[@]}" 2>/dev/null)
                         if [ "$has_code_committed" = "1" ]; then
                             ci_invalidate_unconditional "$SAZO_SESSION_ID" "$SAZO_CWD" "git_commit_post"
+                            invalidated_post=1
+                            break
                         fi
-                    fi
+                    done < <(printf '%s\n' "$cmd" | tr ';|&' '\n' \
+                        | grep -E "(^|[[:space:]])git[[:space:]]+${GIT_OPTS_RE}commit\b")
+
                     # Clear marker regardless of outcome so a later unrelated commit
                     # in the same session does not reuse a stale ref.
                     state_set_json "$SAZO_SESSION_ID" ".pre_commit_marker" "null" "$SAZO_CWD" 2>/dev/null || true
+                    : "$invalidated_post"  # reserved for future audit
                 fi
             fi
             ;;
@@ -479,40 +485,37 @@ EOF
                     local cur_cp
                     cur_cp=$(state_get "$SAZO_SESSION_ID" ".ci_passed_at" "$SAZO_CWD")
                     if [ -n "$cur_cp" ] && [ "$cur_cp" != "null" ]; then
-                        # Codex PR #30 P2: `git -C <path> commit` runs git in <path>,
-                        # not SAZO_CWD. Extract `-C <path>` from cmd and use that as
-                        # the diff target. Without this, staged code in the actual
-                        # target repo is invisible to our defense layer.
+                        # Codex PR #30 round 11 P2: iterate **every** `git commit`
+                        # segment in the Bash chain. Prior `head -1` only inspected
+                        # the first commit invocation, so a chain like
+                        #   git -C /tmp/other commit -m docs && git commit -m code && gh pr create
+                        # let the second (in-repo, code-bearing) commit slip past
+                        # both the staged check and the pathspec check.
                         #
-                        # Codex PR #30 round 7 P2: `-C` extraction must be bound to
-                        # the `git commit` invocation. cmd 가 `git commit -m x &&
-                        # git -C /tmp/other status` 같이 다른 git 호출을 포함하면
-                        # greedy 추출이 잘못된 `-C` 를 잡아 staged diff 가 엉뚱한
-                        # repo 에서 조회되어 invalidate 가 누락됨. → cmd 를 chain
-                        # 단위로 분리한 뒤 `git commit` 토큰을 포함하는 segment
-                        # 안에서만 `-C` 를 찾는다.
-                        local git_target="$SAZO_CWD"
-                        local commit_segment c_path
-                        commit_segment=$(printf '%s\n' "$cmd" | tr ';|&' '\n' \
-                            | grep -E "(^|[[:space:]])git[[:space:]]+${GIT_OPTS_RE}commit\b" \
-                            | head -1)
-                        if [ -n "$commit_segment" ]; then
+                        # Each iteration resolves its own `-C <path>` and inspects
+                        # that segment's repo. Chain-wide analysis (rm/add tokens,
+                        # redirect/tee targets) is shared because those primitives
+                        # are not commit-segment-bound; they're run against the
+                        # SAZO_CWD repo on the first iteration that finds a valid
+                        # repo_root and short-circuit on first match.
+                        local has_code_staged=0
+                        local marker_repo_root="" marker_pre_head=""
+                        local commit_segment
+                        while IFS= read -r commit_segment; do
+                            [ -z "$commit_segment" ] && continue
+                            local git_target="$SAZO_CWD" c_path
                             c_path=$(printf '%s' "$commit_segment" \
                                 | sed -E -n 's/.*[[:space:]]-C[[:space:]]+([^[:space:]]+).*/\1/p' \
                                 | head -1)
-                        else
-                            c_path=""
-                        fi
-                        if [ -n "$c_path" ]; then
-                            # Resolve relative -C path against SAZO_CWD
-                            case "$c_path" in
-                                /*) git_target="$c_path" ;;
-                                *) git_target="$SAZO_CWD/$c_path" ;;
-                            esac
-                        fi
-                        local repo_root
-                        repo_root=$(git -C "$git_target" rev-parse --show-toplevel 2>/dev/null)
-                        if [ -n "$repo_root" ]; then
+                            if [ -n "$c_path" ]; then
+                                case "$c_path" in
+                                    /*) git_target="$c_path" ;;
+                                    *) git_target="$SAZO_CWD/$c_path" ;;
+                                esac
+                            fi
+                            local repo_root
+                            repo_root=$(git -C "$git_target" rev-parse --show-toplevel 2>/dev/null)
+                            if [ -n "$repo_root" ]; then
                             # Codex PR #30 round 9 P2: pre-commit HEAD marker.
                             # 한 Bash invocation 내 multi-commit (`commit code &&
                             # commit docs`) 의 마지막이 docs-only 면 PostToolUse
@@ -522,13 +525,17 @@ EOF
                             # `<marker>..HEAD` 범위로 모든 새 commit 검사 가능.
                             local pre_commit_head
                             pre_commit_head=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo "")
+                            # Marker stored once per segment that resolves to a
+                            # real repo; later iterations overwrite. For multi-
+                            # commit chains the LAST segment's repo wins, which
+                            # matches post-hook expectation that marker reflects
+                            # the most recent pre-commit baseline.
                             if [ -n "$pre_commit_head" ]; then
                                 state_set_json "$SAZO_SESSION_ID" \
                                     ".pre_commit_marker" \
                                     "{\"head\":\"$pre_commit_head\",\"repo_root\":\"$repo_root\"}" \
                                     "$SAZO_CWD" 2>/dev/null || true
                             fi
-                            local has_code_staged=0
                             # `--name-status -M`: 각 라인 = `<status>\t<path>` 또는
                             # rename/copy의 경우 `R<score>\t<old>\t<new>` (`C<score>` 동일).
                             # `--name-only`만 쓰면 destination만 보여 `git mv src/foo.go
@@ -784,10 +791,16 @@ EOF_PST
                                 fi
                             fi
 
-                            if [ "$has_code_staged" = "1" ]; then
-                                ci_invalidate_unconditional "$SAZO_SESSION_ID" "$SAZO_CWD" "git_commit"
-                            fi
+                            fi  # if [ -n "$repo_root" ]
+                            # Short-circuit outer loop on first hit.
+                            [ "$has_code_staged" = "1" ] && break
+                        done < <(printf '%s\n' "$cmd" | tr ';|&' '\n' \
+                            | grep -E "(^|[[:space:]])git[[:space:]]+${GIT_OPTS_RE}commit\b")
+
+                        if [ "$has_code_staged" = "1" ]; then
+                            ci_invalidate_unconditional "$SAZO_SESSION_ID" "$SAZO_CWD" "git_commit"
                         fi
+                        : "$marker_repo_root $marker_pre_head"  # silence unused
                     fi
                 fi
                 # commit 자체는 fall-through (block 안 함)
@@ -821,12 +834,14 @@ EOF_PST
                     fi
                     if [ "$has_opaque" != "1" ] \
                         && echo "$pre_chain" | grep -qE '[[:space:]](&&|\|\||;)[[:space:]]'; then
-                        # Pathspec commit detection in pre_chain.
+                        # Codex PR #30 round 11 P2: scan **every** commit segment
+                        # for pathspec form, not just the first. A chain like
+                        # `git commit -m docs && git commit foo.go && gh pr create`
+                        # had its second (pathspec) commit ignored when only the
+                        # first was inspected.
                         local pre_commit_segment
-                        pre_commit_segment=$(printf '%s\n' "$pre_chain" | tr ';|&' '\n' \
-                            | grep -E "(^|[[:space:]])git[[:space:]]+${GIT_OPTS_RE}commit\b" \
-                            | head -1)
-                        if [ -n "$pre_commit_segment" ]; then
+                        while IFS= read -r pre_commit_segment; do
+                            [ -z "$pre_commit_segment" ] && continue
                             local has_pathspec
                             has_pathspec=$(printf '%s' "$pre_commit_segment" | awk '
                                 {
@@ -852,8 +867,10 @@ EOF_PST
                                 }')
                             if [ "$has_pathspec" = "1" ]; then
                                 has_opaque=1
+                                break
                             fi
-                        fi
+                        done < <(printf '%s\n' "$pre_chain" | tr ';|&' '\n' \
+                            | grep -E "(^|[[:space:]])git[[:space:]]+${GIT_OPTS_RE}commit\b")
                     fi
                     if [ "$has_opaque" = "1" ]; then
                         local cur_cp_chain
