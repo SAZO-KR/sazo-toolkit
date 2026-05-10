@@ -366,7 +366,10 @@ EOF
             cmd=$(echo "$SAZO_TOOL_INPUT" | jq -r '.command // ""')
             # Plan 04 §3: git commit defense layer. staged 코드 파일 + ci_passed_at!=null
             # → invalidate. commit 자체는 차단 안 함 (PR create 시점에 ci 미통과로 잡힘).
-            if echo "$cmd" | grep -qE '(^|[[:space:]&|;()])git[[:space:]]+commit\b'; then
+            # 매칭: `git commit`, 그리고 `git -C <path> commit`, `git -c k=v commit`,
+            # `git --git-dir=... commit` 등 global options(-* / --*)가 subcommand 앞에
+            # 끼는 케이스 (Codex PR #30 P2 — 누락 시 해당 commit이 invalidate path를 우회).
+            if echo "$cmd" | grep -qE '(^|[[:space:]&|;()])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*commit\b'; then
                 if [ "${SAZO_DISABLE_CI_INVALIDATE:-0}" != "1" ]; then
                     local cur_cp
                     cur_cp=$(state_get "$SAZO_SESSION_ID" ".ci_passed_at" "$SAZO_CWD")
@@ -375,11 +378,34 @@ EOF
                         repo_root=$(git -C "$SAZO_CWD" rev-parse --show-toplevel 2>/dev/null)
                         if [ -n "$repo_root" ]; then
                             local has_code_staged=0
-                            while IFS= read -r staged_f; do
-                                [ -z "$staged_f" ] && continue
-                                if _is_doc_only_path "$staged_f"; then continue; fi
-                                if _is_code_file "$staged_f"; then has_code_staged=1; break; fi
-                            done < <(git -C "$repo_root" diff --cached --name-only --diff-filter=ACMRD 2>/dev/null)
+                            # `--name-status -M`: 각 라인 = `<status>\t<path>` 또는
+                            # rename/copy의 경우 `R<score>\t<old>\t<new>` (`C<score>` 동일).
+                            # `--name-only`만 쓰면 destination만 보여 `git mv src/foo.go
+                            # docs/foo.md` 같은 code→doc rename에서 source(.go) 삭제가
+                            # _is_doc_only_path에 걸려 invalidate가 누락됨 (Codex PR #30 P2).
+                            # 따라서 R/C 라인은 old + new 모두 검사한다.
+                            while IFS= read -r line; do
+                                [ -z "$line" ] && continue
+                                local status path1 path2
+                                status=$(printf '%s' "$line" | cut -f1)
+                                path1=$(printf '%s' "$line" | cut -f2)
+                                path2=$(printf '%s' "$line" | cut -f3)
+                                local check_paths=()
+                                case "$status" in
+                                    R*|C*)
+                                        [ -n "$path1" ] && check_paths+=("$path1")
+                                        [ -n "$path2" ] && check_paths+=("$path2")
+                                        ;;
+                                    *)
+                                        [ -n "$path1" ] && check_paths+=("$path1")
+                                        ;;
+                                esac
+                                local p
+                                for p in "${check_paths[@]}"; do
+                                    if _is_doc_only_path "$p"; then continue; fi
+                                    if _is_code_file "$p"; then has_code_staged=1; break 2; fi
+                                done
+                            done < <(git -C "$repo_root" diff --cached --name-status -M --diff-filter=ACMRD 2>/dev/null)
                             # diff-filter ACMRD: Added/Copied/Modified/Renamed/**Deleted**.
                             # 코드 파일 삭제도 CI 결과를 무효화할 수 있음 (build break,
                             # missing import 등). D 빠지면 `git rm foo.go && git commit`

@@ -284,6 +284,66 @@ val=$(get_ci_passed_at "t11c" "$WORK_REPO")
 assert_exit "0" "$?" "11c. ci_passed_at preserved (docs-only DELETION)"
 rm -rf "$WORK_REPO"
 
+# 11d. git commit + staged RENAME code→doc (Codex PR #30 P2-2) → invalidate
+# `git mv src/foo.go docs/foo.md` 후 commit. --name-only는 dest(.md)만 노출 →
+# _is_doc_only_path에 걸려 invalidate skip되었음. --name-status -M로 source(.go)도 검사.
+WORK_REPO="/tmp/sazo-ci-invalidate-rename-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    mkdir -p src docs
+    echo "package main" > src/foo.go
+    git add src/foo.go
+    git commit -q -m init
+    git mv src/foo.go docs/foo.md
+)
+mark_ci_passed "t11d" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11d\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m rename-to-doc\"}}" >/dev/null
+val=$(get_ci_passed_at "t11d" "$WORK_REPO")
+assert_null "$val" "11d. ci_passed_at invalidated by code→doc RENAME (source .go counts)"
+rm -rf "$WORK_REPO"
+
+# 11e. git commit with global option `git -C <path> commit` (Codex PR #30 P2-1)
+# regex가 `git commit`만 매치하면 -C/--git-dir/-c 등으로 우회 가능.
+WORK_REPO="/tmp/sazo-ci-invalidate-globalopt-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    git commit -q --allow-empty -m init
+    echo "package main" > foo.go
+    git add foo.go
+)
+mark_ci_passed "t11e" "$WORK_REPO"
+# session cwd는 다른 곳, git -C로 repo 지정
+run_hook_pre "{\"session_id\":\"t11e\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO commit -m globalopt\"}}" >/dev/null
+val=$(get_ci_passed_at "t11e" "$WORK_REPO")
+assert_null "$val" "11e. ci_passed_at invalidated by 'git -C <path> commit' (global option matched)"
+rm -rf "$WORK_REPO"
+
+# 11f. `git -c user.name=bot commit` 도 매치
+WORK_REPO="/tmp/sazo-ci-invalidate-cflag-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    git commit -q --allow-empty -m init
+    echo "package main" > bar.go
+    git add bar.go
+)
+mark_ci_passed "t11f" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11f\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -c user.name=bot commit -m cflag\"}}" >/dev/null
+val=$(get_ci_passed_at "t11f" "$WORK_REPO")
+assert_null "$val" "11f. ci_passed_at invalidated by 'git -c k=v commit'"
+rm -rf "$WORK_REPO"
+
 # 12. git commit + staged 비어있음 → ci_passed_at 유지
 WORK_REPO="/tmp/sazo-ci-invalidate-commit3-$$"
 rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
