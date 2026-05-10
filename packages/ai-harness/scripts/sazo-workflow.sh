@@ -368,14 +368,22 @@ cmd_why_blocked() {
         sid=$(resolve_session "" 2>/dev/null) || sid=""
     fi
 
+    # Codex PR #29 round 13 P2: grep | tail 단독으론 truncated JSONL 라인이 매칭 +
+    # 마지막일 때 raw byte 가 emit 되어 `--json` 결과가 invalid. audit/stats 의
+    # `fromjson?` 패턴과 통일 — grep 은 후보 좁히기로만 쓰고 jq 가 valid 라인만 통과.
+    # `--arg sid "$sid"` 로 사용자 입력을 안전 전달 (regex meta 영향 없음).
     local last_block
     if [ -n "$sid" ]; then
-        # JSON Lines: filter on "sid":"<sid>" substring. sid_arg는 사용자 입력이라
-        # grep -F로 fixed-string 매칭 (regex meta 안전).
+        # 1차 grep 으로 stage_block 라인 좁힌 뒤, jq 가 parse + sid 정확 매칭 +
+        # 마지막 라인 픽업. malformed/missing-sid 라인은 자동 drop.
         last_block=$(grep '"event":"stage_block"' "$AUDIT_LOG" 2>/dev/null \
-            | grep -F "\"sid\":\"$sid\"" | tail -1)
+            | jq -cR --arg sid "$sid" \
+                'fromjson? | select(. != null and .sid == $sid)' 2>/dev/null \
+            | tail -1)
     else
-        last_block=$(grep '"event":"stage_block"' "$AUDIT_LOG" 2>/dev/null | tail -1)
+        last_block=$(grep '"event":"stage_block"' "$AUDIT_LOG" 2>/dev/null \
+            | jq -cR 'fromjson? | select(. != null)' 2>/dev/null \
+            | tail -1)
     fi
 
     if [ -z "$last_block" ]; then

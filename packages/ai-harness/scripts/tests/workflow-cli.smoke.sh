@@ -577,6 +577,29 @@ else
 fi
 rm -rf "$CTRL_PARENT"
 
+# 26d. why-blocked --json must skip malformed JSON lines (Codex PR #29 round 13 P2)
+# 이전엔 `grep | tail` 로 raw 라인 emit → truncated stage_block 라인이 있으면
+# `why-blocked --json` 결과가 invalid JSON. 모든 --json 경로 일관성 가드.
+mkdir -p "$TMP_STATE"
+rm -f "$TMP_STATE/audit.log"
+# 1) valid stage_block (이전 라인)
+printf '{"ts":"2026-05-09T11:00:00+0900","event":"stage_block","sid":"sX","stage":"ci","status":"blocked","by":"hook","reason":"valid"}\n' \
+    >> "$TMP_STATE/audit.log"
+# 2) malformed stage_block (truncated JSON, sid match) — append 가장 마지막.
+# grep | tail 만으로는 이 truncated 라인을 마지막으로 골라 raw byte emit → invalid JSON.
+printf '{"event":"stage_block","sid":"sX","stage":"plan","reaso\n' \
+    >> "$TMP_STATE/audit.log"
+OUT_26d=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" why-blocked --session sX --json 2>&1)
+rc_26d=$?
+# rc=2 (blocked, has data), 출력은 단일 valid JSON line (truncated 라인 skip).
+if [ "$rc_26d" = "2" ] \
+    && printf '%s' "$OUT_26d" | jq -e '.event == "stage_block" and .reason == "valid"' >/dev/null 2>&1; then
+    pass "26d. why-blocked --json: malformed lines skipped, valid one returned"
+else
+    fail "26d." "rc=$rc_26d out=$OUT_26d"
+fi
+rm -f "$TMP_STATE/audit.log"
+
 # 26c. audit --json must skip malformed JSON lines (Codex PR #29 round 12 P2)
 # 이전엔 `^{` prefix 만으로 필터해서 truncated 라인까지 emit → `jq` 받는 자동화가
 # 성공 종료에도 parse 실패. Plan acceptance: 모든 --json 모드는 parseable.
