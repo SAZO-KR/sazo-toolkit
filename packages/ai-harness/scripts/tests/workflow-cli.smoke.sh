@@ -705,6 +705,49 @@ else
     fail "27b." "rc=$rc_27b out=$OUT_27b"
 fi
 
+# 28. stats: state file 의 verdict_missing_count 합산 — Codex PR #29 P2.
+# audit.log 미존재 + state file 의 verdict_missing_count 만 nonzero 일 때
+# stats 가 합산 표시 + no-data 분류 안 되어야 함.
+rm -f "$TMP_STATE"/*.json "$TMP_STATE/audit.log"
+jq -n '{verdict_missing_count: {"code-reviewer": 2, "architect-advisor": 3}}' \
+    > "$TMP_STATE/sessVM1--hVM1.json"
+jq -n '{verdict_missing_count: {"code-reviewer": 5}}' \
+    > "$TMP_STATE/sessVM2--hVM2.json"
+# 합계 = 2+3+5 = 10
+OUT_28=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" stats --days 7 2>&1)
+rc_28=$?
+if [ "$rc_28" = "0" ] && echo "$OUT_28" | grep -qE "verdict_missing_count:[[:space:]]+10"; then
+    pass "28. stats: aggregates verdict_missing_count from state files when audit.log absent"
+else
+    fail "28." "rc=$rc_28 out=$OUT_28"
+fi
+
+# 29. resolve_state_file: SAZO_CWD set 시 newest mtime 이 아닌 exact match 우선.
+# 동일 sid + 두 cwd_hash 가 있고, 다른 hash 의 mtime 이 더 최신일 때
+# SAZO_CWD 로 지정한 cwd 의 state file 이 선택되어야 함.
+rm -f "$TMP_STATE"/*.json "$TMP_STATE/audit.log"
+# session-state.sh 의 cwd_hash() 로 두 cwd 의 hash 계산
+TARGET_CWD="/work/target"
+OTHER_CWD="/work/other"
+TARGET_HASH=$(printf '%s' "$TARGET_CWD" | shasum -a 1 | cut -c1-12)
+OTHER_HASH=$(printf '%s' "$OTHER_CWD" | shasum -a 1 | cut -c1-12)
+# target 을 먼저 만들고 other 를 나중에 만들어 other mtime 이 더 newer.
+jq -n --arg cwd "$TARGET_CWD" \
+    '{schema_version:2, session_id:"sessCWD", cwd:$cwd, stage:"plan", history:[], started_at:"2026-05-10T10:00:00+0900", verdict_unset_expected_set_count:0}' \
+    > "$TMP_STATE/sessCWD--${TARGET_HASH}.json"
+sleep 1
+jq -n --arg cwd "$OTHER_CWD" \
+    '{schema_version:2, session_id:"sessCWD", cwd:$cwd, stage:"ci", history:[], started_at:"2026-05-10T10:00:00+0900", verdict_unset_expected_set_count:0}' \
+    > "$TMP_STATE/sessCWD--${OTHER_HASH}.json"
+# SAZO_CWD 로 target 지정 → stage:plan (target) 이 선택되어야 함. exact match 안 되면 stage:ci 출력.
+OUT_29=$(SAZO_STATE_DIR="$TMP_STATE" SAZO_CWD="$TARGET_CWD" "$CLI" status --session sessCWD 2>&1)
+rc_29=$?
+if [ "$rc_29" = "0" ] && echo "$OUT_29" | grep -q "Stage: plan"; then
+    pass "29. resolve_state_file: honors SAZO_CWD exact match over newest mtime"
+else
+    fail "29." "rc=$rc_29 out=$OUT_29"
+fi
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"

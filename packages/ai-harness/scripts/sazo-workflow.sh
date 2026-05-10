@@ -217,6 +217,19 @@ resolve_session() {
 
 resolve_state_file() {
     local sid="$1"
+    # Codex PR #29 round 16 P2: SAZO_CWD set 시 exact cwd_hash 매칭 우선.
+    # 동일 sid 가 여러 worktree 의 state file 을 가질 때, 다른 worktree mtime 이
+    # 더 최신이면 SAZO_CWD 로 지정한 worktree 가 아닌 다른 stage/history 가 노출되어
+    # 운영자 inspect 결과가 잘못됨. session-state.sh::state_file 로 정확 path 계산
+    # → 존재하면 즉시 반환. fallback 은 기존 newest-mtime 로직.
+    if [ -n "${SAZO_CWD:-}" ]; then
+        local exact
+        exact=$(state_file "$sid" "$SAZO_CWD" 2>/dev/null) || exact=""
+        if [ -n "$exact" ] && [ -f "$exact" ]; then
+            printf '%s' "$exact"
+            return 0
+        fi
+    fi
     # Gemini PR #29 round 14 P3: ls + glob 결과 파싱은 newline/space 포함 파일명에
     # 취약. find 로 NUL-안전 enumerate (state file 명에 newline 없음 가정 유지하되
     # ls 의존 제거). `--` 다음 인자로 sid prefix glob 전달, name 정확 매칭.
@@ -599,7 +612,21 @@ cmd_stats() {
     fi
     lock_timeouts=$(_count_pattern 'lock_timeout' "$AUDIT_LOG")
     jq_errors=$(_count_pattern 'jq_error' "$AUDIT_LOG")
-    verdict_missing=$(_count_pattern 'verdict_missing' "$AUDIT_LOG")
+    # Codex PR #29 round 16 P2: audit.log 에서만 count 시 audit 파일 부재/rotated
+    # 환경에서 state file 의 .verdict_missing_count (object: reviewer→int) 가
+    # 무시됨. status 출력은 state-derived 로 표시하면서 stats 만 audit-only 면
+    # 일관성 깨짐. verdict_unset_expected_set_count 와 동일 패턴으로 state file
+    # aggregate 합산.
+    local audit_vm
+    audit_vm=$(_count_pattern 'verdict_missing' "$AUDIT_LOG")
+    local state_vm
+    state_vm=$(find "$STATE_DIR" -maxdepth 1 -name '*.json' -type f \
+        -exec jq -r '(.verdict_missing_count // {}) | to_entries | map(.value) | add // 0' {} + 2>/dev/null \
+        | awk '{s+=$1} END {print s+0}')
+    case "$state_vm" in
+        ''|*[!0-9]*) state_vm=0 ;;
+    esac
+    verdict_missing=$((audit_vm + state_vm))
     state_corruptions=$(_count_pattern 'state_corruption' "$AUDIT_LOG")
 
     # Gemini PR #29 round 10 P2: 다중 state file 마다 jq 프로세스 spawn → 단일 호출 합산.
