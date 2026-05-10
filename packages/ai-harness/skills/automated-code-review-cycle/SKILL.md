@@ -665,10 +665,18 @@ while ROUND < MAX_ROUNDS:
 
   # ── stale ≥ MAX_STALE fallback (per-bot) ──
   # CRITICAL: 봇별 카운터 기반 분기. 수동 트리거 후에도 회복 안 된 봇만 처리.
-  # - Codex만 max + Gemini 활성·미통과·미stale → Gemini fallback (Codex 자리 메움)
+  # - Codex만 max + Gemini 활성·미stale → Gemini fallback (Codex 자리 메움)
   # - Codex max + Gemini도 max → 양쪽 무응답, fallback 불가, escalate
   # - Gemini만 max → escalate
   # - Codex만 max + Gemini 사용 불가 → escalate
+  #
+  # CRITICAL: `not GEMINI_PASSED` 가드는 의도적으로 제외.
+  # `GEMINI_PASSED`는 "현재 미답변 코멘트가 0건"이라는 사실 기반이지 "이 push에
+  # 대해 Gemini가 pass했다"가 아니다 (Step 4 push 후 Gemini는 자동 재리뷰 안 함;
+  # `/gemini review` 명시 트리거 필요). 옛 commit에 Gemini가 pass 줬고 신규
+  # push 후 Codex가 silent stall한 시나리오에서, `not GEMINI_PASSED=false`가
+  # fallback을 막아 user escalate로 빠진다 — 신규 push에 대해 fresh 의견을
+  #받을 기회를 잃음. fallback은 stale cached pass에 gate되면 안 됨.
   codex_at_max = (CODEX_STALE_COUNT >= MAX_STALE)
   gemini_at_max = (GEMINI_STALE_COUNT >= MAX_STALE)
 
@@ -676,8 +684,8 @@ while ROUND < MAX_ROUNDS:
     notify_user("Codex + Gemini 모두 ${MAX_STALE}회 연속 무응답. Gemini fallback 불가. 수동 확인 필요.")
     break
   elif codex_at_max:
-    if GEMINI_ENABLED and not GEMINI_PASSED and not gemini_stale:
-      log("Codex 무응답 지속 → Gemini fallback")
+    if GEMINI_ENABLED and not gemini_stale:
+      log("Codex 무응답 지속 → Gemini fallback (신규 push 기준 재리뷰 강제)")
       gh pr comment $PR_NUM --body "/gemini review"
       CODEX_STALE_COUNT = 0
       CODEX_FALLBACK_DONE = true   # 이후 라운드에서 Codex stale 재인식 차단
