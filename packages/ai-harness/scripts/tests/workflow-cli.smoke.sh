@@ -460,6 +460,22 @@ else
 fi
 rm -f "$TMP_STATE"/*.json
 
+# 22. CLI invoked via symlink resolves SCRIPT_DIR correctly without python3
+# (Codex PR #29 round 6 P2 — macOS BSD readlink -f 미지원 + python3 부재 환경)
+SYM_DIR=$(mktemp -d)
+ln -s "$CLI" "$SYM_DIR/sazo-workflow-link"
+# Even if python3 exists, ensure the resolution path doesn't depend on it by
+# masking it from PATH. readlink (plain) must work on both macOS BSD and Linux.
+OUT_22=$(SAZO_STATE_DIR="$TMP_STATE" PATH="/usr/bin:/bin" "$SYM_DIR/sazo-workflow-link" status 2>&1)
+rc_22=$?
+# rc_22 = 2 (no session) is fine — what we check is "no script-dir resolution failure".
+if ! echo "$OUT_22" | grep -q "cannot find session-state.sh"; then
+    pass "22. CLI via symlink resolves SCRIPT_DIR (no python3 dep, BSD-readlink compat)"
+else
+    fail "22." "rc=$rc_22 out=$OUT_22"
+fi
+rm -rf "$SYM_DIR"
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"

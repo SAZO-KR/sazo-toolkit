@@ -22,9 +22,32 @@
 set -uo pipefail
 
 # Resolve repo path from this script's location, then source session-state.sh.
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || \
-    python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}" 2>/dev/null || \
-    echo "${BASH_SOURCE[0]}")")" && pwd)"
+# macOS BSD readlink 미지원 + python3 부재 환경 대응 (Codex PR #29 round 6 P2):
+# 1) GNU `readlink -f` 시도 — Linux/coreutils.
+# 2) 실패 시 shell loop 로 직접 symlink chain resolve — BSD/macOS 호환,
+#    외부 dependency 없음. ~/.local/bin/sazo-workflow 같은 install symlink 도 정상 처리.
+_resolve_script_path() {
+    local target="$1"
+    if command -v readlink >/dev/null 2>&1; then
+        local r
+        r=$(readlink -f "$target" 2>/dev/null) && [ -n "$r" ] && { printf '%s' "$r"; return 0; }
+    fi
+    # POSIX shell-only fallback. cd 로 디렉토리 정규화 후 basename → readlink 반복.
+    local dir base link
+    while [ -L "$target" ]; do
+        link=$(readlink "$target" 2>/dev/null) || break
+        dir=$(dirname "$target")
+        case "$link" in
+            /*) target="$link" ;;
+            *)  target="$dir/$link" ;;
+        esac
+    done
+    dir=$(cd "$(dirname "$target")" 2>/dev/null && pwd -P) || dir=$(dirname "$target")
+    base=$(basename "$target")
+    printf '%s/%s' "$dir" "$base"
+}
+
+SCRIPT_DIR="$(dirname "$(_resolve_script_path "${BASH_SOURCE[0]}")")"
 
 LIB="$SCRIPT_DIR/hooks/lib/session-state.sh"
 if [ ! -f "$LIB" ]; then
