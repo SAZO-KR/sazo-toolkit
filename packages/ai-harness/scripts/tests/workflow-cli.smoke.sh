@@ -132,6 +132,23 @@ else
     fail "5." "rc=$RC; out=$OUT"
 fi
 
+# 5b. multi-session: --session filter must NOT cross-leak block reasons
+mock_state_full "sessB" "def456abc789"
+printf '{"ts":"2026-05-10T11:00:01+0900","event":"stage_block","sid":"sessA","stage":"ci","status":"blocked","by":"hook","reason":"sessA CI"}\n' \
+    >> "$TMP_STATE/audit.log"
+printf '{"ts":"2026-05-10T11:00:02+0900","event":"stage_block","sid":"sessB","stage":"review","status":"blocked","by":"hook","reason":"sessB review"}\n' \
+    >> "$TMP_STATE/audit.log"
+# --session sessA must surface sessA's block, NOT sessB's (which is more recent in audit.log)
+run_cli why-blocked --session sessA
+if [ "$RC" = "2" ] \
+    && echo "$OUT" | grep -q "sessA CI" \
+    && ! echo "$OUT" | grep -q "sessB review"; then
+    pass "5b. why-blocked --session filter (no cross-session leak)"
+else
+    fail "5b." "rc=$RC; out=$OUT"
+fi
+rm -f "$TMP_STATE/audit.log"
+
 # 6. audit --filter stage_block
 printf '{"ts":"2026-05-10T11:00:00+0900","event":"stage_block","sid":"x","stage":"ci","status":"blocked","by":"hook","reason":"r1"}\n' \
     >> "$TMP_STATE/audit.log"
@@ -149,11 +166,10 @@ else
 fi
 
 # 7. sessions --days 7 — multiple sessions sorted by mtime
+# Use explicit `touch -t` timestamps (instantaneous + deterministic, no flaky sleep).
 mock_state_full "sessB" "def456abc789"
-# bump mtime of sessB so it's newer
-touch "$TMP_STATE/sessB--def456abc789.json"
-sleep 1
-touch "$TMP_STATE/sessA--abc123def456.json"
+touch -t 202605100900 "$TMP_STATE/sessB--def456abc789.json"
+touch -t 202605101000 "$TMP_STATE/sessA--abc123def456.json"
 run_cli sessions --days 7
 first=$(printf '%s\n' "$OUT" | head -1)
 if [ "$RC" = "0" ] \
@@ -253,34 +269,54 @@ else
     fail "12." "rc=$RC; out=$OUT"
 fi
 
-# 13. install symlink — verify sync_workflow_cli function (defined later in install.sh)
-# For now, simulate by manually invoking the function via FAKE_HOME isolation.
+# 13. install symlink — exercise the REAL sync_workflow_cli function from install.sh
+# (no re-implementation of `ln -sfn`). Sources install.sh in subshell with HOME
+# isolation so we test the actual logic including the "non-symlink exists" warn branch.
 FAKE_HOME=$(mktemp -d)
-SAZO_TEST_HOME="$FAKE_HOME" bash -c "
-    set -uo pipefail
-    HOME='$FAKE_HOME'
-    SOURCE='$HARNESS_DIR/scripts/sazo-workflow.sh'
-    TARGET=\"\$HOME/.local/bin/sazo-workflow\"
-    mkdir -p \"\$(dirname \"\$TARGET\")\"
-    ln -sfn \"\$SOURCE\" \"\$TARGET\"
-"
-if [ -L "$FAKE_HOME/.local/bin/sazo-workflow" ] \
-    && [ "$(readlink "$FAKE_HOME/.local/bin/sazo-workflow")" = "$HARNESS_DIR/scripts/sazo-workflow.sh" ]; then
-    # Idempotency: re-run, link still correct
-    SAZO_TEST_HOME="$FAKE_HOME" bash -c "
-        HOME='$FAKE_HOME'
-        SOURCE='$HARNESS_DIR/scripts/sazo-workflow.sh'
-        TARGET=\"\$HOME/.local/bin/sazo-workflow\"
-        ln -sfn \"\$SOURCE\" \"\$TARGET\"
-    "
-    if [ -L "$FAKE_HOME/.local/bin/sazo-workflow" ] \
-        && [ "$(readlink "$FAKE_HOME/.local/bin/sazo-workflow")" = "$HARNESS_DIR/scripts/sazo-workflow.sh" ]; then
-        pass "13. install symlink created + idempotent"
+INSTALL_SH="$HARNESS_DIR/install.sh"
+
+# Helper to invoke sync_workflow_cli in isolated HOME.
+# Extract the function body from install.sh and exec it with HARNESS_DIR set —
+# avoids running install.sh's interactive top-level while still calling the
+# real function (no re-implementation of `ln -sfn`).
+invoke_sync() {
+    HOME="$FAKE_HOME" HARNESS_DIR="$HARNESS_DIR" \
+    INSTALL_SH="$INSTALL_SH" \
+    bash -c '
+        set -uo pipefail
+        eval "$(awk "/^sync_workflow_cli\\(\\) \\{/,/^\\}/" "$INSTALL_SH")"
+        sync_workflow_cli
+    '
+    return $?
+}
+
+invoke_sync_rc=0
+invoke_sync || invoke_sync_rc=$?
+target="$FAKE_HOME/.local/bin/sazo-workflow"
+expected_link="$HARNESS_DIR/scripts/sazo-workflow.sh"
+
+if [ -L "$target" ] && [ "$(readlink "$target")" = "$expected_link" ]; then
+    # Idempotency: real function called twice → link still correct, no error
+    invoke_sync_rc2=0
+    invoke_sync || invoke_sync_rc2=$?
+    if [ -L "$target" ] \
+        && [ "$(readlink "$target")" = "$expected_link" ] \
+        && [ "$invoke_sync_rc2" = "0" ]; then
+        # Negative case: replace link with regular file, expect rc=1 + warn
+        rm -f "$target"
+        echo "stub" > "$target"
+        invoke_sync_negative_rc=0
+        STDERR_OUT=$(invoke_sync 2>&1 1>/dev/null) || invoke_sync_negative_rc=$?
+        if [ "$invoke_sync_negative_rc" != "0" ] && echo "$STDERR_OUT" | grep -qi "warn"; then
+            pass "13. sync_workflow_cli: symlink + idempotent + non-symlink warn (rc=1)"
+        else
+            fail "13. negative case" "rc=$invoke_sync_negative_rc stderr=$STDERR_OUT"
+        fi
     else
-        fail "13." "second run broke link"
+        fail "13. idempotent" "rc=$invoke_sync_rc2"
     fi
 else
-    fail "13." "symlink missing or wrong target"
+    fail "13." "first call: symlink missing or wrong target (rc=$invoke_sync_rc)"
 fi
 
 # 14. PATH 미등록 시 warn — install function in install.sh (not yet implemented at this stage).

@@ -36,6 +36,21 @@ source "$LIB"
 
 JSON_MODE=0
 
+# ----- helpers -----
+
+# _file_mtime: print epoch mtime of $1, portable across GNU coreutils and BSD stat.
+# CRITICAL: probe GNU first (`-c '%Y'`), then BSD (`-f '%m'`).
+# GNU stat's `-f` means `--file-system` (multi-line filesystem info, exit 0),
+# so a `stat -f '%m' || stat -c '%Y'` chain on Linux silently captures garbage
+# instead of an integer and breaks every numeric comparison downstream
+# (Codex P1 — `sessions` smoke fails on GNU with "integer expression expected").
+_file_mtime() {
+    local f="$1" mt
+    mt=$(stat -c '%Y' "$f" 2>/dev/null) && [ -n "$mt" ] && { printf '%s' "$mt"; return 0; }
+    mt=$(stat -f '%m' "$f" 2>/dev/null) && [ -n "$mt" ] && { printf '%s' "$mt"; return 0; }
+    return 1
+}
+
 # ----- session resolution -----
 
 list_active_sessions() {
@@ -49,7 +64,7 @@ list_active_sessions() {
     while IFS= read -r f; do
         [ -z "$f" ] && continue
         local mt
-        mt=$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f" 2>/dev/null) || continue
+        mt=$(_file_mtime "$f") || continue
         [ -z "$mt" ] && continue
         [ "$mt" -ge "$since_ts" ] || continue
         rows="$rows
@@ -68,8 +83,22 @@ EOF
         | awk '!seen[$0]++'
 }
 
+# Validate positive integer (defense-in-depth — prevents arithmetic injection
+# via $days/$last reaching `date -d`, `awk` etc.).
+_require_positive_int() {
+    local label="$1" value="$2"
+    case "$value" in
+        ''|*[!0-9]*)
+            echo "sazo-workflow: $label must be a positive integer, got '$value'" >&2
+            return 1
+            ;;
+    esac
+    return 0
+}
+
 list_active_sessions_with_days() {
     local days="${1:-1}"
+    _require_positive_int "--days" "$days" || return 1
     local since_ts now
     now=$(date +%s)
     since_ts=$((now - days * 86400))
@@ -80,7 +109,7 @@ list_active_sessions_with_days() {
     while IFS= read -r f; do
         [ -z "$f" ] && continue
         local mt
-        mt=$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f" 2>/dev/null) || continue
+        mt=$(_file_mtime "$f") || continue
         [ -z "$mt" ] && continue
         [ "$mt" -ge "$since_ts" ] || continue
         rows="$rows
@@ -263,8 +292,20 @@ cmd_why_blocked() {
         return 0
     }
 
+    # Resolve session id; if available, filter audit entries to this session only.
+    # Without session scoping, why-blocked could surface a different session's
+    # block reason (audit.log is shared across sessions in the same STATE_DIR).
+    local sid
+    sid=$(resolve_session "$sid_arg" 2>/dev/null) || sid=""
+
     local last_block
-    last_block=$(grep '"event":"stage_block"' "$AUDIT_LOG" 2>/dev/null | tail -1)
+    if [ -n "$sid" ]; then
+        # JSON Lines: filter on "sid":"<sid>" substring (resolved sid is hex/sha-like, no escaping needed)
+        last_block=$(grep '"event":"stage_block"' "$AUDIT_LOG" 2>/dev/null \
+            | grep -F "\"sid\":\"$sid\"" | tail -1)
+    else
+        last_block=$(grep '"event":"stage_block"' "$AUDIT_LOG" 2>/dev/null | tail -1)
+    fi
 
     if [ -z "$last_block" ]; then
         if [ "$JSON_MODE" = "1" ]; then
@@ -324,6 +365,7 @@ cmd_audit() {
             *) shift;;
         esac
     done
+    _require_positive_int "--last" "$last" || return 1
     [ -f "$AUDIT_LOG" ] || return 2
     local lines
     lines=$(tail -n "$last" "$AUDIT_LOG")
@@ -362,6 +404,7 @@ cmd_sessions() {
             *) shift;;
         esac
     done
+    _require_positive_int "--days" "$days" || return 1
     local rows
     rows=$(list_active_sessions_with_days "$days")
     if [ -z "$rows" ]; then
@@ -401,6 +444,7 @@ cmd_stats() {
             *) shift;;
         esac
     done
+    _require_positive_int "--days" "$days" || return 1
 
     local since=""
     since=$(date -d "$days days ago" +%Y-%m-%dT%H:%M:%S%z 2>/dev/null) \
