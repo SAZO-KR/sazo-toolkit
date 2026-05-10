@@ -170,29 +170,53 @@ sync_awake_cleanup_legacy() {
         "$HOME/.config/sazo-ai-harness/.sleep-guard-notify-throttle" \
         "$HOME/.config/sazo-ai-harness/.sleep-guard-optin-notify-throttle"
     do
-        [ -e "$marker" ] && rm -f "$marker" 2>/dev/null
+        # `set -u` 환경에서 rm 실패가 함수를 중단시키지 않도록 `|| true` 명시.
+        [ -e "$marker" ] && { rm -f "$marker" 2>/dev/null || true; }
     done
     # /tmp 디렉토리는 본인 소유만 정리 (다른 사용자 디렉토리 권한 충돌 방지).
+    # 구 caffeinate-session.sh가 사용하던 경로와 동일 — `/tmp/claude-awake-$USER`.
     rm -rf "/tmp/claude-awake-${USER:-$(id -un)}" 2>/dev/null || true
     # settings.json hook 정리 — jq 있을 때만, 본인 사용자 hook만.
     if command -v jq >/dev/null 2>&1; then
         local settings="$HOME/.claude/settings.json"
-        if [ -f "$settings" ] && grep -q "sazo-caffeinate-session.sh" "$settings" 2>/dev/null; then
+        # dotfiles 관리(symlink) 환경 대비: mv가 link 자체를 덮어쓰지 않도록 실제
+        # 파일 경로로 resolve. `readlink -f`는 GNU 옵션이며 일부 BSD/구버전 macOS
+        # 에선 미지원이라, symlink 명시 체크 + 단일 단계 readlink + 상대경로 정규화.
+        local real_settings
+        if [ -L "$settings" ]; then
+            local link_target
+            link_target=$(readlink "$settings" 2>/dev/null || printf '%s' "")
+            if [ -z "$link_target" ]; then
+                real_settings="$settings"
+            else
+                case "$link_target" in
+                    /*) real_settings="$link_target" ;;
+                    *)  real_settings="$(dirname "$settings")/$link_target" ;;
+                esac
+            fi
+        else
+            real_settings="$settings"
+        fi
+        if [ -f "$real_settings" ] && grep -q "sazo-caffeinate-session.sh" "$real_settings" 2>/dev/null; then
             local tmp
             tmp=$(mktemp)
+            # 헬퍼 함수로 hook type별 정리 — 원래 없던 키는 그대로 두고, hook 제거
+            # 결과 빈 array 매처는 매처에서 제거, 결과 빈 array 키는 키째 제거.
+            # 이전 패턴 `.hooks //= {}` + `.hooks.X = ((... // []) | ...)` 은 원래
+            # 없던 키를 `[]`로 삽입하는 부작용이 있었음.
             if jq '
-                .hooks //= {}
-                | .hooks.UserPromptSubmit = ((.hooks.UserPromptSubmit // []) | map(
-                    .hooks = ((.hooks // []) | map(select(.command | test("sazo-caffeinate-session.sh") | not)))
-                  ) | map(select((.hooks // []) | length > 0)))
-                | .hooks.PostToolUse = ((.hooks.PostToolUse // []) | map(
-                    .hooks = ((.hooks // []) | map(select(.command | test("sazo-caffeinate-session.sh") | not)))
-                  ) | map(select((.hooks // []) | length > 0)))
-                | .hooks.Stop = ((.hooks.Stop // []) | map(
-                    .hooks = ((.hooks // []) | map(select(.command | test("sazo-caffeinate-session.sh") | not)))
-                  ) | map(select((.hooks // []) | length > 0)))
-            ' "$settings" > "$tmp" 2>/dev/null; then
-                mv "$tmp" "$settings"
+                def clean_hook_type(k):
+                    if has("hooks") and (.hooks | type) == "object" and (.hooks | has(k)) then
+                        .hooks[k] = (.hooks[k] | map(
+                            .hooks = ((.hooks // []) | map(select(.command | test("sazo-caffeinate-session.sh") | not)))
+                          ) | map(select((.hooks // []) | length > 0)))
+                        | if (.hooks[k] | length) == 0 then del(.hooks[k]) else . end
+                    else . end;
+                clean_hook_type("UserPromptSubmit")
+                | clean_hook_type("PostToolUse")
+                | clean_hook_type("Stop")
+            ' "$real_settings" > "$tmp" 2>/dev/null; then
+                mv "$tmp" "$real_settings"
                 log "Cleaned up legacy sleep-guard hooks from settings.json"
             else
                 rm -f "$tmp"
