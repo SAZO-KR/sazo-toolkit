@@ -415,17 +415,29 @@ if [ -f "$RTK_SETUP_SCRIPT" ]; then
     "$RTK_SETUP_SCRIPT" || true
 fi
 
-# --- Sleep Guard (macOS, optional) ---
+# --- awake CLI (macOS, optional) ---
 #
-# Claude Code 세션이 응답 생성/툴 실행 중일 때만 노트북 뚜껑 닫아도 sleep 되지
-# 않도록 막는 기능. macOS 전용, opt-in. 첫 실행 시 질문, 이후 멱등 검증.
-# 자세한 동작은 scripts/sleep-guard/setup.sh 상단 주석 참조.
+# 명시적으로 sleep 차단을 켜는 CLI. caffeinate wrapper. sudo 불필요.
+# 사용자가 awake on/off/status/extend 로 직접 제어. 자동 hook 없음.
+# 자세한 사용법은 scripts/awake/awake.sh 상단 주석 참조.
 
-SLEEP_GUARD_SETUP="$HARNESS_DIR/scripts/sleep-guard/setup.sh"
+AWAKE_SCRIPT="$HARNESS_DIR/scripts/awake/awake.sh"
+AWAKE_SYMLINK="$HOME/.local/bin/awake"
 
-if [ -f "$SLEEP_GUARD_SETUP" ] && [ "$(uname -s)" = "Darwin" ]; then
-    chmod +x "$SLEEP_GUARD_SETUP"
-    "$SLEEP_GUARD_SETUP" || true
+if [ -f "$AWAKE_SCRIPT" ] && [ "$(uname -s)" = "Darwin" ]; then
+    chmod +x "$AWAKE_SCRIPT"
+    mkdir -p "$HOME/.local/bin"
+    ln -sfn "$AWAKE_SCRIPT" "$AWAKE_SYMLINK"
+    echo "  Installed: $AWAKE_SYMLINK"
+
+    # PATH 미포함 시 1줄 안내 (자동 수정 안 함 — invasive)
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*) ;;
+        *)
+            echo "  ⚠️  $HOME/.local/bin 이 PATH 에 없음 — 추가 필요:"
+            echo "      echo 'export PATH=\$HOME/.local/bin:\$PATH' >> ~/.zshrc"
+            ;;
+    esac
 fi
 
 # --- OpenCode agent config ---
