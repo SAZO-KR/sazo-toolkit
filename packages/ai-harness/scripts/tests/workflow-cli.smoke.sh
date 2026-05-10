@@ -419,6 +419,21 @@ for opt_case in "status --session" "history --last" "audit --filter" "sessions -
     fi
 done
 
+# 19. history --last <non-numeric> → rc=1 + 'positive integer' (Codex PR #29 round 4 P2)
+# 이전엔 jq --argjson 만 stderr 에러 뱉고 함수가 0 으로 종료해 자동화가 success로 오인.
+# 다른 numeric subcommand 와 동일하게 _require_positive_int 적용.
+for sub_case in "history --last" "audit --last" "sessions --days" "stats --days"; do
+    set -- $sub_case
+    sub="$1"; opt="$2"
+    OUT_19=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" "$sub" "$opt" "foo" 2>&1)
+    rc_19=$?
+    if [ "$rc_19" = "1" ] && echo "$OUT_19" | grep -qi "positive integer"; then
+        pass "19.$sub$opt $opt foo → rc=1 + 'positive integer'"
+    else
+        fail "19.$sub$opt" "rc=$rc_19 out=$OUT_19"
+    fi
+done
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"

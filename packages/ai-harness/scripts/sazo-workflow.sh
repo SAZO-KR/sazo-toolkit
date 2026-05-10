@@ -274,6 +274,10 @@ cmd_history() {
             *) shift;;
         esac
     done
+    # Codex PR #29 round 4 P2: jq --argjson 에 비숫자 입력하면 에러를 stderr로 뱉지만
+    # set -e 미사용이라 함수는 0 으로 종료해 자동화가 "성공인데 출력 없음" 으로 오인.
+    # 다른 numeric subcommand 처럼 _require_positive_int 로 사전 검증.
+    _require_positive_int "--last" "$last" || return 1
     local sid
     sid=$(resolve_session "$sid_arg") || return 2
     local sf
