@@ -134,13 +134,19 @@ _require_positive_int() {
             return 1
             ;;
     esac
-    # Codex PR #29 round 7 P2: 0 명시적 reject. positive 명세 위반.
-    # cmd_history 에서 `--last 0` → jq `.[0:]` = 전체 history dump (의도와 정반대).
-    # arithmetic comparison 으로 0/00/000 등 leading-zero 변형도 모두 reject.
-    if [ "$value" -eq 0 ] 2>/dev/null; then
-        echo "sazo-workflow: $label must be a positive integer (>= 1), got '$value'" >&2
-        return 1
-    fi
+    # Codex PR #29 round 10 P2: leading-zero 전부 reject (one-shot policy).
+    # - `0`/`00`/`000` (zero variants) → positive 명세 위반.
+    # - `08`/`09`/`007` (non-octal-safe) → bash arithmetic `$((value * N))` 에서
+    #   "value too great for base" 에러 후 호출자가 no-data 경로로 빠져
+    #   bad-argument 의도가 묵살됨.
+    # 정책: `^0` 매칭 = single-char `0` 이거나 leading-zero 다중 자릿수 — 모두
+    # invalid. 사용자가 의도한 정수면 항상 leading zero 없이 표기 가능.
+    case "$value" in
+        0|0[0-9]*)
+            echo "sazo-workflow: $label must be a positive integer (>= 1, no leading zeros), got '$value'" >&2
+            return 1
+            ;;
+    esac
     return 0
 }
 
@@ -477,24 +483,17 @@ cmd_sessions() {
     fi
     # Codex PR #29 round 8 P2: TAB delimiter (path 안 space 보호).
     if [ "$JSON_MODE" = "1" ]; then
-        # Codex PR #29 round 9 P2: SAZO_STATE_DIR/install path 가 `"` 또는 `\` 같은
-        # JSON-significant 문자 포함 시 raw interpolation 으로 JSON 깨짐. awk gsub
-        # 로 backslash 와 double-quote escape (Spec: JSON String — backslash 먼저).
-        printf '%s\n' "$rows" | awk -F'\t' '
-            function jesc(s) {
-                gsub(/\\/, "\\\\", s)
-                gsub(/"/, "\\\"", s)
-                return s
-            }
-            {
-                mt=$1; path=$2;
-                n=split(path,parts,"/"); base=parts[n];
-                sub(/\.json$/, "", base);
-                split(base, sb, "--");
-                sid=sb[1]; cwd_hash=sb[2];
-                printf "{\"sid\":\"%s\",\"cwd_hash\":\"%s\",\"mtime\":%s,\"path\":\"%s\"}\n",
-                    jesc(sid), jesc(cwd_hash), mt, jesc(path)
-            }
+        # Gemini PR #29 round 10 P2: awk 수동 escape → jq -R 슬러프로 변경.
+        # awk gsub 으로 `\` / `"` 만 escape 하면 path 에 control character (NUL 외
+        # \b, \f, \n, \r, \t 등) 가 들어올 때 raw byte 가 그대로 emit 되어 JSON spec
+        # 위반(파서가 자동 복원도 못 함). jq -R 가 line 을 string 으로 받아 모든 JSON
+        # spec escape 를 자동 처리.
+        # 입력: TAB 구분 `mtime\tpath` 라인. jq 내부에서 split → base → sid/cwd_hash 분해.
+        printf '%s\n' "$rows" | jq -Rc '
+            select(length > 0) |
+            split("\t") as $p |
+            ($p[1] | split("/") | last | sub("\\.json$"; "") | split("--")) as $id |
+            {sid: $id[0], cwd_hash: $id[1], mtime: ($p[0] | tonumber), path: $p[1]}
         '
         return 0
     fi
@@ -567,17 +566,16 @@ cmd_stats() {
     verdict_missing=$(_count_pattern 'verdict_missing' "$AUDIT_LOG")
     state_corruptions=$(_count_pattern 'state_corruption' "$AUDIT_LOG")
 
-    local verdict_unset=0
-    local sf
-    for sf in "$STATE_DIR"/*.json; do
-        [ -f "$sf" ] || continue
-        local v
-        v=$(jq -r '.verdict_unset_expected_set_count // 0' "$sf" 2>/dev/null) || v=0
-        case "$v" in
-            ''|*[!0-9]*) v=0 ;;
-        esac
-        verdict_unset=$((verdict_unset + v))
-    done
+    # Gemini PR #29 round 10 P2: 다중 state file 마다 jq 프로세스 spawn → 단일 호출 합산.
+    # `*.json` no-match 시 glob literal 이 jq 인자로 들어가 stat error 가 stderr 로 새므로
+    # 2>/dev/null 로 silence. awk 가 빈 입력에서도 `s+0`=0 emit.
+    local verdict_unset
+    verdict_unset=$(jq -r '.verdict_unset_expected_set_count // 0' \
+        "$STATE_DIR"/*.json 2>/dev/null \
+        | awk '{s+=$1} END {print s+0}')
+    case "$verdict_unset" in
+        ''|*[!0-9]*) verdict_unset=0 ;;
+    esac
 
     local top_stage="—"
     if [ -n "$entries" ]; then

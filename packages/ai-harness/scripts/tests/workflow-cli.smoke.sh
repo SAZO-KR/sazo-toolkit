@@ -497,6 +497,20 @@ else
     fail "23b." "out=$OUT_23b"
 fi
 
+# 23c. leading-zero non-octal-safe values (Codex PR #29 round 10 P2)
+# `--days 08`/`--days 09`는 valid 정수 regex 통과 → bash arithmetic `$((days * 86400))`
+# 에서 invalid octal로 평가 → "value too great for base" 에러 후 no-data 경로로 빠짐.
+# 명시적 bad-argument 에러를 내야 자동화가 입력 정규화 의도를 알 수 있음.
+for badval in "08" "09" "007"; do
+    OUT_23c=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" sessions --days "$badval" 2>&1)
+    rc_23c=$?
+    if [ "$rc_23c" = "1" ] && echo "$OUT_23c" | grep -qi "positive integer"; then
+        pass "23c. sessions --days $badval → rc=1 (leading-zero non-octal-safe rejected)"
+    else
+        fail "23c.$badval" "rc=$rc_23c out=$OUT_23c"
+    fi
+done
+
 # 24. STATE_DIR path containing space (Codex PR #29 round 8 P2)
 # `mtime path` row 가 awk space-split 으로 잘리면 sid/path 가 깨짐. tab delimiter 로 해결.
 SPACED_PARENT=$(mktemp -d)
@@ -539,6 +553,58 @@ else
     fail "25." "rc=$rc_25 out=$OUT_25"
 fi
 rm -rf "$JSON_SPACED_PARENT"
+
+# 26. sessions --json 출력 시 path 의 control character 도 안전 처리
+# (Gemini PR #29 round 10 P2). awk 직접 JSON 구성 → jq pipeline 으로 변경.
+# 디렉토리명에 백스페이스(\b, ASCII 8) 삽입 — JSON spec 상 escape 필요 (\b).
+# awk 버전은 control char 를 raw byte 로 emit → jq parse 가능해도 "원본 보존" 안 됨.
+# jq -R 버전은 자동 escape (\b) 후 parse 시 원본 byte 복원.
+CTRL_PARENT=$(mktemp -d)
+CTRL_DIR="$CTRL_PARENT/$(printf 'dir\bwith\bctrl')"
+mkdir -p "$CTRL_DIR"
+printf '{"stage":"plan","started_at":"2026-05-09T10:00:00+0900","plan_approved_at":null,"ci_passed_at":null,"history":[]}\n' \
+    > "$CTRL_DIR/ctrlSession--abchash.json"
+OUT_26=$(SAZO_STATE_DIR="$CTRL_DIR" "$CLI" sessions --days 7 --json 2>&1)
+rc_26=$?
+# parse 가능 + path 가 원본 control char 를 보존해야 통과.
+PARSED_PATH_26=$(printf '%s' "$OUT_26" | jq -er '.path' 2>/dev/null)
+if [ "$rc_26" = "0" ] \
+    && [ -n "$PARSED_PATH_26" ] \
+    && [ -f "$PARSED_PATH_26" ]; then
+    pass "26. sessions --json: control characters preserved & parseable (jq pipeline)"
+else
+    fail "26." "rc=$rc_26 parsed_path=$(printf '%s' "$PARSED_PATH_26" | od -c | head -2) out=$OUT_26"
+fi
+rm -rf "$CTRL_PARENT"
+
+# 27. stats batched jq aggregation (Gemini PR #29 round 10 P2)
+# 다중 state file 의 verdict_unset_expected_set_count 합산 — 이전엔 file별 jq 호출.
+# jq 단일 호출로 변경 후에도 합산 결과 동일해야 함.
+mkdir -p "$TMP_STATE"
+rm -f "$TMP_STATE"/*.json
+for sid_n in 1 2 3; do
+    jq -n --argjson v "$sid_n" '{verdict_unset_expected_set_count: $v}' \
+        > "$TMP_STATE/sessAggr${sid_n}--h${sid_n}.json"
+done
+# 합계: 1+2+3 = 6
+rm -f "$TMP_STATE/audit.log"
+OUT_27=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" stats --days 7 2>&1)
+rc_27=$?
+if [ "$rc_27" = "0" ] && echo "$OUT_27" | grep -qE "verdict_unset_expected_set:[[:space:]]+6"; then
+    pass "27. stats: batched jq aggregation across multiple state files"
+else
+    fail "27." "rc=$rc_27 out=$OUT_27"
+fi
+# 0-file edge: state file 없을 때도 0 반환해야 함 (no glob expansion).
+rm -f "$TMP_STATE"/*.json
+OUT_27b=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" stats --days 7 2>&1)
+rc_27b=$?
+# state file/audit 모두 없으면 no-data (rc=2) 가 정상. 단 jq error stderr 로 새지 않아야 함.
+if [ "$rc_27b" = "2" ] && ! echo "$OUT_27b" | grep -qi "jq: error"; then
+    pass "27b. stats: no state files → no-data, no jq errors"
+else
+    fail "27b." "rc=$rc_27b out=$OUT_27b"
+fi
 
 echo ""
 echo "─────────────────────"
