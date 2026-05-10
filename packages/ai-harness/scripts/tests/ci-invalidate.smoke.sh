@@ -1129,6 +1129,80 @@ val=$(get_ci_passed_at "t12p" "$REPO_A")
 assert_null "$val" "12p. multi-commit in same repo + cross-repo chain — dict-based marker covers earlier code commit (HEAD is docs-only)"
 rm -rf "$REPO_A" "$REPO_B"
 
+# 12q. Marker cleanup runs even when pre already invalidated (Codex #3215109919).
+# Scenario: code commit invalidates ci, CI re-runs, then docs-only commit fires.
+# Without cleanup the stale marker re-diffs the OLD code commit and re-invalidates
+# the freshly-passed ci_passed_at.
+WORK_REPO="/tmp/sazo-ci-invalidate-marker-stale-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    git commit -q --allow-empty -m init
+)
+mark_ci_passed "t12q" "$WORK_REPO"
+# Round A: code commit. pre invalidates → cur_cp_post=null at post-hook.
+run_hook_pre "{\"session_id\":\"t12q\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO commit -m a-code\"}}" >/dev/null
+( cd "$WORK_REPO" && echo 'package main' > foo.go && git add foo.go && git commit -q -m a-code )
+run_hook_post "{\"session_id\":\"t12q\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO commit -m a-code\"},\"tool_response\":{\"exit_code\":0}}" >/dev/null
+# Verify marker cleared even though cur_cp_post was null at post.
+MARKER=$(bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_get 't12q' '.pre_commit_marker' '$WORK_REPO'
+")
+DICT=$(bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_get 't12q' '.pre_commit_markers' '$WORK_REPO'
+")
+if { [ -z "$MARKER" ] || [ "$MARKER" = "null" ]; } && { [ -z "$DICT" ] || [ "$DICT" = "null" ]; }; then
+    PASS=$((PASS + 1)); echo "  ✓ 12q-clean. marker + dict cleared after pre-invalidation (cleanup outside cur_cp guard)"
+else
+    FAIL=$((FAIL + 1)); echo "  ✗ 12q-clean. stale marker survives (Codex round 14 bug)"
+fi
+# Round B: CI re-runs. Then docs-only commit. Without round-14 fix the stale
+# marker would diff round A's code commit and invalidate round B's ci_passed_at.
+bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_set_str 't12q' '.ci_passed_at' '2026-05-09T11:00:00+0900' '$WORK_REPO'
+"
+run_hook_pre "{\"session_id\":\"t12q\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO commit -m b-docs\"}}" >/dev/null
+( cd "$WORK_REPO" && echo doc > README.md && git add README.md && git commit -q -m b-docs )
+run_hook_post "{\"session_id\":\"t12q\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO commit -m b-docs\"},\"tool_response\":{\"exit_code\":0}}" >/dev/null
+val=$(get_ci_passed_at "t12q" "$WORK_REPO")
+if [ -n "$val" ] && [ "$val" != "null" ]; then
+    PASS=$((PASS + 1)); echo "  ✓ 12q. fresh ci_passed_at preserved after stale-marker cleanup"
+else
+    FAIL=$((FAIL + 1)); echo "  ✗ 12q. stale marker invalidated fresh ci (Codex round 14 bug)"
+fi
+rm -rf "$WORK_REPO"
+
+# 12r. go.mod recognized as code (Codex #3215109920)
+WORK_REPO="/tmp/sazo-ci-invalidate-gomod-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    echo 'module foo' > go.mod
+    git add go.mod && git commit -q -m init
+    echo 'require example.com/dep v1.0.0' >> go.mod
+    git add go.mod
+)
+mark_ci_passed "t12r" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t12r\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO commit -m bump-dep\"}}" >/dev/null
+val=$(get_ci_passed_at "t12r" "$WORK_REPO")
+assert_null "$val" "12r. go.mod change invalidates ci_passed_at"
+rm -rf "$WORK_REPO"
+
+# 12r2. go.mod via Edit PostToolUse (file path detection)
+reset_state
+mark_ci_passed "t12r2" "/tmp"
+run_hook_post "{\"session_id\":\"t12r2\",\"cwd\":\"/tmp\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"/tmp/go.mod\"}}" >/dev/null
+val=$(get_ci_passed_at "t12r2" "/tmp")
+assert_null "$val" "12r2. Edit go.mod → ci_passed_at null"
+
 # 13. PreToolUse Task subagent_type=plan-executor + ci_passed_at!=null → invalidate
 reset_state
 mark_ci_passed "t13" "/tmp"

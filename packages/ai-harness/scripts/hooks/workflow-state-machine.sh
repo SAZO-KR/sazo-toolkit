@@ -213,6 +213,13 @@ handle_post() {
                 && echo "$cmd" | grep -qE "(^|[[:space:]&|;()])git[[:space:]]+${GIT_OPTS_RE}commit\b"; then
                 local cur_cp_post
                 cur_cp_post=$(state_get "$SAZO_SESSION_ID" ".ci_passed_at" "$SAZO_CWD")
+                # Codex PR #30 round 14 P2 (#3215109919): marker cleanup must
+                # run regardless of `ci_passed_at` state. If pre-hook already
+                # invalidated (cur_cp_post=null) and we skip cleanup, the
+                # marker survives across CI re-runs — a later docs-only commit
+                # then re-uses the stale marker, diff-trees the OLD code commit,
+                # and re-invalidates the freshly-passed ci_passed_at.
+                local _do_marker_cleanup=1
                 if [ -n "$cur_cp_post" ] && [ "$cur_cp_post" != "null" ]; then
                     # Codex PR #30 round 11 P2: iterate **every** `git commit`
                     # segment in the Bash chain. Prior `head -1` made the
@@ -301,12 +308,15 @@ handle_post() {
                     done < <(printf '%s\n' "$cmd" | tr ';|&' '\n' \
                         | grep -E "(^|[[:space:]])git[[:space:]]+${GIT_OPTS_RE}commit\b")
 
-                    # Clear both legacy single marker and per-repo dict so a
-                    # later unrelated commit in the same session does not reuse
-                    # a stale ref.
+                    : "$invalidated_post"  # reserved for future audit
+                fi  # cur_cp_post != null
+                # Codex PR #30 round 14 P2: cleanup outside the cur_cp guard
+                # so stale markers don't survive across CI re-runs after pre
+                # already invalidated. `_do_marker_cleanup` is always 1 in this
+                # branch — the var name is for readability/future skip-conditions.
+                if [ "$_do_marker_cleanup" = "1" ]; then
                     state_set_json "$SAZO_SESSION_ID" ".pre_commit_marker" "null" "$SAZO_CWD" 2>/dev/null || true
                     state_set_json "$SAZO_SESSION_ID" ".pre_commit_markers" "null" "$SAZO_CWD" 2>/dev/null || true
-                    : "$invalidated_post"  # reserved for future audit
                 fi
             fi
             ;;

@@ -1031,6 +1031,11 @@ _is_code_file() {
         *.bash|*.zsh|*.rb|*.java|*.kt|*.swift|*.c|*.h|*.cpp|*.hpp) return 0 ;;
         *.json|*.yml|*.yaml|*.toml|*.ini|*.lock|*.sum) return 0 ;;
         Dockerfile|*/Dockerfile|Makefile|*/Makefile) return 0 ;;
+        # Codex PR #30 round 14 P2: Go module manifest (`go.mod`) is build
+        # input — dependency edits change resolution and can break build
+        # without touching .go sources. `go.sum` already covered by `*.sum`.
+        # Same intent for other language manifests with similar coverage gap.
+        go.mod|*/go.mod) return 0 ;;
         *) return 1 ;;
     esac
 }
