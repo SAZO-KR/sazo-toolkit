@@ -476,6 +476,27 @@ else
 fi
 rm -rf "$SYM_DIR"
 
+# 23. _require_positive_int rejects 0 (Codex PR #29 round 7 P2)
+# `--last 0` 이전엔 통과 → jq `.[0:]` = 전체 dump. positive 명세 위반.
+for sub_case in "history --last" "audit --last" "sessions --days" "stats --days"; do
+    set -- $sub_case
+    sub="$1"; opt="$2"
+    OUT_23=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" "$sub" "$opt" "0" 2>&1)
+    rc_23=$?
+    if [ "$rc_23" = "1" ] && echo "$OUT_23" | grep -qi "positive integer"; then
+        pass "23.$sub$opt $opt 0 → rc=1 + 'positive integer'"
+    else
+        fail "23.$sub$opt" "rc=$rc_23 out=$OUT_23"
+    fi
+done
+# leading-zero 변형
+OUT_23b=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" history --last "00" 2>&1)
+if [ "$?" = "1" ] && echo "$OUT_23b" | grep -qi "positive integer"; then
+    pass "23b. history --last 00 → rc=1 (leading-zero variant rejected)"
+else
+    fail "23b." "out=$OUT_23b"
+fi
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"

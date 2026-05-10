@@ -130,6 +130,13 @@ _require_positive_int() {
             return 1
             ;;
     esac
+    # Codex PR #29 round 7 P2: 0 명시적 reject. positive 명세 위반.
+    # cmd_history 에서 `--last 0` → jq `.[0:]` = 전체 history dump (의도와 정반대).
+    # arithmetic comparison 으로 0/00/000 등 leading-zero 변형도 모두 reject.
+    if [ "$value" -eq 0 ] 2>/dev/null; then
+        echo "sazo-workflow: $label must be a positive integer (>= 1), got '$value'" >&2
+        return 1
+    fi
     return 0
 }
 
