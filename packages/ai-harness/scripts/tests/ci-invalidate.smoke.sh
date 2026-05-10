@@ -1026,6 +1026,66 @@ val=$(get_ci_passed_at "t12l" "$WORK_REPO")
 assert_null "$val" "12l. quoted pathspec 'my file.go' detected by quote-aware tokenizer"
 rm -rf "$WORK_REPO"
 
+# 12m. Compact chain operators `&&` (no surrounding whitespace) — Codex PR #30 round 12 P2 (#3215075171)
+WORK_REPO="/tmp/sazo-ci-invalidate-compact-chain-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    git commit -q --allow-empty -m init
+)
+mark_ci_passed "t12m" "$WORK_REPO"
+# Compact chain (no spaces around `&&`) — `python -c '...'&&git add .&&git commit -m x&&gh pr create`.
+run_hook_pre "{\"session_id\":\"t12m\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo 'package main' > $WORK_REPO/foo.go&&git -C $WORK_REPO add foo.go&&git -C $WORK_REPO commit -m x&&gh pr create --title compact\"}}" >/dev/null 2>&1
+val=$(get_ci_passed_at "t12m" "$WORK_REPO")
+assert_null "$val" "12m. opaque-chain guard catches compact `&&` (no whitespace) chain"
+rm -rf "$WORK_REPO"
+
+# 12n. `git commit --all` (long form) in PR-create chain — Codex #3215075173
+WORK_REPO="/tmp/sazo-ci-invalidate-commit-all-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    echo 'package main' > foo.go && git add foo.go && git commit -q -m init
+    echo "// edit" >> foo.go
+)
+mark_ci_passed "t12n" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t12n\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO commit --all -m x && gh pr create --title longform\"}}" >/dev/null 2>&1
+val=$(get_ci_passed_at "t12n" "$WORK_REPO")
+assert_null "$val" "12n. opaque-chain guard catches 'git commit --all' (long form, not just -a/-am)"
+rm -rf "$WORK_REPO"
+
+# 12o. Per-repo marker dict — multi-repo chain (Codex #3215083285)
+# pre creates commit in repo A then repo B; legacy single marker overwritten by B.
+# post for repo A must read dict and use A's marker (not fall back to HEAD-only).
+REPO_A="/tmp/sazo-ci-invalidate-marker-a-$$"
+REPO_B="/tmp/sazo-ci-invalidate-marker-b-$$"
+rm -rf "$REPO_A" "$REPO_B"
+mkdir -p "$REPO_A" "$REPO_B"
+for r in "$REPO_A" "$REPO_B"; do (
+    cd "$r"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    git commit -q --allow-empty -m init
+); done
+mark_ci_passed "t12o" "$REPO_A"
+# Pre: chain has commits in both A and B. dict gets A and B entries; legacy
+# single marker = B (last write wins).
+run_hook_pre "{\"session_id\":\"t12o\",\"cwd\":\"$REPO_A\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $REPO_A commit -m a && git -C $REPO_B commit -m b\"}}" >/dev/null
+# Now actually create the commits — A gets code, B gets docs.
+( cd "$REPO_A" && echo 'package main' > foo.go && git add foo.go && git commit -q -m a-code )
+( cd "$REPO_B" && echo doc > README.md && git add README.md && git commit -q -m b-docs )
+# Restore ci_passed_at to isolate post-hook fallback.
+bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_set_str 't12o' '.ci_passed_at' '2026-05-09T10:00:00+0900' '$REPO_A'
+"
+run_hook_post "{\"session_id\":\"t12o\",\"cwd\":\"$REPO_A\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $REPO_A commit -m a && git -C $REPO_B commit -m b\"},\"tool_response\":{\"exit_code\":0}}" >/dev/null
+val=$(get_ci_passed_at "t12o" "$REPO_A")
+assert_null "$val" "12o. per-repo marker dict survives multi-repo chain (A code commit detected even after B overwrites legacy marker)"
+rm -rf "$REPO_A" "$REPO_B"
+
 # 13. PreToolUse Task subagent_type=plan-executor + ci_passed_at!=null → invalidate
 reset_state
 mark_ci_passed "t13" "/tmp"

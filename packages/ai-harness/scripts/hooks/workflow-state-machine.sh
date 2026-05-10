@@ -222,11 +222,17 @@ handle_post() {
                     # (`&& git commit -m code && gh pr create`) bypassed the
                     # invalidation entirely.
                     local invalidated_post=0
-                    local marker_json marker_head marker_repo
-                    marker_json=$(state_get "$SAZO_SESSION_ID" ".pre_commit_marker" "$SAZO_CWD" 2>/dev/null)
-                    if [ -n "$marker_json" ] && [ "$marker_json" != "null" ]; then
-                        marker_head=$(echo "$marker_json" | jq -r '.head // ""' 2>/dev/null)
-                        marker_repo=$(echo "$marker_json" | jq -r '.repo_root // ""' 2>/dev/null)
+                    # Codex PR #30 round 12 P2: look up marker from per-repo dict
+                    # first, fall back to legacy single marker. Multi-repo chains
+                    # need the dict so repo A's commit detection survives a later
+                    # repo B commit overwriting the legacy single marker.
+                    local markers_dict
+                    markers_dict=$(state_get "$SAZO_SESSION_ID" ".pre_commit_markers" "$SAZO_CWD" 2>/dev/null)
+                    local legacy_marker_json legacy_marker_head legacy_marker_repo
+                    legacy_marker_json=$(state_get "$SAZO_SESSION_ID" ".pre_commit_marker" "$SAZO_CWD" 2>/dev/null)
+                    if [ -n "$legacy_marker_json" ] && [ "$legacy_marker_json" != "null" ]; then
+                        legacy_marker_head=$(echo "$legacy_marker_json" | jq -r '.head // ""' 2>/dev/null)
+                        legacy_marker_repo=$(echo "$legacy_marker_json" | jq -r '.repo_root // ""' 2>/dev/null)
                     fi
 
                     # Iterate every commit segment. tr-newline split keeps each
@@ -258,11 +264,22 @@ handle_post() {
                         # repos in the chain (e.g. `git -C /tmp/other commit`),
                         # fall back to HEAD-only — that's the legacy behavior and
                         # is sufficient for the common single-commit-per-repo case.
-                        local commit_range=""
-                        if [ -n "${marker_head:-}" ] \
-                            && [ "${marker_repo:-}" = "$repo_root_post" ] \
-                            && git -C "$repo_root_post" cat-file -e "$marker_head" 2>/dev/null; then
-                            commit_range="${marker_head}..HEAD"
+                        local commit_range="" segment_marker_head=""
+                        # 1) Try per-repo dict (preferred — survives multi-repo
+                        # chains where legacy single marker gets overwritten).
+                        if [ -n "$markers_dict" ] && [ "$markers_dict" != "null" ]; then
+                            segment_marker_head=$(echo "$markers_dict" \
+                                | jq -r --arg k "$repo_root_post" '.[$k] // ""' 2>/dev/null)
+                        fi
+                        # 2) Legacy single-marker fallback for single-repo chains.
+                        if [ -z "$segment_marker_head" ] \
+                            && [ -n "${legacy_marker_head:-}" ] \
+                            && [ "${legacy_marker_repo:-}" = "$repo_root_post" ]; then
+                            segment_marker_head="$legacy_marker_head"
+                        fi
+                        if [ -n "$segment_marker_head" ] \
+                            && git -C "$repo_root_post" cat-file -e "$segment_marker_head" 2>/dev/null; then
+                            commit_range="${segment_marker_head}..HEAD"
                         fi
                         local diff_args
                         if [ -n "$commit_range" ]; then
@@ -284,9 +301,11 @@ handle_post() {
                     done < <(printf '%s\n' "$cmd" | tr ';|&' '\n' \
                         | grep -E "(^|[[:space:]])git[[:space:]]+${GIT_OPTS_RE}commit\b")
 
-                    # Clear marker regardless of outcome so a later unrelated commit
-                    # in the same session does not reuse a stale ref.
+                    # Clear both legacy single marker and per-repo dict so a
+                    # later unrelated commit in the same session does not reuse
+                    # a stale ref.
                     state_set_json "$SAZO_SESSION_ID" ".pre_commit_marker" "null" "$SAZO_CWD" 2>/dev/null || true
+                    state_set_json "$SAZO_SESSION_ID" ".pre_commit_markers" "null" "$SAZO_CWD" 2>/dev/null || true
                     : "$invalidated_post"  # reserved for future audit
                 fi
             fi
@@ -525,12 +544,34 @@ EOF
                             # `<marker>..HEAD` 범위로 모든 새 commit 검사 가능.
                             local pre_commit_head
                             pre_commit_head=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo "")
-                            # Marker stored once per segment that resolves to a
-                            # real repo; later iterations overwrite. For multi-
-                            # commit chains the LAST segment's repo wins, which
-                            # matches post-hook expectation that marker reflects
-                            # the most recent pre-commit baseline.
+                            # Codex PR #30 round 12 P2 (#3215083285): marker
+                            # must be per-target-repo. A single `.pre_commit_marker`
+                            # got overwritten by the last segment in a chain like
+                            # `commit-in-A && commit-in-A && commit-in-B`, so
+                            # post-hook lookup for repo A fell back to HEAD-only
+                            # and missed the earlier in-A code commit.
+                            # Store as a dict: `.pre_commit_markers[repo_root] = head`.
+                            # Only the FIRST segment in each repo writes (preserves
+                            # baseline before the cmd ran). Subsequent segments in
+                            # the same repo are redundant since `marker..HEAD`
+                            # range still covers all new commits.
                             if [ -n "$pre_commit_head" ]; then
+                                # jq path needs the key escaped (slashes/dots ok).
+                                # Use ensure-then-skip-if-set semantics.
+                                local _marker_existing
+                                _marker_existing=$(state_get "$SAZO_SESSION_ID" \
+                                    ".pre_commit_markers[\"$repo_root\"]" "$SAZO_CWD" 2>/dev/null)
+                                if [ -z "$_marker_existing" ] || [ "$_marker_existing" = "null" ]; then
+                                    # ensure dict exists, then set repo entry.
+                                    state_set_json "$SAZO_SESSION_ID" \
+                                        ".pre_commit_markers" \
+                                        "$(state_get "$SAZO_SESSION_ID" ".pre_commit_markers" "$SAZO_CWD" 2>/dev/null \
+                                            | jq -c --arg k "$repo_root" --arg v "$pre_commit_head" '. // {} | .[$k] = $v')" \
+                                        "$SAZO_CWD" 2>/dev/null || true
+                                fi
+                                # Legacy single-marker write for back-compat with
+                                # post-hook fallback (kept for transition; post-hook
+                                # prefers dict but reads legacy if dict empty).
                                 state_set_json "$SAZO_SESSION_ID" \
                                     ".pre_commit_marker" \
                                     "{\"head\":\"$pre_commit_head\",\"repo_root\":\"$repo_root\"}" \
@@ -858,13 +899,20 @@ EOF_PST
                     # 도 opaque — 사전 add 없이 working-tree 코드 파일을 commit. 매치
                     # 추가: `commit` 토큰 뒤가 옵션만이 아니라 positional pathspec 포함
                     # 케이스 (commit_segment 안에 -- 또는 non-flag 토큰 존재).
+                    # Codex PR #30 round 12 P2 (#3215075171, #3215075173):
+                    # - chain operator regex allowed only spaced forms (`a && b`),
+                    #   missing compact `a&&b&&c`. Bash accepts both. Drop the
+                    #   surrounding `[[:space:]]` requirements.
+                    # - opaque commit-flag regex matched `-a`/`-am` only; missed
+                    #   the long form `git commit --all` documented in `git
+                    #   commit -h`. Add `--all` alternative.
                     local has_opaque=0
-                    if echo "$pre_chain" | grep -qE '[[:space:]](&&|\|\||;)[[:space:]]' \
-                        && echo "$pre_chain" | grep -qE "\bgit[[:space:]]+${GIT_OPTS_RE}(add\b|rm\b|mv\b|commit[[:space:]]+-[aA-Za-z]*[aA])"; then
+                    if echo "$pre_chain" | grep -qE '(&&|\|\||;)' \
+                        && echo "$pre_chain" | grep -qE "\bgit[[:space:]]+${GIT_OPTS_RE}(add\b|rm\b|mv\b|commit[[:space:]]+(-[aA-Za-z]*[aA]\b|--all\b))"; then
                         has_opaque=1
                     fi
                     if [ "$has_opaque" != "1" ] \
-                        && echo "$pre_chain" | grep -qE '[[:space:]](&&|\|\||;)[[:space:]]'; then
+                        && echo "$pre_chain" | grep -qE '(&&|\|\||;)'; then
                         # Codex PR #30 round 11 P2: scan **every** commit segment
                         # for pathspec form, not just the first. A chain like
                         # `git commit -m docs && git commit foo.go && gh pr create`
