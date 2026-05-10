@@ -1239,6 +1239,44 @@ val=$(get_ci_passed_at "t12s2" "$WORK_REPO")
 assert_null "$val" "12s2. opaque-chain catches '--pathspec-from-file' commit + gh pr create"
 rm -rf "$WORK_REPO"
 
+# 12t. Quoted -C path with internal space (Codex round 16 #3215134953)
+WORK_REPO="/tmp/sazo-ci-quoted-C path-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    echo 'package main' > foo.go
+    git add foo.go
+    git commit -q -m init
+    echo "// edit" >> foo.go
+    git add foo.go
+)
+mark_ci_passed "t12t" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t12t\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C \\\"$WORK_REPO\\\" commit -m x\"}}" >/dev/null
+val=$(get_ci_passed_at "t12t" "$WORK_REPO")
+assert_null "$val" "12t. quoted -C path with internal space resolves correctly via awk tokenizer"
+rm -rf "$WORK_REPO"
+
+# 12u. `--message <docs-only>` standalone form must NOT mark chain opaque
+# (Codex round 16 #3215134956). Only docs staged → ci_passed_at preserved
+# even though chain ends in `gh pr create`.
+WORK_REPO="/tmp/sazo-ci-invalidate-longmsg-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    echo 'docs init' > README.md && git add README.md && git commit -q -m init
+    echo 'docs update' >> README.md && git add README.md
+)
+mark_ci_passed "t12u" "$WORK_REPO"
+# `--message docs` (long form, standalone value) — value `docs` must NOT be
+# treated as positional pathspec by has_pathspec scanner.
+run_hook_pre "{\"session_id\":\"t12u\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO commit --message docs && gh pr create --title docs\"}}" >/dev/null 2>&1
+val=$(get_ci_passed_at "t12u" "$WORK_REPO")
+[ -n "$val" ] && [ "$val" != "null" ]
+assert_exit "0" "$?" "12u. '--message docs' standalone — value 'docs' NOT misclassified as pathspec (false-positive guard)"
+rm -rf "$WORK_REPO"
+
 # 13. PreToolUse Task subagent_type=plan-executor + ci_passed_at!=null → invalidate
 reset_state
 mark_ci_passed "t13" "/tmp"

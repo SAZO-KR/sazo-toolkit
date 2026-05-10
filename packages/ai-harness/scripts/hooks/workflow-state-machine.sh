@@ -55,6 +55,43 @@ state_init "$SAZO_SESSION_ID" "$SAZO_CWD" "$SAZO_MODEL"
 # zero-token alternation in the build below.
 GIT_OPTS_RE="(.*[[:space:]]+)?"
 
+# Codex PR #30 round 16 P2 (#3215134953): quote-aware `-C <path>` extractor.
+# Prior `sed -E 's/.*-C[[:space:]]+([^[:space:]]+).*/\1/p'` captured only
+# the first whitespace-delimited fragment of a quoted target (`'/tmp/my`
+# from `git -C '/tmp/my repo' commit`), so `git -C` failed and the staged
+# code in `/tmp/my repo` escaped detection. Use the same awk tokenizer
+# that pathspec parsers use so quoted/escaped runs survive intact.
+_extract_dash_C_path() {
+    printf '%s' "$1" | awk '
+        function tokenize(s,   i, n, c, q, esc, buf, tcount) {
+            n = length(s)
+            q = ""; esc = 0; buf = ""; tcount = 0
+            for (i = 1; i <= n; i++) {
+                c = substr(s, i, 1)
+                if (esc) { buf = buf c; esc = 0; continue }
+                if (c == "\\") { esc = 1; continue }
+                if (q != "") {
+                    if (c == q) { q = "" } else { buf = buf c }
+                    continue
+                }
+                if (c == "\047" || c == "\"") { q = c; continue }
+                if (c == " " || c == "\t") {
+                    if (buf != "") { TOK[tcount++] = buf; buf = "" }
+                    continue
+                }
+                buf = buf c
+            }
+            if (buf != "") TOK[tcount++] = buf
+            return tcount
+        }
+        {
+            n = tokenize($0)
+            for (i = 0; i < n; i++) {
+                if (TOK[i] == "-C" && i + 1 < n) { print TOK[i+1]; exit }
+            }
+        }'
+}
+
 # ----- soft warn helper -----
 # stage별 카운터 분리 — research/plan/approval 동시 fail 시 한 Write 호출에서
 # 카운터가 3번 증가해 즉시 block되는 버그 방지.
@@ -249,9 +286,7 @@ handle_post() {
                     while IFS= read -r commit_segment_post; do
                         [ -z "$commit_segment_post" ] && continue
                         local git_target_post="$SAZO_CWD" c_path_post
-                        c_path_post=$(printf '%s' "$commit_segment_post" \
-                            | sed -E -n 's/.*[[:space:]]-C[[:space:]]+([^[:space:]]+).*/\1/p' \
-                            | head -1)
+                        c_path_post=$(_extract_dash_C_path "$commit_segment_post")
                         if [ -n "$c_path_post" ]; then
                             case "$c_path_post" in
                                 /*) git_target_post="$c_path_post" ;;
@@ -533,9 +568,7 @@ EOF
                         while IFS= read -r commit_segment; do
                             [ -z "$commit_segment" ] && continue
                             local git_target="$SAZO_CWD" c_path
-                            c_path=$(printf '%s' "$commit_segment" \
-                                | sed -E -n 's/.*[[:space:]]-C[[:space:]]+([^[:space:]]+).*/\1/p' \
-                                | head -1)
+                            c_path=$(_extract_dash_C_path "$commit_segment")
                             if [ -n "$c_path" ]; then
                                 case "$c_path" in
                                     /*) git_target="$c_path" ;;
@@ -858,6 +891,15 @@ EOF_RT
                                                 print "__OPAQUE_PATHSPEC_FROM_FILE__"
                                                 continue
                                             }
+                                            # Codex PR #30 round 16 P2 (#3215134956):
+                                            # value-bearing long opts standalone form.
+                                            if (t == "--message" || t == "--file" || t == "--reuse-message" \
+                                                || t == "--reedit-message" || t == "--squash" || t == "--fixup" \
+                                                || t == "--gpg-sign" || t == "--cleanup" || t == "--date" \
+                                                || t == "--author" || t == "--template" || t == "--pathspec-file-nul") {
+                                                skip_next = 1
+                                                continue
+                                            }
                                             # value-bearing short opts: next token = value
                                             if (t == "-m" || t == "-F" || t == "-c" || t == "-C" || t == "-t" || t == "-T" || t == "--trailer") {
                                                 skip_next = 1
@@ -1014,6 +1056,20 @@ EOF_PST
                                         # pathspec source — flag it like positional.
                                         if (t == "--pathspec-from-file" || t ~ /^--pathspec-from-file=/) {
                                             print "1"; exit
+                                        }
+                                        # Codex PR #30 round 16 P2 (#3215134956):
+                                        # value-bearing long opts whose value can
+                                        # otherwise be misclassified as positional
+                                        # pathspec. `--key=value` form already
+                                        # skipped by `substr == "-"` below; only
+                                        # the standalone `--key value` form needs
+                                        # explicit skip-next.
+                                        if (t == "--message" || t == "--file" || t == "--reuse-message" \
+                                            || t == "--reedit-message" || t == "--squash" || t == "--fixup" \
+                                            || t == "--gpg-sign" || t == "--cleanup" || t == "--date" \
+                                            || t == "--author" || t == "--template" || t == "--pathspec-file-nul") {
+                                            skip_next = 1
+                                            continue
                                         }
                                         if (t == "-m" || t == "-F" || t == "-c" || t == "-C" || t == "-t" || t == "-T" || t == "--trailer") {
                                             skip_next = 1
