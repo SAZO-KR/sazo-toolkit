@@ -458,8 +458,18 @@ cmd_audit() {
     fi
 
     if [ "$JSON_MODE" = "1" ]; then
-        # JSON-only output: skip freeform.
-        printf '%s\n' "$lines" | grep '^{' || return 2
+        # Codex PR #29 round 12 P2: prefix-only filter (`grep '^{'`) emits
+        # truncated/malformed lines too → automation piping `audit --json | jq`
+        # parse-fails despite rc=0. Validate per-line via `fromjson?`.
+        # `?` swallows parse errors → null → `select(. != null)` drops.
+        # `-c` keeps single-line per record. emit count check via wc -l.
+        local out
+        out=$(printf '%s\n' "$lines" | grep '^{' \
+            | jq -cR 'fromjson? | select(. != null)' 2>/dev/null)
+        if [ -z "$out" ]; then
+            return 2
+        fi
+        printf '%s\n' "$out"
         return 0
     fi
     printf '%s\n' "$lines"

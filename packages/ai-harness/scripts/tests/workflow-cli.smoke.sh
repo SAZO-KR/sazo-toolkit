@@ -577,6 +577,35 @@ else
 fi
 rm -rf "$CTRL_PARENT"
 
+# 26c. audit --json must skip malformed JSON lines (Codex PR #29 round 12 P2)
+# 이전엔 `^{` prefix 만으로 필터해서 truncated 라인까지 emit → `jq` 받는 자동화가
+# 성공 종료에도 parse 실패. Plan acceptance: 모든 --json 모드는 parseable.
+mkdir -p "$TMP_STATE"
+rm -f "$TMP_STATE/audit.log"
+printf '{"ts":"2026-05-09T10:00:00+0900","event":"stage_block","truncat\n' \
+    >> "$TMP_STATE/audit.log"
+printf '{"ts":"2026-05-09T11:00:00+0900","event":"stage_block","sid":"sA","stage":"plan"}\n' \
+    >> "$TMP_STATE/audit.log"
+printf '{"ts":"2026-05-09T12:00:00+0900","event":"stage_block","sid":"sB","stage":"ci"}\n' \
+    >> "$TMP_STATE/audit.log"
+OUT_26c=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" audit --last 50 --json 2>&1)
+rc_26c=$?
+# 출력 라인 수: 정확히 2 (malformed 1 drop), 각 라인 jq parse 가능해야 함.
+LINE_COUNT_26c=$(printf '%s\n' "$OUT_26c" | sed '/^$/d' | wc -l | tr -d ' ')
+ALL_VALID=1
+while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    printf '%s' "$line" | jq -e . >/dev/null 2>&1 || ALL_VALID=0
+done <<EOF_26c
+$OUT_26c
+EOF_26c
+if [ "$rc_26c" = "0" ] && [ "$LINE_COUNT_26c" = "2" ] && [ "$ALL_VALID" = "1" ]; then
+    pass "26c. audit --json: malformed JSON lines skipped, only parseable emitted"
+else
+    fail "26c." "rc=$rc_26c lines=$LINE_COUNT_26c valid=$ALL_VALID out=$OUT_26c"
+fi
+rm -f "$TMP_STATE/audit.log"
+
 # 26b. stats: malformed JSON line in audit.log must NOT discard valid entries
 # (Codex PR #29 round 11 P2). 단일 jq fail → `|| entries=""` 이 valid 라인까지
 # 전부 버려서 stage_block count 가 0 으로 보고됨 (no-data 분기까지 빠질 수 있음).
