@@ -135,6 +135,9 @@ sync_rtk_setup() {
 # 옵션 변경/스크립트 위치 이동 시 자동 복구. 알림/opt-in 흐름 없음.
 sync_awake() {
     [ "$(uname -s)" = "Darwin" ] || return 0
+    # legacy cleanup은 awake.sh 존재 여부와 무관하게 항상 수행 — 최초 fetch 직전
+    # 세션이나 awake.sh path가 일시적으로 unresolved인 케이스에서도 잔재 정리.
+    sync_awake_cleanup_legacy
     local awake_script="$HARNESS_DIR/scripts/awake/awake.sh"
     [ -f "$awake_script" ] || return 0
     # rebase/git checkout 으로 mode bit 떨어질 수 있어 매번 보장.
@@ -143,11 +146,9 @@ sync_awake() {
     mkdir -p "$HOME/.local/bin" 2>/dev/null || true
     # symlink target이 이미 정확하면 ln 호출 자체 skip — noise 감소.
     if [ -L "$awake_symlink" ] && [ "$(readlink "$awake_symlink")" = "$awake_script" ]; then
-        sync_awake_cleanup_legacy
         return 0
     fi
     ln -sfn "$awake_script" "$awake_symlink" 2>>"$LOG_FILE" || true
-    sync_awake_cleanup_legacy
 }
 
 # 구 sleep-guard 잔재 자동 정리 — 다른 팀원이 새 버전을 auto-update로 받았을 때
@@ -208,7 +209,7 @@ sync_awake_cleanup_legacy() {
                 def clean_hook_type(k):
                     if has("hooks") and (.hooks | type) == "object" and (.hooks | has(k)) then
                         .hooks[k] = (.hooks[k] | map(
-                            .hooks = ((.hooks // []) | map(select(.command | test("sazo-caffeinate-session.sh") | not)))
+                            .hooks = ((.hooks // []) | map(select(.command | test("sazo-caffeinate-session\\.sh") | not)))
                           ) | map(select((.hooks // []) | length > 0)))
                         | if (.hooks[k] | length) == 0 then del(.hooks[k]) else . end
                     else . end;

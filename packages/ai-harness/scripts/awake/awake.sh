@@ -219,7 +219,7 @@ case "${1:-}" in
     off)     shift; cmd_off "$@" ;;
     status)  shift; cmd_status "$@" ;;
     extend)  shift; cmd_extend "$@" ;;
-    __parse) shift; parse_duration "$1" ;;  # 테스트용 — 외부 노출 X
+    __parse) shift; parse_duration "${1:-}" ;;  # 테스트용 — 외부 노출 X
     -h|--help|help) usage ;;
     "")      usage; exit 2 ;;
     *)       err "Unknown command: $1"; usage; exit 2 ;;
