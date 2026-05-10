@@ -1006,6 +1006,26 @@ val=$(get_ci_passed_at "t12k" "$WORK_REPO")
 assert_null "$val" "12k. PR-chain pathspec scan finds 2nd-segment pathspec commit (head -1 ignored 1st-only)"
 rm -rf "$WORK_REPO"
 
+# 12l. Quoted pathspec with internal space (Gemini PR #30 review #79):
+# `git commit "my file.go" -m msg` — naive whitespace split would tokenize
+# to `"my`, `file.go"`. quote-aware tokenizer must emit `my file.go` and
+# detect `.go` extension.
+WORK_REPO="/tmp/sazo-ci-invalidate-quoted-path-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    echo 'package main' > "my file.go"
+    git add "my file.go"
+    git commit -q -m init
+    echo "// edit" >> "my file.go"
+)
+mark_ci_passed "t12l" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t12l\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO commit \\\"my file.go\\\" -m msg\"}}" >/dev/null
+val=$(get_ci_passed_at "t12l" "$WORK_REPO")
+assert_null "$val" "12l. quoted pathspec 'my file.go' detected by quote-aware tokenizer"
+rm -rf "$WORK_REPO"
+
 # 13. PreToolUse Task subagent_type=plan-executor + ci_passed_at!=null → invalidate
 reset_state
 mark_ci_passed "t13" "/tmp"

@@ -734,15 +734,46 @@ EOF_RT
                                 # 변경이 commit 되므로 (a)/(b)/staged-set 모두 우회됨.
                                 # commit 토큰 뒤를 토큰화 → value-bearing flag 의 값 skip →
                                 # `--` 이후 또는 non-flag 토큰을 pathspec 으로 간주.
+                                # Codex PR #30 round 12 P2 (Gemini high #79):
+                                # quote-aware tokenizer. Prior `split(/[[:space:]]+/)`
+                                # broke on quoted filenames containing spaces
+                                # (`git commit "my file.go" -m msg` → tokens
+                                # `"my`, `file.go"`), causing `_is_code_file` to
+                                # miss the `.go` path. New tokenizer walks the
+                                # string char-by-char, honouring `'`/`"` runs and
+                                # backslash escapes; emits each token stripped of
+                                # surrounding quotes/escapes so downstream
+                                # `_is_code_file` sees the raw path.
                                 local pathspec_tokens
                                 pathspec_tokens=$(printf '%s' "$commit_segment" | awk '
+                                    function tokenize(s,   i, n, c, q, esc, buf, tcount) {
+                                        n = length(s)
+                                        q = ""; esc = 0; buf = ""; tcount = 0
+                                        for (i = 1; i <= n; i++) {
+                                            c = substr(s, i, 1)
+                                            if (esc) { buf = buf c; esc = 0; continue }
+                                            if (c == "\\") { esc = 1; continue }
+                                            if (q != "") {
+                                                if (c == q) { q = "" } else { buf = buf c }
+                                                continue
+                                            }
+                                            if (c == "\047" || c == "\"") { q = c; continue }
+                                            if (c == " " || c == "\t") {
+                                                if (buf != "") { TOK[tcount++] = buf; buf = "" }
+                                                continue
+                                            }
+                                            buf = buf c
+                                        }
+                                        if (buf != "") TOK[tcount++] = buf
+                                        return tcount
+                                    }
                                     {
-                                        n = split($0, a, /[[:space:]]+/)
+                                        n = tokenize($0)
                                         in_commit = 0
                                         in_pathspec = 0
                                         skip_next = 0
-                                        for (i = 1; i <= n; i++) {
-                                            t = a[i]
+                                        for (i = 0; i < n; i++) {
+                                            t = TOK[i]
                                             if (t == "") continue
                                             if (!in_commit) {
                                                 if (t == "commit") in_commit = 1
@@ -751,14 +782,14 @@ EOF_RT
                                             if (skip_next) { skip_next = 0; continue }
                                             if (in_pathspec) { print t; continue }
                                             if (t == "--") { in_pathspec = 1; continue }
-                                            # value-bearing short opts 다음 토큰 skip
+                                            # value-bearing short opts: next token = value
                                             if (t == "-m" || t == "-F" || t == "-c" || t == "-C" || t == "-t" || t == "-T" || t == "--trailer") {
                                                 skip_next = 1
                                                 continue
                                             }
-                                            # 옵션 (long-form `--foo=bar` 또는 stand-alone `--foo`/short `-x`)
+                                            # other flags (long `--foo=bar` or `-x`)
                                             if (substr(t, 1, 1) == "-") continue
-                                            # 첫 non-flag → pathspec 시작
+                                            # first non-flag → pathspec
                                             in_pathspec = 1
                                             print t
                                         }
@@ -844,12 +875,33 @@ EOF_PST
                             [ -z "$pre_commit_segment" ] && continue
                             local has_pathspec
                             has_pathspec=$(printf '%s' "$pre_commit_segment" | awk '
+                                function tokenize(s,   i, n, c, q, esc, buf, tcount) {
+                                    n = length(s)
+                                    q = ""; esc = 0; buf = ""; tcount = 0
+                                    for (i = 1; i <= n; i++) {
+                                        c = substr(s, i, 1)
+                                        if (esc) { buf = buf c; esc = 0; continue }
+                                        if (c == "\\") { esc = 1; continue }
+                                        if (q != "") {
+                                            if (c == q) { q = "" } else { buf = buf c }
+                                            continue
+                                        }
+                                        if (c == "\047" || c == "\"") { q = c; continue }
+                                        if (c == " " || c == "\t") {
+                                            if (buf != "") { TOK[tcount++] = buf; buf = "" }
+                                            continue
+                                        }
+                                        buf = buf c
+                                    }
+                                    if (buf != "") TOK[tcount++] = buf
+                                    return tcount
+                                }
                                 {
-                                    n = split($0, a, /[[:space:]]+/)
+                                    n = tokenize($0)
                                     in_commit = 0
                                     skip_next = 0
-                                    for (i = 1; i <= n; i++) {
-                                        t = a[i]
+                                    for (i = 0; i < n; i++) {
+                                        t = TOK[i]
                                         if (t == "") continue
                                         if (!in_commit) {
                                             if (t == "commit") in_commit = 1
