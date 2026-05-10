@@ -572,6 +572,25 @@ val=$(get_ci_passed_at "t11q" "$WORK_REPO")
 assert_null "$val" "11q. ci_passed_at invalidated by 'git rm ... && gh pr create' opaque-chain guard"
 rm -rf "$WORK_REPO"
 
+# 11r. chained `git mv code.go docs.md && git commit && gh pr create` (Codex PR #30 round 6 P2)
+# git mv 도 opaque-stage primitive — gh pr create opaque guard 가 trigger.
+WORK_REPO="/tmp/sazo-ci-invalidate-mv-prchain-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO/src"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    echo "package main" > src/foo.go
+    git add src/foo.go
+    git commit -q -m init
+)
+mark_ci_passed "t11r" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11r\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO mv src/foo.go src/bar.go && gh pr create --title mv\"}}" >/dev/null 2>&1
+val=$(get_ci_passed_at "t11r" "$WORK_REPO")
+assert_null "$val" "11r. ci_passed_at invalidated by 'git mv ... && gh pr create' opaque-chain guard"
+rm -rf "$WORK_REPO"
+
 # 12. git commit + staged 비어있음 → ci_passed_at 유지
 WORK_REPO="/tmp/sazo-ci-invalidate-commit3-$$"
 rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"

@@ -650,11 +650,12 @@ EOF_RT
                 if [ "${SAZO_DISABLE_CI_INVALIDATE:-0}" != "1" ]; then
                     local pre_chain
                     pre_chain=$(printf '%s' "$cmd" | sed -E 's/\bgh[[:space:]]+pr[[:space:]]+create.*$//')
-                    # Codex PR #30 round 5 P2: `git rm <code>` 도 opaque-stage primitive.
-                    # 코드 파일 삭제는 build break 가능 → ci_passed_at 무효화 필요.
-                    # `git -C <path> rm`, `git -c k=v add` 처럼 global option 끼는 케이스도 매치.
+                    # Codex PR #30 round 5/6 P2: opaque-stage primitives — `git add`,
+                    # `git rm`, `git mv`, `git commit -a`. 코드 파일 추가/삭제/이동
+                    # 모두 build break 또는 stale CI 위험. `git -C <path> ...`,
+                    # `git -c k=v ...` 처럼 global option 끼는 케이스도 매치.
                     if echo "$pre_chain" | grep -qE '[[:space:]](&&|\|\||;)[[:space:]]' \
-                        && echo "$pre_chain" | grep -qE '\bgit[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*(add\b|rm\b|commit[[:space:]]+-[aA-Za-z]*[aA])'; then
+                        && echo "$pre_chain" | grep -qE '\bgit[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*(add\b|rm\b|mv\b|commit[[:space:]]+-[aA-Za-z]*[aA])'; then
                         local cur_cp_chain
                         cur_cp_chain=$(state_get "$SAZO_SESSION_ID" ".ci_passed_at" "$SAZO_CWD")
                         if [ -n "$cur_cp_chain" ] && [ "$cur_cp_chain" != "null" ]; then
