@@ -511,6 +511,14 @@ git add <수정 파일들>
 git commit -m "fix(<scope>): <요약>"
 git push
 
+# CRITICAL: push 직후 CODEX_STATE 강제 reset.
+# CODEX_STATE는 Step 3-3에서만 갱신되고 Step 6 stale 판정은 그 이전 라운드 값을
+# 참조한다. 이전 라운드에 approved/reviewing이었던 상태가 그대로 유지되면
+# 신규 push 후 Codex가 silent stall해도 `codex_progressed=true`로 평가돼
+# `codex_stale`이 영원히 false가 되고 manual trigger/fallback 경로에 도달 못 한다.
+# push로 새 응답을 기다리는 시점이므로 명시적으로 "pending"으로 reset.
+CODEX_STATE="pending"
+
 # push 직후 hash 확보 (여러 커밋을 묶어 push한 경우 PUSH_RANGE 활용).
 # REPO_URL은 `gh`가 인식하는 실제 host에서 가져와 GitHub Enterprise 등 비-github.com 호스트에서도 정확한 링크 보장.
 COMMIT_HASH=$(git rev-parse --short HEAD)
@@ -603,10 +611,14 @@ while ROUND < MAX_ROUNDS:
   # pending 상태이거나 최신 review ID가 동일(= bot 진전 없음)일 때만 stale로 인정.
   #
   # NOTE: CODEX_STATE는 Step 3-3에서 갱신된다. 이 stale 판정 시점에는 이전 라운드의
-  # 값을 참조한다. Step 2 polling이 reaction 변화를 감지하면 NEW_REVIEW_FOUND=true로
-  # break하므로 `not NEW_REVIEW_FOUND` 가드가 이전 CODEX_STATE 값에 의한 오판을
-  # 차단한다 (Step 2 → Step 6 → Step 3 순서로 방어 계층화). CODEX_STATE 참조를
-  # 이동하거나 Step 3-3을 stale 판정 앞으로 당기면 이 의존이 깨지므로 주의.
+  # 값을 참조한다. 두 layer로 방어:
+  # 1) Step 2 polling이 reaction 변화 감지 시 NEW_REVIEW_FOUND=true로 break →
+  #    `not NEW_REVIEW_FOUND` 가드.
+  # 2) Step 4 push 직후 `CODEX_STATE="pending"` 강제 reset → 이전 라운드의
+  #    approved/reviewing이 신규 push silent stall을 가리는 race 방지.
+  # CODEX_STATE 참조를 이동하거나 Step 3-3을 stale 판정 앞으로 당기면 이 의존이
+  # 깨지므로 주의. push 후 reset이 빠지면 fix push 후 Codex 무응답이 영원히
+  # codex_stale=false로 분류돼 manual trigger/fallback에 도달 못 함.
   current_codex_latest = get_latest_codex_review_id()    # 없으면 ""
   current_gemini_latest = get_latest_gemini_review_id()  # 미활성/없으면 ""
   codex_progressed = (CODEX_STATE in {"reviewing", "approved"})
