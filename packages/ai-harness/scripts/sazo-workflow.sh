@@ -628,8 +628,14 @@ cmd_stats() {
     # append 하므로, audit substring count + state aggregate 를 합산하면 동일
     # event 가 2회 카운트된다. state file 을 single source of truth 로 사용하고
     # audit.log 는 (rotated/missing 가능한) 보조 채널로만 둔다.
-    verdict_missing=$(find "$STATE_DIR" -maxdepth 1 -name '*.json' -type f \
-        -exec jq -r '(.verdict_missing_count // {}) | to_entries | map(.value) | add // 0' {} + 2>/dev/null \
+    #
+    # Codex PR #29 round 17 P2 (3215697294): jq program 안에 literal `{}` 가 있으면
+    # `find -exec ... {} +` 형식이 GNU find / bfs 에서 reject된다 ("Only one
+    # instance of {} is supported"). BSD find 는 silent regression (값 0). 회피책으로
+    # `-print0 | xargs -0` 사용 — `{}` 토큰 자체가 등장하지 않아 안전. xargs 가
+    # 자동으로 ARG_MAX 분할도 처리한다.
+    verdict_missing=$(find "$STATE_DIR" -maxdepth 1 -name '*.json' -type f -print0 2>/dev/null \
+        | xargs -0 jq -r '(.verdict_missing_count // {}) | to_entries | map(.value) | add // 0' 2>/dev/null \
         | awk '{s+=$1} END {print s+0}')
     case "$verdict_missing" in
         ''|*[!0-9]*) verdict_missing=0 ;;
@@ -638,13 +644,14 @@ cmd_stats() {
 
     # Gemini PR #29 round 10 P2: 다중 state file 마다 jq 프로세스 spawn → 단일 호출 합산.
     # Gemini PR #29 round 14 P3: shell glob 직접 expansion 은 ARG_MAX 제한 + no-match
-    # literal-glob 두 케이스를 caller 가 책임져야 함. `find ... -exec jq + ` 로 변경:
-    # - `+` terminator 가 인자 chunk 자동 분할 → ARG_MAX 회피.
-    # - no-match 시 find 가 0 라인 emit, awk `s+0`=0.
-    # - 2>/dev/null: stat 에러 차단 (PR review/approval 다른 사용자 STATE_DIR 등).
+    # literal-glob 두 케이스를 caller 가 책임져야 함. `-print0 | xargs -0` 채택:
+    # - xargs 가 자동 chunk 분할 → ARG_MAX 회피.
+    # - no-match 시 print0 가 0바이트 emit, xargs 가 jq 호출 skip (GNU/BSD 모두), awk `s+0`=0.
+    # - 2>/dev/null: stat 에러 차단 (다른 사용자 STATE_DIR 등).
+    # `verdict_missing` 위와 같은 이유로 `find -exec ... {} +` 회피.
     local verdict_unset
-    verdict_unset=$(find "$STATE_DIR" -maxdepth 1 -name '*.json' -type f \
-        -exec jq -r '.verdict_unset_expected_set_count // 0' {} + 2>/dev/null \
+    verdict_unset=$(find "$STATE_DIR" -maxdepth 1 -name '*.json' -type f -print0 2>/dev/null \
+        | xargs -0 jq -r '.verdict_unset_expected_set_count // 0' 2>/dev/null \
         | awk '{s+=$1} END {print s+0}')
     case "$verdict_unset" in
         ''|*[!0-9]*) verdict_unset=0 ;;

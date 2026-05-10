@@ -801,6 +801,66 @@ else
     fail "32." "rc=$RC block_only=$n_block_only other=$n_other out=$OUT"
 fi
 
+# 33. Codex PR #29 P2 (3215697294): stats verdict_missing aggregation must not
+# embed literal `{}` inside batched `find -exec ... +`. GNU find / bfs reject
+# ("Only one instance of {} is supported with -exec ... +"), BSD find on macOS
+# silently passes (yielding 0 — silent regression). Test installs a GNU-style
+# `find` shim on PATH that rejects literal `{}` in any non-positional argument
+# of `-exec ... +`. If sazo-workflow uses a `{}`-free aggregation strategy
+# (e.g. `-print0 | xargs -0 jq …`), the shim is never triggered and the
+# aggregate is correct (3). If the script still embeds `{}` in jq program, the
+# shim emits an error → aggregate becomes 0 (or stderr leaks) → FAIL.
+rm -f "$TMP_STATE"/*.json "$TMP_STATE/audit.log"
+jq -n '{verdict_missing_count: {"code-reviewer": 1, "architect-advisor": 2}}' \
+    > "$TMP_STATE/sessGnu1--hGnu1.json"
+
+PATH_SHIM_DIR=$(mktemp -d)
+cat > "$PATH_SHIM_DIR/find" <<'SHIM'
+#!/usr/bin/env bash
+# GNU find emulation for `-exec ... {} +` literal `{}` rejection.
+# Walks args; if `-exec` is present and terminator is `+`, ensures only one
+# token is exactly `{}` and no other token contains `{}` substring.
+real_find=/usr/bin/find
+[ -x "$real_find" ] || real_find=$(command -v find)
+in_exec=0
+exec_args=()
+seen_brace=0
+bad=0
+for a in "$@"; do
+    if [ "$a" = "-exec" ]; then in_exec=1; exec_args=(); seen_brace=0; continue; fi
+    if [ "$in_exec" = "1" ]; then
+        if [ "$a" = "+" ]; then
+            # Terminator. Validate.
+            if [ "$bad" = "1" ]; then
+                printf "find: Only one instance of {} is supported with -exec ... +\n" >&2
+                exit 1
+            fi
+            in_exec=0
+            continue
+        elif [ "$a" = "{}" ]; then
+            seen_brace=$((seen_brace+1))
+            [ "$seen_brace" -gt 1 ] && bad=1
+        else
+            case "$a" in *"{}"*) bad=1 ;; esac
+        fi
+    fi
+done
+exec "$real_find" "$@"
+SHIM
+chmod +x "$PATH_SHIM_DIR/find"
+
+OUT_33=$(SAZO_STATE_DIR="$TMP_STATE" PATH="$PATH_SHIM_DIR:$PATH" "$CLI" stats --days 7 2>&1)
+rc_33=$?
+rm -rf "$PATH_SHIM_DIR"
+unset PATH_SHIM_DIR
+if [ "$rc_33" = "0" ] \
+    && echo "$OUT_33" | grep -qE "verdict_missing_count:[[:space:]]+3[[:space:]]" \
+    && ! echo "$OUT_33" | grep -qi "Only one instance of {}"; then
+    pass "33. stats: verdict_missing aggregation works under GNU-find {}-batch rule"
+else
+    fail "33." "rc=$rc_33 out=$OUT_33"
+fi
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"
