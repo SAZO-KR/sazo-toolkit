@@ -577,6 +577,29 @@ else
 fi
 rm -rf "$CTRL_PARENT"
 
+# 26e. why-blocked must respect SAZO_SESSION_ID stale (Codex PR #29 round 15 P2)
+# SAZO_SESSION_ID set + state file 없음 → cmd_why_blocked 가 sid="" 로 fallback
+# → 다른 세션의 stage_block surface (cross-session leak). resolve 실패 시 explicit
+# rc=2 반환해야 함.
+mkdir -p "$TMP_STATE"
+rm -f "$TMP_STATE"/*.json
+rm -f "$TMP_STATE/audit.log"
+# 다른 세션의 valid stage_block (이 라인이 leak 으로 surface 되면 안 됨)
+printf '{"ts":"2026-05-09T11:00:00+0900","event":"stage_block","sid":"otherSession","stage":"plan","status":"blocked","by":"hook","reason":"OTHER"}\n' \
+    >> "$TMP_STATE/audit.log"
+# SAZO_SESSION_ID=staleSession 의 state file 은 의도적으로 생성 안 함 → stale.
+OUT_26e=$(SAZO_STATE_DIR="$TMP_STATE" SAZO_SESSION_ID=staleSession "$CLI" why-blocked 2>&1)
+rc_26e=$?
+# staleSession sid scope 으로 audit 검색 → 매칭 없음 → "Not blocked." rc=0.
+# leak 발생 시엔 OTHER 가 결과에 등장 (rc=2 + Reason: OTHER).
+if [ "$rc_26e" = "0" ] && echo "$OUT_26e" | grep -q "Not blocked" \
+    && ! echo "$OUT_26e" | grep -q "OTHER"; then
+    pass "26e. why-blocked: SAZO_SESSION_ID stale → no cross-session leak"
+else
+    fail "26e." "rc=$rc_26e out=$OUT_26e"
+fi
+rm -f "$TMP_STATE/audit.log"
+
 # 26d. why-blocked --json must skip malformed JSON lines (Codex PR #29 round 13 P2)
 # 이전엔 `grep | tail` 로 raw 라인 emit → truncated stage_block 라인이 있으면
 # `why-blocked --json` 결과가 invalid JSON. 모든 --json 경로 일관성 가드.

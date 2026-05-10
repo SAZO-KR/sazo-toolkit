@@ -359,15 +359,21 @@ cmd_why_blocked() {
         return 0
     }
 
-    # Session scoping policy (Codex PR #29 round 2 P2):
+    # Session scoping policy (Codex PR #29 round 2 / 15 P2):
     #   - explicit --session <id>: ALWAYS scope to that id (resolve_session 실패해도
     #     `$sid_arg`로 raw filter). 다른 세션의 블록을 surfacing하면 안 됨.
     #     state file이 사라졌어도 audit.log엔 과거 stage_block이 남아있을 수 있다.
-    #   - implicit (no --session): 환경/단일 활성 세션으로 resolve. 실패하면
-    #     글로벌 fallback (기존 동작 유지).
+    #   - SAZO_SESSION_ID 환경 변수: explicit 의도와 동등 — stale 이어도 그 sid 로
+    #     강제 scope (다른 세션의 stage_block 으로 fallback 하면 cross-session leak).
+    #   - 둘 다 없을 때만 단일 활성 세션 resolve. 실패 시 글로벌 fallback.
     local sid
     if [ -n "$sid_arg" ]; then
         sid="$sid_arg"
+    elif [ -n "${SAZO_SESSION_ID:-}" ]; then
+        # round 15 P2: SAZO_SESSION_ID 가 set 이면 resolve 결과(0/2)와 무관하게
+        # 그 sid 로 scope. resolve_session 은 state file 검증용으로만 호출(side-effect
+        # 없음, fall-through 시 explicit miss 로 sid 유지).
+        sid="$SAZO_SESSION_ID"
     else
         sid=$(resolve_session "" 2>/dev/null) || sid=""
     fi
