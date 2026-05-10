@@ -147,6 +147,16 @@ if [ "$RC" = "2" ] \
 else
     fail "5b." "rc=$RC; out=$OUT"
 fi
+# 5c. explicit --session for nonexistent session must NOT fall back to global block
+# (Codex PR #29 round 2 P2). state file 사라졌어도 audit log에 남은 다른 세션의
+# block을 빼앗아 surface하면 안 됨.
+run_cli why-blocked --session ghost-session-nonexistent
+if [ "$RC" = "0" ] \
+    && echo "$OUT" | grep -qi "not blocked"; then
+    pass "5c. why-blocked --session <missing> → no global fallback"
+else
+    fail "5c." "rc=$RC; out=$OUT"
+fi
 rm -f "$TMP_STATE/audit.log"
 
 # 6. audit --filter stage_block

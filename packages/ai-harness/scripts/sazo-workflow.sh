@@ -291,15 +291,23 @@ cmd_why_blocked() {
         return 0
     }
 
-    # Resolve session id; if available, filter audit entries to this session only.
-    # Without session scoping, why-blocked could surface a different session's
-    # block reason (audit.log is shared across sessions in the same STATE_DIR).
+    # Session scoping policy (Codex PR #29 round 2 P2):
+    #   - explicit --session <id>: ALWAYS scope to that id (resolve_session 실패해도
+    #     `$sid_arg`로 raw filter). 다른 세션의 블록을 surfacing하면 안 됨.
+    #     state file이 사라졌어도 audit.log엔 과거 stage_block이 남아있을 수 있다.
+    #   - implicit (no --session): 환경/단일 활성 세션으로 resolve. 실패하면
+    #     글로벌 fallback (기존 동작 유지).
     local sid
-    sid=$(resolve_session "$sid_arg" 2>/dev/null) || sid=""
+    if [ -n "$sid_arg" ]; then
+        sid="$sid_arg"
+    else
+        sid=$(resolve_session "" 2>/dev/null) || sid=""
+    fi
 
     local last_block
     if [ -n "$sid" ]; then
-        # JSON Lines: filter on "sid":"<sid>" substring (resolved sid is hex/sha-like, no escaping needed)
+        # JSON Lines: filter on "sid":"<sid>" substring. sid_arg는 사용자 입력이라
+        # grep -F로 fixed-string 매칭 (regex meta 안전).
         last_block=$(grep '"event":"stage_block"' "$AUDIT_LOG" 2>/dev/null \
             | grep -F "\"sid\":\"$sid\"" | tail -1)
     else
