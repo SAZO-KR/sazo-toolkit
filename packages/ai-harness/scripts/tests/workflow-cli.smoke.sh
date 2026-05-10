@@ -523,6 +523,23 @@ else
 fi
 rm -rf "$SPACED_PARENT"
 
+# 25. sessions --json 출력 시 path 의 JSON-significant 문자 (`"`, `\`) escape
+# (Codex PR #29 round 9 P2). jq 로 parse 해서 valid JSON 검증.
+JSON_SPACED_PARENT=$(mktemp -d)
+JSON_SPECIAL_DIR="$JSON_SPACED_PARENT/dir\\with\"quote"
+mkdir -p "$JSON_SPECIAL_DIR"
+printf '{"stage":"plan","started_at":"2026-05-09T10:00:00+0900","plan_approved_at":null,"ci_passed_at":null,"history":[]}\n' \
+    > "$JSON_SPECIAL_DIR/jsonSession--abchash.json"
+OUT_25=$(SAZO_STATE_DIR="$JSON_SPECIAL_DIR" "$CLI" sessions --days 7 --json 2>&1)
+rc_25=$?
+# jq 로 parse 가능해야 valid JSON.
+if [ "$rc_25" = "0" ] && echo "$OUT_25" | jq -e '.path' >/dev/null 2>&1; then
+    pass "25. sessions --json: JSON-significant chars in path properly escaped"
+else
+    fail "25." "rc=$rc_25 out=$OUT_25"
+fi
+rm -rf "$JSON_SPACED_PARENT"
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"

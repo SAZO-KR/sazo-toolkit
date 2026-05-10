@@ -477,15 +477,25 @@ cmd_sessions() {
     fi
     # Codex PR #29 round 8 P2: TAB delimiter (path 안 space 보호).
     if [ "$JSON_MODE" = "1" ]; then
-        printf '%s\n' "$rows" | awk -F'\t' '{
-            mt=$1; path=$2;
-            n=split(path,parts,"/"); base=parts[n];
-            sub(/\.json$/, "", base);
-            split(base, sb, "--");
-            sid=sb[1]; cwd_hash=sb[2];
-            printf "{\"sid\":\"%s\",\"cwd_hash\":\"%s\",\"mtime\":%s,\"path\":\"%s\"}\n",
-                sid, cwd_hash, mt, path
-        }'
+        # Codex PR #29 round 9 P2: SAZO_STATE_DIR/install path 가 `"` 또는 `\` 같은
+        # JSON-significant 문자 포함 시 raw interpolation 으로 JSON 깨짐. awk gsub
+        # 로 backslash 와 double-quote escape (Spec: JSON String — backslash 먼저).
+        printf '%s\n' "$rows" | awk -F'\t' '
+            function jesc(s) {
+                gsub(/\\/, "\\\\", s)
+                gsub(/"/, "\\\"", s)
+                return s
+            }
+            {
+                mt=$1; path=$2;
+                n=split(path,parts,"/"); base=parts[n];
+                sub(/\.json$/, "", base);
+                split(base, sb, "--");
+                sid=sb[1]; cwd_hash=sb[2];
+                printf "{\"sid\":\"%s\",\"cwd_hash\":\"%s\",\"mtime\":%s,\"path\":\"%s\"}\n",
+                    jesc(sid), jesc(cwd_hash), mt, jesc(path)
+            }
+        '
         return 0
     fi
     printf '%s\n' "$rows" | awk -F'\t' '{
