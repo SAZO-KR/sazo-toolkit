@@ -217,8 +217,12 @@ resolve_session() {
 
 resolve_state_file() {
     local sid="$1"
+    # Gemini PR #29 round 14 P3: ls + glob 결과 파싱은 newline/space 포함 파일명에
+    # 취약. find 로 NUL-안전 enumerate (state file 명에 newline 없음 가정 유지하되
+    # ls 의존 제거). `--` 다음 인자로 sid prefix glob 전달, name 정확 매칭.
     local files
-    files=$(ls "$STATE_DIR/${sid}--"*.json 2>/dev/null) || return 1
+    files=$(find "$STATE_DIR" -maxdepth 1 -name "${sid}--*.json" -type f 2>/dev/null) \
+        || return 1
     [ -z "$files" ] && return 1
     local count
     count=$(printf '%s\n' "$files" | wc -l | tr -d ' ')
@@ -593,11 +597,14 @@ cmd_stats() {
     state_corruptions=$(_count_pattern 'state_corruption' "$AUDIT_LOG")
 
     # Gemini PR #29 round 10 P2: 다중 state file 마다 jq 프로세스 spawn → 단일 호출 합산.
-    # `*.json` no-match 시 glob literal 이 jq 인자로 들어가 stat error 가 stderr 로 새므로
-    # 2>/dev/null 로 silence. awk 가 빈 입력에서도 `s+0`=0 emit.
+    # Gemini PR #29 round 14 P3: shell glob 직접 expansion 은 ARG_MAX 제한 + no-match
+    # literal-glob 두 케이스를 caller 가 책임져야 함. `find ... -exec jq + ` 로 변경:
+    # - `+` terminator 가 인자 chunk 자동 분할 → ARG_MAX 회피.
+    # - no-match 시 find 가 0 라인 emit, awk `s+0`=0.
+    # - 2>/dev/null: stat 에러 차단 (PR review/approval 다른 사용자 STATE_DIR 등).
     local verdict_unset
-    verdict_unset=$(jq -r '.verdict_unset_expected_set_count // 0' \
-        "$STATE_DIR"/*.json 2>/dev/null \
+    verdict_unset=$(find "$STATE_DIR" -maxdepth 1 -name '*.json' -type f \
+        -exec jq -r '.verdict_unset_expected_set_count // 0' {} + 2>/dev/null \
         | awk '{s+=$1} END {print s+0}')
     case "$verdict_unset" in
         ''|*[!0-9]*) verdict_unset=0 ;;
