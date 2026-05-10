@@ -575,6 +575,11 @@ CODEX_FALLBACK_DONE=false  # Codex stale로 인해 Gemini fallback이 한 번이
                            # 이후 라운드에서 codex_stale을 무시해 매 ~20분마다
                            # spurious @codex review / /gemini review 재발사를 차단.
                            # Codex가 늦게나마 응답해 codex_progressed=true가 되면 reset.
+GEMINI_FALLBACK_REQUESTED=false  # Codex fallback으로 `/gemini review`가 발사돼 Gemini
+                                 # 응답을 기다리는 상태. cached pass(GEMINI_PASSED=true)
+                                 # 상태에서도 신규 review ID 도착 전까지 gemini_stale
+                                 # 판정을 활성화 — silent no-op timeout/escalation 가능.
+                                 # Gemini 새 review ID 감지 시 reset.
 WALL_CLOCK_START=now()   # bash 구현 시 now()는 `$(date +%s)`
 WALL_CLOCK_BUDGET=1800   # 30분 — 초과 시 진행 중이라도 사용자 확인 요청
 
@@ -618,9 +623,15 @@ while ROUND < MAX_ROUNDS:
                  and not codex_progressed)
   # Gemini는 reaction state 머신이 없으므로 "미통과 + 최신 review ID 미변동"으로 stale 추정.
   # 활성이 아니면 stale 아님으로 취급 (Gemini 미설정 repo는 영향 없음).
-  gemini_stale = (GEMINI_ENABLED and not GEMINI_PASSED
+  # CRITICAL: cached pass(옛 commit) 후 `/gemini review` fallback이 발사된 경우,
+  # Gemini가 silent no-op면 review ID 변동 없음. `not GEMINI_PASSED`만 보면
+  # cached pass=true가 stale 판정을 영원히 막아 무한 polling. fallback 발사 후
+  # 응답을 기다리는 상황을 별도 플래그(`GEMINI_FALLBACK_REQUESTED`)로 추적해
+  # cached pass와 무관하게 stale 판정을 진행시킨다 (Gemini 새 review 도착 시 reset).
+  gemini_stale = (GEMINI_ENABLED
                   and current_gemini_latest != ""
-                  and current_gemini_latest == PREV_GEMINI_LATEST_REVIEW)
+                  and current_gemini_latest == PREV_GEMINI_LATEST_REVIEW
+                  and (not GEMINI_PASSED or GEMINI_FALLBACK_REQUESTED))
 
   # ── 봇별 카운터 갱신 ──
   # CRITICAL: 봇별 카운터 분리. 한 봇이 progress하면 그 봇의 카운터만 0으로,
@@ -636,6 +647,9 @@ while ROUND < MAX_ROUNDS:
     GEMINI_STALE_COUNT++
   else:
     GEMINI_STALE_COUNT = 0
+    # Gemini 새 review ID 도착 = fallback 응답 수신 → 플래그 해제
+    if current_gemini_latest != "" and current_gemini_latest != PREV_GEMINI_LATEST_REVIEW:
+      GEMINI_FALLBACK_REQUESTED = false
 
   if codex_stale or gemini_stale:
     log("리뷰어 무응답 (codex=${CODEX_STALE_COUNT}/${MAX_STALE}, gemini=${GEMINI_STALE_COUNT}/${MAX_STALE})")
@@ -689,6 +703,7 @@ while ROUND < MAX_ROUNDS:
       gh pr comment $PR_NUM --body "/gemini review"
       CODEX_STALE_COUNT = 0
       CODEX_FALLBACK_DONE = true   # 이후 라운드에서 Codex stale 재인식 차단
+      GEMINI_FALLBACK_REQUESTED = true  # cached pass와 무관하게 Gemini 응답 추적 활성
       PREV_CODEX_LATEST_REVIEW = current_codex_latest
       PREV_GEMINI_LATEST_REVIEW = current_gemini_latest
       continue
