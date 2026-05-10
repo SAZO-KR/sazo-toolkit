@@ -385,6 +385,61 @@ val=$(get_ci_passed_at "t11h" "$WORK_REPO")
 assert_null "$val" "11h. ci_passed_at invalidated even when workspace parent contains 'docs' directory"
 rm -rf "/tmp/sazo-ci-docs-parent-$$"
 
+# 11i. chained command: `echo ... >> foo.go && git add foo.go && git commit -m x`
+# (Codex PR #30 round 3 P2-A). Pre-hook은 Bash 실행 전에 발동되므로 staged set은
+# 비어있음. cmd 토큰에서 `git add foo.go` 인자 추출 → 코드 파일이면 invalidate.
+WORK_REPO="/tmp/sazo-ci-invalidate-chain-add-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(cd "$WORK_REPO" && git init -q -b main && git config user.email smoke@test && git config user.name smoke && git commit -q --allow-empty -m init)
+mark_ci_passed "t11i" "$WORK_REPO"
+# cmd 자체에 add 토큰이 포함됨. file 자체는 아직 디스크에 없어도 OK — 토큰 분석으로 판단.
+run_hook_pre "{\"session_id\":\"t11i\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo 'package main' >> $WORK_REPO/foo.go && git -C $WORK_REPO add foo.go && git -C $WORK_REPO commit -m chained\"}}" >/dev/null
+val=$(get_ci_passed_at "t11i" "$WORK_REPO")
+assert_null "$val" "11i. ci_passed_at invalidated by chained 'git add foo.go && git commit'"
+rm -rf "$WORK_REPO"
+
+# 11j. `git commit -am x` (-a/--all): tracked 파일의 unstaged 변경을 자동 stage
+# (Codex PR #30 round 3 P2-B). diff --cached 는 비어있어도 working tree(`git diff`)
+# 검사로 잡아야.
+WORK_REPO="/tmp/sazo-ci-invalidate-am-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    echo "package main" > bar.go
+    git add bar.go
+    git commit -q -m init
+    # Now modify tracked file but DO NOT stage. -am will pick it up at commit time.
+    echo "// edit" >> bar.go
+)
+mark_ci_passed "t11j" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11j\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -am dash-a-flag\"}}" >/dev/null
+val=$(get_ci_passed_at "t11j" "$WORK_REPO")
+assert_null "$val" "11j. ci_passed_at invalidated by 'git commit -am' (working-tree code changes)"
+rm -rf "$WORK_REPO"
+
+# 11k. `git commit -a` 단독 + tracked docs only 변경 → ci_passed_at 유지 (false positive 방지)
+WORK_REPO="/tmp/sazo-ci-invalidate-am-docs-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    echo "# v1" > README.md
+    git add README.md
+    git commit -q -m init
+    echo "# v2" >> README.md
+)
+mark_ci_passed "t11k" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11k\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -a -m docs\"}}" >/dev/null
+val=$(get_ci_passed_at "t11k" "$WORK_REPO")
+[ -n "$val" ] && [ "$val" != "null" ]
+assert_exit "0" "$?" "11k. ci_passed_at preserved when 'git commit -a' touches only docs"
+rm -rf "$WORK_REPO"
+
 # 12. git commit + staged 비어있음 → ci_passed_at 유지
 WORK_REPO="/tmp/sazo-ci-invalidate-commit3-$$"
 rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
@@ -401,6 +456,89 @@ val=$(get_ci_passed_at "t12" "$WORK_REPO")
 [ -n "$val" ] && [ "$val" != "null" ]
 assert_exit "0" "$?" "12. ci_passed_at preserved (empty staging)"
 rm -rf "$WORK_REPO"
+
+# 12b. PostToolUse `git commit -am` — pre-hook saw nothing staged but commit
+# succeeded with code → post-hook reads HEAD diff-tree and invalidates
+# (Codex PR #30 round 4 P2).
+WORK_REPO_AM="/tmp/sazo-ci-invalidate-am-$$"
+rm -rf "$WORK_REPO_AM"; mkdir -p "$WORK_REPO_AM"
+(
+    cd "$WORK_REPO_AM"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    echo 'package main' > existing.go
+    git add existing.go
+    git commit -q -m "seed"
+    # Modify tracked file (so git commit -am will stage + commit it).
+    echo 'package main // changed' > existing.go
+)
+mark_ci_passed "t12b" "$WORK_REPO_AM"
+# Simulate the actual `git commit -am` happening — run it for real, then fire post-hook.
+( cd "$WORK_REPO_AM" && git commit -q -am "inline stage + commit" )
+run_hook_post "{\"session_id\":\"t12b\",\"cwd\":\"$WORK_REPO_AM\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -am 'inline stage + commit'\"},\"tool_response\":{\"exit_code\":0}}" >/dev/null
+val=$(get_ci_passed_at "t12b" "$WORK_REPO_AM")
+assert_null "$val" "12b. post-commit invalidate (git commit -am with code change)"
+rm -rf "$WORK_REPO_AM"
+
+# 12c. PostToolUse chained `echo > foo.go && git add foo.go && git commit`
+WORK_REPO_CHAIN="/tmp/sazo-ci-invalidate-chain-$$"
+rm -rf "$WORK_REPO_CHAIN"; mkdir -p "$WORK_REPO_CHAIN"
+(
+    cd "$WORK_REPO_CHAIN"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    git commit -q --allow-empty -m init
+    # Chained: echo + add + commit
+    echo 'package main' > foo.go
+    git add foo.go
+    git commit -q -m "chained"
+)
+mark_ci_passed "t12c" "$WORK_REPO_CHAIN"
+# Pre-hook would see foo.go staged but actually it was already committed in our
+# simulation. The interesting case is post-hook reading HEAD.
+run_hook_post "{\"session_id\":\"t12c\",\"cwd\":\"$WORK_REPO_CHAIN\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo 'package main' > foo.go && git add foo.go && git commit -m chained\"},\"tool_response\":{\"exit_code\":0}}" >/dev/null
+val=$(get_ci_passed_at "t12c" "$WORK_REPO_CHAIN")
+assert_null "$val" "12c. post-commit invalidate (chained echo+add+commit)"
+rm -rf "$WORK_REPO_CHAIN"
+
+# 12d. PostToolUse `git commit` of docs-only change → ci_passed_at preserved
+WORK_REPO_DOC="/tmp/sazo-ci-invalidate-postdoc-$$"
+rm -rf "$WORK_REPO_DOC"; mkdir -p "$WORK_REPO_DOC"
+(
+    cd "$WORK_REPO_DOC"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    git commit -q --allow-empty -m init
+    echo 'docs' > README.md
+    git add README.md
+    git commit -q -m "doc only"
+)
+mark_ci_passed "t12d" "$WORK_REPO_DOC"
+run_hook_post "{\"session_id\":\"t12d\",\"cwd\":\"$WORK_REPO_DOC\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m 'doc only'\"},\"tool_response\":{\"exit_code\":0}}" >/dev/null
+val=$(get_ci_passed_at "t12d" "$WORK_REPO_DOC")
+[ -n "$val" ] && [ "$val" != "null" ]
+assert_exit "0" "$?" "12d. post-commit docs-only → ci_passed_at preserved"
+rm -rf "$WORK_REPO_DOC"
+
+# 12e. PostToolUse `git commit` failed (exit_code != 0) → no invalidate
+WORK_REPO_FAIL="/tmp/sazo-ci-invalidate-postfail-$$"
+rm -rf "$WORK_REPO_FAIL"; mkdir -p "$WORK_REPO_FAIL"
+(
+    cd "$WORK_REPO_FAIL"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    git commit -q --allow-empty -m init
+)
+mark_ci_passed "t12e" "$WORK_REPO_FAIL"
+run_hook_post "{\"session_id\":\"t12e\",\"cwd\":\"$WORK_REPO_FAIL\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m fail\"},\"tool_response\":{\"exit_code\":1}}" >/dev/null
+val=$(get_ci_passed_at "t12e" "$WORK_REPO_FAIL")
+[ -n "$val" ] && [ "$val" != "null" ]
+assert_exit "0" "$?" "12e. post-commit failed → ci_passed_at preserved (exit_code != 0)"
+rm -rf "$WORK_REPO_FAIL"
 
 # 13. PreToolUse Task subagent_type=plan-executor + ci_passed_at!=null → invalidate
 reset_state

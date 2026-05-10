@@ -184,6 +184,46 @@ handle_post() {
                     fi
                 fi
             fi
+            # Codex PR #30 round 4 P2: post-commit invalidate.
+            # PreToolUse defense missed cases where the same Bash command staged
+            # files inline (`echo > foo.go && git add foo.go && git commit`,
+            # `git commit -am ...`). After-the-fact: inspect HEAD's last commit
+            # for code files and invalidate if any.
+            if [ "$exit_code" = "0" ] \
+                && [ "${SAZO_DISABLE_CI_INVALIDATE:-0}" != "1" ] \
+                && echo "$cmd" | grep -qE '(^|[[:space:]&|;()])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*commit\b'; then
+                local cur_cp_post
+                cur_cp_post=$(state_get "$SAZO_SESSION_ID" ".ci_passed_at" "$SAZO_CWD")
+                if [ -n "$cur_cp_post" ] && [ "$cur_cp_post" != "null" ]; then
+                    # Resolve git target same way as pre-hook (-C respect).
+                    local git_target_post="$SAZO_CWD"
+                    local c_path_post
+                    c_path_post=$(printf '%s' "$cmd" \
+                        | sed -E -n 's/.*[[:space:]]-C[[:space:]]+([^[:space:]]+).*/\1/p' \
+                        | head -1)
+                    if [ -n "$c_path_post" ]; then
+                        case "$c_path_post" in
+                            /*) git_target_post="$c_path_post" ;;
+                            *) git_target_post="$SAZO_CWD/$c_path_post" ;;
+                        esac
+                    fi
+                    local repo_root_post
+                    repo_root_post=$(git -C "$git_target_post" rev-parse --show-toplevel 2>/dev/null)
+                    if [ -n "$repo_root_post" ]; then
+                        local has_code_committed=0
+                        # HEAD's most recent commit changed files.
+                        # diff-tree --root handles initial commit too.
+                        while IFS= read -r p; do
+                            [ -z "$p" ] && continue
+                            if _is_doc_only_path "$p"; then continue; fi
+                            if _is_code_file "$p"; then has_code_committed=1; break; fi
+                        done < <(git -C "$repo_root_post" diff-tree --no-commit-id --name-only -r --root HEAD 2>/dev/null)
+                        if [ "$has_code_committed" = "1" ]; then
+                            ci_invalidate_unconditional "$SAZO_SESSION_ID" "$SAZO_CWD" "git_commit_post"
+                        fi
+                    fi
+                fi
+            fi
             ;;
     esac
     exit 0
@@ -431,6 +471,65 @@ EOF
                             # 코드 파일 삭제도 CI 결과를 무효화할 수 있음 (build break,
                             # missing import 등). D 빠지면 `git rm foo.go && git commit`
                             # 후 ci_passed_at 그대로 남아 PR create가 통과 (Codex PR #30 P2).
+
+                            # Codex PR #30 round 3 P2 — Pre-hook은 Bash 명령 실행 *전*에
+                            # 발동되므로 다음 두 케이스는 staged set이 비어있어 우회됨:
+                            #   (a) 같은 cmd chain 내 staging — `echo ... >> foo.go &&
+                            #       git add foo.go && git commit -m x`. cmd 자체에서
+                            #       추가될 코드 파일을 토큰 분석으로 추출.
+                            #   (b) `git commit -a` / `-am` / `--all` — tracked 파일의
+                            #       unstaged 변경을 commit이 자동 stage. `git diff`
+                            #       (working tree, w/o --cached)로 검사.
+                            if [ "$has_code_staged" != "1" ]; then
+                                # (a) chained `git add <path>` 인자 추출.
+                                # cmd 안 모든 'git add <args> ;|&|&&|||' 까지 캡처. 단순화:
+                                # `git add` 토큰 뒤 단어들을 옵션 제외하고 path로 취급.
+                                local add_paths
+                                add_paths=$(printf '%s\n' "$cmd" | tr ';|&' '\n' \
+                                    | grep -E '(^|[[:space:]])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*add\b' \
+                                    | sed -E 's/.*\badd\b[[:space:]]+//' \
+                                    | tr ' ' '\n' \
+                                    | grep -vE '^-' \
+                                    | grep -v '^$')
+                                local ap
+                                while IFS= read -r ap; do
+                                    [ -z "$ap" ] && continue
+                                    if _is_doc_only_path "$ap"; then continue; fi
+                                    if _is_code_file "$ap"; then has_code_staged=1; break; fi
+                                done <<EOF_AP
+$add_paths
+EOF_AP
+                            fi
+                            if [ "$has_code_staged" != "1" ]; then
+                                # (b) `git commit -a` / `-am` / `--all` 감지.
+                                # cmd 분석: commit 토큰 이후 단어 중 -a/-am/-aXY/--all 매치.
+                                local commit_tail
+                                commit_tail=$(printf '%s' "$cmd" | sed -E 's/.*\bcommit\b//')
+                                if printf '%s' "$commit_tail" | grep -qE '(^|[[:space:]])(-a([^-=[:space:]]*)?|--all)\b'; then
+                                    # working tree (tracked, unstaged) 검사.
+                                    while IFS= read -r line; do
+                                        [ -z "$line" ] && continue
+                                        local status path1 path2
+                                        status=$(printf '%s' "$line" | cut -f1)
+                                        path1=$(printf '%s' "$line" | cut -f2)
+                                        path2=$(printf '%s' "$line" | cut -f3)
+                                        local check_paths=()
+                                        case "$status" in
+                                            R*|C*)
+                                                [ -n "$path1" ] && check_paths+=("$path1")
+                                                [ -n "$path2" ] && check_paths+=("$path2")
+                                                ;;
+                                            *) [ -n "$path1" ] && check_paths+=("$path1") ;;
+                                        esac
+                                        local p
+                                        for p in "${check_paths[@]}"; do
+                                            if _is_doc_only_path "$p"; then continue; fi
+                                            if _is_code_file "$p"; then has_code_staged=1; break 2; fi
+                                        done
+                                    done < <(git -C "$repo_root" diff --name-status -M --diff-filter=ACMRD 2>/dev/null)
+                                fi
+                            fi
+
                             if [ "$has_code_staged" = "1" ]; then
                                 ci_invalidate_unconditional "$SAZO_SESSION_ID" "$SAZO_CWD" "git_commit"
                             fi
