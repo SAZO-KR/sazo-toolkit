@@ -434,6 +434,32 @@ for sub_case in "history --last" "audit --last" "sessions --days" "stats --days"
     fi
 done
 
+# 20. SAZO_SESSION_ID set + state file missing → exit 2, NOT silent fallback to other session
+# (Codex PR #29 round 5 P2 #1)
+mock_state_full "sessReal" "abc123"
+SAZO_SESSION_ID="ghost-session-$$" run_cli status
+if [ "$RC" = "2" ] && ! echo "$OUT" | grep -q "sessReal"; then
+    pass "20. SAZO_SESSION_ID stale → exit 2 + no other-session leak"
+else
+    fail "20." "rc=$RC out=$OUT"
+fi
+rm -f "$TMP_STATE"/*.json
+
+# 21. stats: audit.log empty + state metric (verdict_unset_expected_set_count) nonzero
+# → 의미있는 결과 출력 시 rc=0 이어야 (Codex PR #29 round 5 P2 #2). 이전엔 entries 비어서 rc=2.
+mock_state_full "sessV" "v1hash"
+# state file 에 verdict_unset_expected_set_count 주입
+jq '. + {verdict_unset_expected_set_count: 3}' "$TMP_STATE/sessV--v1hash.json" > "$TMP_STATE/sessV--v1hash.json.new" \
+    && mv "$TMP_STATE/sessV--v1hash.json.new" "$TMP_STATE/sessV--v1hash.json"
+rm -f "$TMP_STATE/audit.log"  # audit.log 없음
+run_cli stats --days 7
+if [ "$RC" = "0" ] && echo "$OUT" | grep -qE "verdict_unset_expected_set:[[:space:]]+3"; then
+    pass "21. stats: state-derived metric nonzero → rc=0 (not classified as no-data)"
+else
+    fail "21." "rc=$RC out=$OUT"
+fi
+rm -f "$TMP_STATE"/*.json
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"

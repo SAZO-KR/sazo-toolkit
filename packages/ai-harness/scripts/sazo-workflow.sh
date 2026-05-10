@@ -150,6 +150,10 @@ resolve_session() {
             printf '%s' "$SAZO_SESSION_ID"
             return 0
         fi
+        # Codex PR #29 round 5 P2: SAZO_SESSION_ID 가 set 인데 state file 이
+        # 사라졌으면 explicit miss 로 처리. fallback 으로 다른 사용자/세션의
+        # 활성 state 를 surface 하면 안 됨 (cross-session leak).
+        return 2
     fi
     local sessions count
     sessions=$(list_active_sessions)
@@ -586,7 +590,17 @@ EOF
         fi
     fi
 
-    if [ -z "$entries" ] && [ "$lock_timeouts" -eq 0 ] && [ "$jq_errors" -eq 0 ]; then
+    # Codex PR #29 round 5 P2: no-data 판정에 state-derived metric 도 포함.
+    # `entries`/`lock_timeouts`/`jq_errors` 만 검사하면 audit.log 가 비어도 state
+    # file 에서 verdict_unset/state_corruption/verdict_missing 가 nonzero 일 때
+    # 의미 있는 stats 결과가 출력되었는데 exit 2 ("no analyzable data") 로
+    # 분류되어 자동화가 결과를 무시함. 표시되는 모든 metric 이 0 일 때만 no-data.
+    if [ -z "$entries" ] \
+        && [ "$lock_timeouts" -eq 0 ] \
+        && [ "$jq_errors" -eq 0 ] \
+        && [ "$state_corruptions" -eq 0 ] \
+        && [ "$verdict_unset" -eq 0 ] \
+        && [ "$verdict_missing" -eq 0 ]; then
         return 2
     fi
     return 0
