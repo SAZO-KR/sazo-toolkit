@@ -344,6 +344,47 @@ val=$(get_ci_passed_at "t11f" "$WORK_REPO")
 assert_null "$val" "11f. ci_passed_at invalidated by 'git -c k=v commit'"
 rm -rf "$WORK_REPO"
 
+# 11g. `git -C /other/repo commit` 실제 cross-directory 우회 차단 (Codex PR #30 round 2 P2)
+# session cwd 와 다른 repo 를 -C 로 지정. 이전 fix 는 regex 만 통과시키고 staged
+# diff 는 SAZO_CWD 기준으로 봐서 0건 → invalidate 안 됨 → 이 commit 으로 PR 우회 가능.
+# git_target 추출 후 그 repo 의 staged diff 로 검사해야 함.
+SESSION_CWD="/tmp/sazo-ci-other-cwd-$$"
+WORK_REPO="/tmp/sazo-ci-invalidate-cross-repo-$$"
+rm -rf "$SESSION_CWD" "$WORK_REPO"
+mkdir -p "$SESSION_CWD" "$WORK_REPO"
+# session cwd 자체도 git repo (mark_ci_passed 가 동작하기 위함)
+(cd "$SESSION_CWD" && git init -q -b main && git config user.email smoke@test && git config user.name smoke && git commit -q --allow-empty -m init)
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    git commit -q --allow-empty -m init
+    echo "package main" > foo.go
+    git add foo.go
+)
+mark_ci_passed "t11g" "$SESSION_CWD"
+run_hook_pre "{\"session_id\":\"t11g\",\"cwd\":\"$SESSION_CWD\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO commit -m cross-repo\"}}" >/dev/null
+val=$(get_ci_passed_at "t11g" "$SESSION_CWD")
+assert_null "$val" "11g. ci_passed_at invalidated by 'git -C /other/repo commit' (target repo staged code detected)"
+rm -rf "$SESSION_CWD" "$WORK_REPO"
+
+# 11h. Edit /workspace/docs/proj/src/foo.go — 상위 디렉토리에 docs 가 있어도 코드로 분류
+# (Codex PR #30 round 2 P2). _is_doc_only_path 가 absolute path 에서 단순히 `*/docs/*`
+# 매치하면 워크스페이스 위 docs 디렉토리가 docs-only 로 오인 → invalidate skip.
+# repo root 기준 relative 변환 후 매칭해야 정상.
+PARENT="/tmp/sazo-ci-docs-parent-$$/docs"  # 일부러 부모에 'docs'
+WORK_REPO="$PARENT/proj"
+rm -rf "/tmp/sazo-ci-docs-parent-$$"
+mkdir -p "$WORK_REPO/src"
+(cd "$WORK_REPO" && git init -q -b main && git config user.email smoke@test && git config user.name smoke && echo "package main" > src/foo.go && git add src/foo.go && git commit -q -m init)
+mark_ci_passed "t11h" "$WORK_REPO"
+# Edit 시 file_path 가 absolute. 부모에 docs 가 있어 _is_doc_only_path 가 잘못 true 면 ci_passed_at 유지됨.
+run_hook_post "{\"session_id\":\"t11h\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$WORK_REPO/src/foo.go\"},\"tool_response\":{\"success\":true}}" >/dev/null
+val=$(get_ci_passed_at "t11h" "$WORK_REPO")
+assert_null "$val" "11h. ci_passed_at invalidated even when workspace parent contains 'docs' directory"
+rm -rf "/tmp/sazo-ci-docs-parent-$$"
+
 # 12. git commit + staged 비어있음 → ci_passed_at 유지
 WORK_REPO="/tmp/sazo-ci-invalidate-commit3-$$"
 rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
