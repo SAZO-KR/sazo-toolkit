@@ -1337,6 +1337,211 @@ else
     FAIL=$((FAIL + 1)); echo "  ✗ 17. audit log entry missing"
 fi
 
+# ===== Self-review followups (PR #30 round 17) =====
+
+# 18. N3/N6 — repo path with `"` and `\` does not break jq path interpolation.
+# Pre-fix the marker dict update silently dropped the entry because
+# `.pre_commit_markers["/path/with\"quote"]` is a malformed jq filter.
+# Post-fix the dict must be written + the post-hook range must catch the
+# code commit (= ci_passed_at invalidated).
+QUOTE_REPO="/tmp/sazo-ci-invalidate-quote\"repo-$$"
+rm -rf "$QUOTE_REPO"; mkdir -p "$QUOTE_REPO"
+(
+    cd "$QUOTE_REPO"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    git commit -q --allow-empty -m init
+)
+mark_ci_passed "t18" "$QUOTE_REPO"
+# repo_root resolves via `git rev-parse --show-toplevel` which returns realpath.
+# On macOS `/tmp` symlinks to `/private/tmp`, so the dict key is the real path.
+QUOTE_REPO_REAL=$(cd "$QUOTE_REPO" && pwd -P)
+# Build payload via jq so paths with `"` are properly JSON-encoded.
+PRE_PAYLOAD=$(jq -nc --arg sid t18 --arg cwd "$QUOTE_REPO" --arg cmd "git commit -m a-code" \
+    '{session_id: $sid, cwd: $cwd, tool_name: "Bash", tool_input: {command: $cmd}}')
+echo "$PRE_PAYLOAD" | bash "$STATE_HOOK" "pre" >/dev/null 2>&1
+DICT=$(bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_get 't18' '.pre_commit_markers' \"\$1\"
+" _ "$QUOTE_REPO")
+if [ -n "$DICT" ] && [ "$DICT" != "null" ] \
+    && printf '%s' "$DICT" | jq -e --arg k "$QUOTE_REPO_REAL" 'has($k)' >/dev/null 2>&1; then
+    PASS=$((PASS + 1)); echo "  ✓ 18-dict. repo path with quotes registered in marker dict (jq --arg lookup)"
+else
+    FAIL=$((FAIL + 1)); echo "  ✗ 18-dict. quote path dropped (jq path interpolation bug; DICT='$DICT')"
+fi
+( cd "$QUOTE_REPO" && echo 'package main' > foo.go && git add foo.go && git commit -q -m a-code )
+POST_PAYLOAD=$(jq -nc --arg sid t18 --arg cwd "$QUOTE_REPO" --arg cmd "git commit -m a-code" \
+    '{session_id: $sid, cwd: $cwd, tool_name: "Bash", tool_input: {command: $cmd}, tool_response: {exit_code: 0}}')
+echo "$POST_PAYLOAD" | bash "$STATE_HOOK" "post" >/dev/null 2>&1
+val=$(bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_get 't18' '.ci_passed_at' \"\$1\"
+" _ "$QUOTE_REPO")
+assert_null "$val" "18-post. quote path post-hook range covers code commit"
+rm -rf "$QUOTE_REPO"
+
+# 19. N4 — Edit /tmp/random/foo.go (path outside SAZO_CWD's repo) → conservative
+# invalidate (treated as code, no docs/* match). Documents the safe-default
+# behavior for external code edits.
+reset_state
+mark_ci_passed "t19" "$TMP_REPO"
+EXT_DIR="/tmp/sazo-ci-invalidate-ext-$$"
+rm -rf "$EXT_DIR"; mkdir -p "$EXT_DIR"
+echo "{\"session_id\":\"t19\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$EXT_DIR/foo.go\"}}" \
+    | bash "$STATE_HOOK" "post" >/dev/null 2>&1
+val=$(get_ci_passed_at "t19" "$TMP_REPO")
+assert_null "$val" "19. Edit external code file (outside cwd's repo) → conservative invalidate"
+rm -rf "$EXT_DIR"
+
+# 20. N5 — variable-indirection evasion (documented gap). The hook's regex
+# matches the literal string `git commit` in the Bash cmd. Constructing the
+# command at runtime via variable splitting (`G="git c"; ${G}ommit`) defeats
+# detection. Negative test — pins the known limitation so a future fix
+# flips the assertion.
+reset_state
+SUB_REPO="/tmp/sazo-ci-invalidate-evasion-$$"
+rm -rf "$SUB_REPO"; mkdir -p "$SUB_REPO"
+(
+    cd "$SUB_REPO"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    git commit -q --allow-empty -m init
+    echo 'package main' > foo.go && git add foo.go
+)
+mark_ci_passed "t20" "$SUB_REPO"
+# `${G}ommit` — `git commit` only materializes after variable expansion.
+# String `git commit` never appears literally in the cmd payload.
+run_hook_pre "{\"session_id\":\"t20\",\"cwd\":\"$SUB_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"G='git c'; cd $SUB_REPO && \\\${G}ommit -m x\"}}" >/dev/null 2>&1
+val=$(get_ci_passed_at "t20" "$SUB_REPO")
+# Negative test: ci_passed_at preserved (gap documented in PR README).
+[ -n "$val" ] && [ "$val" != "null" ]
+assert_exit "0" "$?" "20. variable-indirection evasion — documented gap (ci_passed_at preserved)"
+rm -rf "$SUB_REPO"
+
+# 21. A4 — SAZO_DOC_WRITER_NO_INVALIDATE=1 escape hatch for doc-writer Task.
+reset_state
+mark_ci_passed "t21" "/tmp"
+SAZO_DOC_WRITER_NO_INVALIDATE=1 echo "{\"session_id\":\"t21\",\"cwd\":\"/tmp\",\"tool_name\":\"Task\",\"tool_input\":{\"subagent_type\":\"doc-writer\"}}" \
+    | SAZO_DOC_WRITER_NO_INVALIDATE=1 bash "$STATE_HOOK" "pre" >/dev/null 2>&1
+val=$(get_ci_passed_at "t21" "/tmp")
+[ -n "$val" ] && [ "$val" != "null" ]
+assert_exit "0" "$?" "21. SAZO_DOC_WRITER_NO_INVALIDATE=1 → doc-writer Task preserves ci_passed_at"
+
+# 22. A4 sanity — same env var must NOT affect plan-executor / ui-engineer
+# (escape hatch is doc-writer-specific).
+reset_state
+mark_ci_passed "t22" "/tmp"
+SAZO_DOC_WRITER_NO_INVALIDATE=1 echo "{\"session_id\":\"t22\",\"cwd\":\"/tmp\",\"tool_name\":\"Task\",\"tool_input\":{\"subagent_type\":\"plan-executor\"}}" \
+    | SAZO_DOC_WRITER_NO_INVALIDATE=1 bash "$STATE_HOOK" "pre" >/dev/null 2>&1
+val=$(get_ci_passed_at "t22" "/tmp")
+assert_null "$val" "22. SAZO_DOC_WRITER_NO_INVALIDATE=1 does NOT affect plan-executor invalidate"
+
+# 23. A1 — pre + post double-invalidate guard. Single git commit Bash
+# invocation must produce only ONE `ci_invalidated` audit entry, not two
+# (`src=git_commit` + `src=git_commit_post`).
+reset_state
+DOUBLE_REPO="/tmp/sazo-ci-invalidate-double-$$"
+rm -rf "$DOUBLE_REPO"; mkdir -p "$DOUBLE_REPO"
+(
+    cd "$DOUBLE_REPO"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    git commit -q --allow-empty -m init
+    echo 'package main' > foo.go && git add foo.go
+)
+mark_ci_passed "t23" "$DOUBLE_REPO"
+> "$SAZO_STATE_DIR/audit.log"
+run_hook_pre "{\"session_id\":\"t23\",\"cwd\":\"$DOUBLE_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $DOUBLE_REPO commit -m a-code\"}}" >/dev/null 2>&1
+( cd "$DOUBLE_REPO" && git commit -q -m a-code )
+run_hook_post "{\"session_id\":\"t23\",\"cwd\":\"$DOUBLE_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $DOUBLE_REPO commit -m a-code\"},\"tool_response\":{\"exit_code\":0}}" >/dev/null 2>&1
+INV_COUNT=$(grep -c "ci_invalidated.*sid=t23" "$SAZO_STATE_DIR/audit.log" 2>/dev/null || echo 0)
+if [ "$INV_COUNT" = "1" ]; then
+    PASS=$((PASS + 1)); echo "  ✓ 23. pre+post double-invalidate guard — single audit entry per commit"
+else
+    FAIL=$((FAIL + 1)); echo "  ✗ 23. expected 1 ci_invalidated entry, got $INV_COUNT"
+fi
+rm -rf "$DOUBLE_REPO"
+
+# 24. A3 — stale marker cleanup-on-init. PostToolUse failure can leak markers;
+# fresh state_init on a new state file must not inherit stale markers from
+# a separate (older) cwd. New state file is born without stale markers.
+reset_state
+bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_init 't24' '/tmp' 'opus'
+"
+DICT=$(bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_get 't24' '.pre_commit_markers' '/tmp'
+")
+if [ -z "$DICT" ] || [ "$DICT" = "null" ] || [ "$DICT" = "{}" ]; then
+    PASS=$((PASS + 1)); echo "  ✓ 24. fresh state_init has no stale pre_commit_markers"
+else
+    FAIL=$((FAIL + 1)); echo "  ✗ 24. fresh state inherited markers: $DICT"
+fi
+
+# 25. A5 — schema_version bumped (signals pre_commit_markers schema change).
+SV=$(bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_init 't25' '/tmp2' 'opus'
+    state_get 't25' '.schema_version' '/tmp2'
+")
+if [ "$SV" = "3" ]; then
+    PASS=$((PASS + 1)); echo "  ✓ 25. schema_version bumped to 3 for pre_commit_markers field"
+else
+    FAIL=$((FAIL + 1)); echo "  ✗ 25. schema_version=$SV (expected 3)"
+fi
+
+# 26. A2 — state_set_dict_value helper bootstraps null dict + writes value.
+# Must work whether `.foo` is absent (null) or already a dict.
+reset_state
+bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_init 't26' '/tmp' 'opus'
+    # bootstrap from null
+    state_set_dict_value 't26' '.test_dict' 'k1' '\"v1\"' '/tmp'
+    # add to existing
+    state_set_dict_value 't26' '.test_dict' 'k2' '\"v2\"' '/tmp'
+"
+V1=$(bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_get 't26' '.test_dict.k1' '/tmp'
+")
+V2=$(bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_get 't26' '.test_dict.k2' '/tmp'
+")
+if [ "$V1" = "v1" ] && [ "$V2" = "v2" ]; then
+    PASS=$((PASS + 1)); echo "  ✓ 26. state_set_dict_value bootstraps null dict + appends key"
+else
+    FAIL=$((FAIL + 1)); echo "  ✗ 26. state_set_dict_value broken (v1='$V1' v2='$V2')"
+fi
+
+# 26b. A2 — state_set_dict_value with key containing `"` (jq --arg safety).
+reset_state
+bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_init 't26b' '/tmp' 'opus'
+    state_set_dict_value 't26b' '.test_dict' '/path/with\"quote' '\"v\"' '/tmp'
+"
+V=$(bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_get 't26b' '.test_dict' '/tmp' | jq -r --arg k '/path/with\"quote' '.[\$k] // \"\"'
+")
+if [ "$V" = "v" ]; then
+    PASS=$((PASS + 1)); echo "  ✓ 26b. state_set_dict_value handles key with quote (jq --arg safe)"
+else
+    FAIL=$((FAIL + 1)); echo "  ✗ 26b. state_set_dict_value mishandles quoted key (got '$V')"
+fi
+
 echo ""
 echo "=== Summary ==="
 echo "  PASS: $PASS"

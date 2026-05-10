@@ -20,7 +20,7 @@ set -uo pipefail
 
 STATE_DIR="${SAZO_STATE_DIR:-$HOME/.claude/session-state}"
 AUDIT_LOG="$STATE_DIR/audit.log"
-SCHEMA_VERSION=2
+SCHEMA_VERSION=3  # v3: added pre_commit_markers (per-repo HEAD baseline dict)
 mkdir -p -m 700 "$STATE_DIR" 2>/dev/null || mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR" 2>/dev/null || true
 
@@ -139,7 +139,8 @@ _state_init_inner() {
             verdict_unset_expected_set_count: 0,
             review_expected_set: [],
             last_cycle_at: {},
-            last_cycle_id: {}
+            last_cycle_id: {},
+            pre_commit_markers: {}
         }' > "$f"
 }
 
@@ -193,6 +194,42 @@ _state_set_str_inner() {
     else
         rm -f "$tmp"
         printf '[%s] jq_error file=%s op=set_str path=%s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$f" "$path" >> "$AUDIT_LOG" 2>/dev/null
+        return 1
+    fi
+}
+
+# state_set_dict_value <sid> <dict_path> <key> <json_value> [cwd]
+#
+# Null-safe dict insertion. Atomically: read `<dict_path>` (`null` → `{}` bootstrap),
+# set `[key]=value`, write back. Eliminates the manual bootstrap pattern that
+# was duplicated across callsites (round 13 marker dict bug — empty stdin to
+# jq pipeline silently dropped the write).
+#
+# `key` is passed via `--arg` so `"`/`\` in key cannot break the jq filter
+# (self-review N3/N6).
+# `json_value` must be valid JSON (`"str"`, `123`, `{...}`, etc).
+# `dict_path` is interpolated into the jq source — caller MUST pass a
+# trusted literal (e.g. `.pre_commit_markers`), never a user-controlled value.
+state_set_dict_value() {
+    local sid="$1" dict_path="$2" key="$3" json_value="$4" cwd="${5:-${SAZO_CWD:-}}"
+    local f
+    f=$(state_file "$sid" "$cwd") || return 1
+    [ -f "$f" ] || { echo "[session-state] state missing for $sid; call state_init first" >&2; return 1; }
+    _with_lock "$f" _state_set_dict_value_inner "$f" "$dict_path" "$key" "$json_value"
+}
+
+_state_set_dict_value_inner() {
+    local f="$1" dict_path="$2" key="$3" json_value="$4"
+    local tmp
+    tmp=$(mktemp)
+    # `($d // {})` bootstraps null → empty dict before .[k]=v assignment.
+    if jq --arg k "$key" --argjson v "$json_value" \
+        "$dict_path = (($dict_path // {}) | .[\$k] = \$v)" \
+        "$f" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$f"
+    else
+        rm -f "$tmp"
+        printf '[%s] jq_error file=%s op=set_dict_value path=%s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$f" "$dict_path" >> "$AUDIT_LOG" 2>/dev/null
         return 1
     fi
 }

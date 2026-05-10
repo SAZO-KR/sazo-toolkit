@@ -250,6 +250,20 @@ handle_post() {
                 && echo "$cmd" | grep -qE "(^|[[:space:]&|;()])git[[:space:]]+${GIT_OPTS_RE}commit\b"; then
                 local cur_cp_post
                 cur_cp_post=$(state_get "$SAZO_SESSION_ID" ".ci_passed_at" "$SAZO_CWD")
+                # Self-review A1: clear the pre-invalidate flag if pre fired in
+                # this same Bash invocation. The flag exists for future hooks
+                # that may want to dedup audit entries; the existing post-hook
+                # already short-circuits via `cur_cp_post != null` so no extra
+                # gate is needed today (audit emits only when pre saw a passed
+                # state). Clearing prevents leak across separate `git commit`
+                # invocations within the same session.
+                local _pre_invalidated_pending
+                _pre_invalidated_pending=$(state_get "$SAZO_SESSION_ID" \
+                    ".pre_commit_invalidate_pending" "$SAZO_CWD" 2>/dev/null)
+                if [ "$_pre_invalidated_pending" = "1" ]; then
+                    state_set_json "$SAZO_SESSION_ID" \
+                        ".pre_commit_invalidate_pending" "null" "$SAZO_CWD" 2>/dev/null || true
+                fi
                 # Codex PR #30 round 14 P2 (#3215109919): marker cleanup must
                 # run regardless of `ci_passed_at` state. If pre-hook already
                 # invalidated (cur_cp_post=null) and we skip cleanup, the
@@ -531,7 +545,18 @@ EOF
             local subagent_pre
             subagent_pre=$(echo "$SAZO_TOOL_INPUT" | jq -r '.subagent_type // ""' 2>/dev/null)
             case "$subagent_pre" in
-                plan-executor|ui-engineer|doc-writer)
+                doc-writer)
+                    # Self-review A4: escape hatch for doc-writer Tasks that
+                    # only touch markdown. Default behavior remains conservative
+                    # invalidate (doc-writer has Edit on .go/.ts via inline
+                    # comment policy). Set SAZO_DOC_WRITER_NO_INVALIDATE=1 in
+                    # the session env when doc-writer is doing pure prose work
+                    # to keep ci_passed_at intact.
+                    if [ "${SAZO_DOC_WRITER_NO_INVALIDATE:-0}" != "1" ]; then
+                        ci_invalidate_unconditional "$SAZO_SESSION_ID" "$SAZO_CWD" "task_preemptive:$subagent_pre"
+                    fi
+                    ;;
+                plan-executor|ui-engineer)
                     ci_invalidate_unconditional "$SAZO_SESSION_ID" "$SAZO_CWD" "task_preemptive:$subagent_pre"
                     ;;
             esac
@@ -606,16 +631,25 @@ EOF
                                 # output → state_set_json silently fails and
                                 # the dict stays null forever. Bootstrap with
                                 # `{}` literal when reader returns empty/null.
+                                #
+                                # Self-review N3/N6: previously interpolated
+                                # `.pre_commit_markers[\"$repo_root\"]` into
+                                # the jq path string — repo_root containing
+                                # `"` or `\` produced a malformed jq filter
+                                # and silently dropped that entry. Refactored:
+                                # read full dict, use `--arg k` for lookup +
+                                # set, never embed repo_root in jq source.
+                                local _markers_current
+                                _markers_current=$(state_get "$SAZO_SESSION_ID" \
+                                    ".pre_commit_markers" "$SAZO_CWD" 2>/dev/null)
+                                if [ -z "$_markers_current" ] || [ "$_markers_current" = "null" ]; then
+                                    _markers_current="{}"
+                                fi
                                 local _marker_existing
-                                _marker_existing=$(state_get "$SAZO_SESSION_ID" \
-                                    ".pre_commit_markers[\"$repo_root\"]" "$SAZO_CWD" 2>/dev/null)
-                                if [ -z "$_marker_existing" ] || [ "$_marker_existing" = "null" ]; then
-                                    local _markers_current _markers_next
-                                    _markers_current=$(state_get "$SAZO_SESSION_ID" \
-                                        ".pre_commit_markers" "$SAZO_CWD" 2>/dev/null)
-                                    if [ -z "$_markers_current" ] || [ "$_markers_current" = "null" ]; then
-                                        _markers_current="{}"
-                                    fi
+                                _marker_existing=$(printf '%s' "$_markers_current" \
+                                    | jq -r --arg k "$repo_root" '.[$k] // ""' 2>/dev/null)
+                                if [ -z "$_marker_existing" ]; then
+                                    local _markers_next
                                     _markers_next=$(printf '%s' "$_markers_current" \
                                         | jq -c --arg k "$repo_root" --arg v "$pre_commit_head" \
                                             '. + {($k): $v}')
@@ -629,10 +663,20 @@ EOF
                                 # Legacy single-marker write for back-compat with
                                 # post-hook fallback (kept for transition; post-hook
                                 # prefers dict but reads legacy if dict empty).
-                                state_set_json "$SAZO_SESSION_ID" \
-                                    ".pre_commit_marker" \
-                                    "{\"head\":\"$pre_commit_head\",\"repo_root\":\"$repo_root\"}" \
-                                    "$SAZO_CWD" 2>/dev/null || true
+                                # Self-review N3/N6: build JSON via jq --arg
+                                # so `"`/`\` in head or repo_root cannot
+                                # break the literal.
+                                local _legacy_marker
+                                _legacy_marker=$(jq -nc \
+                                    --arg head "$pre_commit_head" \
+                                    --arg repo "$repo_root" \
+                                    '{head: $head, repo_root: $repo}')
+                                if [ -n "$_legacy_marker" ]; then
+                                    state_set_json "$SAZO_SESSION_ID" \
+                                        ".pre_commit_marker" \
+                                        "$_legacy_marker" \
+                                        "$SAZO_CWD" 2>/dev/null || true
+                                fi
                             fi
                             # `--name-status -M`: 각 라인 = `<status>\t<path>` 또는
                             # rename/copy의 경우 `R<score>\t<old>\t<new>` (`C<score>` 동일).
@@ -965,6 +1009,12 @@ EOF_PST
 
                         if [ "$has_code_staged" = "1" ]; then
                             ci_invalidate_unconditional "$SAZO_SESSION_ID" "$SAZO_CWD" "git_commit"
+                            # Self-review A1: flag the pre-invalidate so the
+                            # post-hook can short-circuit and avoid emitting a
+                            # second `ci_invalidated` audit entry + redundant
+                            # diff-tree work for the same commit.
+                            state_set_str "$SAZO_SESSION_ID" \
+                                ".pre_commit_invalidate_pending" "1" "$SAZO_CWD" 2>/dev/null || true
                         fi
                         : "$marker_repo_root $marker_pre_head"  # silence unused
                     fi

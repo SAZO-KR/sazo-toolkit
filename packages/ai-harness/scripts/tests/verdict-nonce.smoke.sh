@@ -56,11 +56,12 @@ state_jq() {
   jq -r "$path" "$sf"
 }
 
-# --- Test A: schema v2 init ---
-echo "Test A: state_init creates schema v2 with verdict fields"
+# --- Test A: schema v3 init ---
+echo "Test A: state_init creates schema v3 with verdict fields"
 state_init "$SID" "$CWD" "test-model"
 schema_ver=$(state_get "$SID" '.schema_version' "$CWD")
-assert_eq "2" "$schema_ver" "A.1 schema_version=2"
+# v3 added pre_commit_markers (PR #30 self-review A5).
+assert_eq "3" "$schema_ver" "A.1 schema_version=3"
 
 # Verify new fields exist with defaults
 verdict_nonces=$(state_get "$SID" '.verdict_nonces' "$CWD")
