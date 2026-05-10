@@ -221,17 +221,48 @@ handle_post() {
                     repo_root_post=$(git -C "$git_target_post" rev-parse --show-toplevel 2>/dev/null)
                     if [ -n "$repo_root_post" ]; then
                         local has_code_committed=0
-                        # HEAD's most recent commit changed files.
-                        # diff-tree --root handles initial commit too.
+                        # Codex PR #30 round 9 P2: scan every commit created by this
+                        # Bash invocation. Pre-hook stored repo HEAD before the cmd
+                        # ran; range `<marker>..HEAD` covers all new commits even when
+                        # one Bash chains multiple commits and the last one is docs-only
+                        # (`commit code && commit docs`). Without this, the prior
+                        # `diff-tree --root HEAD` only inspected the final commit and
+                        # missed the earlier code commit.
+                        local marker_json marker_head marker_repo commit_range=""
+                        marker_json=$(state_get "$SAZO_SESSION_ID" ".pre_commit_marker" "$SAZO_CWD" 2>/dev/null)
+                        if [ -n "$marker_json" ] && [ "$marker_json" != "null" ]; then
+                            marker_head=$(echo "$marker_json" | jq -r '.head // ""' 2>/dev/null)
+                            marker_repo=$(echo "$marker_json" | jq -r '.repo_root // ""' 2>/dev/null)
+                            # Only trust marker when same repo and ref still resolves
+                            # (a commit/reset between pre and post could orphan it).
+                            if [ -n "$marker_head" ] \
+                                && [ "$marker_repo" = "$repo_root_post" ] \
+                                && git -C "$repo_root_post" cat-file -e "$marker_head" 2>/dev/null; then
+                                # marker..HEAD enumerates only commits created after
+                                # pre-hook fired. Same as HEAD when no new commits.
+                                commit_range="${marker_head}..HEAD"
+                            fi
+                        fi
+                        # Fallback: marker missing/stale → inspect HEAD only (legacy
+                        # behavior; covers single-commit case which is the common path).
+                        local diff_args
+                        if [ -n "$commit_range" ]; then
+                            diff_args=("diff-tree" "--no-commit-id" "--name-only" "-r" "$commit_range")
+                        else
+                            diff_args=("diff-tree" "--no-commit-id" "--name-only" "-r" "--root" "HEAD")
+                        fi
                         while IFS= read -r p; do
                             [ -z "$p" ] && continue
                             if _is_doc_only_path "$p"; then continue; fi
                             if _is_code_file "$p"; then has_code_committed=1; break; fi
-                        done < <(git -C "$repo_root_post" diff-tree --no-commit-id --name-only -r --root HEAD 2>/dev/null)
+                        done < <(git -C "$repo_root_post" "${diff_args[@]}" 2>/dev/null)
                         if [ "$has_code_committed" = "1" ]; then
                             ci_invalidate_unconditional "$SAZO_SESSION_ID" "$SAZO_CWD" "git_commit_post"
                         fi
                     fi
+                    # Clear marker regardless of outcome so a later unrelated commit
+                    # in the same session does not reuse a stale ref.
+                    state_set_json "$SAZO_SESSION_ID" ".pre_commit_marker" "null" "$SAZO_CWD" 2>/dev/null || true
                 fi
             fi
             ;;
@@ -463,6 +494,21 @@ EOF
                         local repo_root
                         repo_root=$(git -C "$git_target" rev-parse --show-toplevel 2>/dev/null)
                         if [ -n "$repo_root" ]; then
+                            # Codex PR #30 round 9 P2: pre-commit HEAD marker.
+                            # 한 Bash invocation 내 multi-commit (`commit code &&
+                            # commit docs`) 의 마지막이 docs-only 면 PostToolUse
+                            # fallback 이 HEAD 만 검사해 중간 code commit 을 누락 →
+                            # ci_passed_at 유지된 채 PR create 통과. 사전 발동 시점에
+                            # HEAD oid 를 marker 로 저장해 두면 post-hook 이
+                            # `<marker>..HEAD` 범위로 모든 새 commit 검사 가능.
+                            local pre_commit_head
+                            pre_commit_head=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo "")
+                            if [ -n "$pre_commit_head" ]; then
+                                state_set_json "$SAZO_SESSION_ID" \
+                                    ".pre_commit_marker" \
+                                    "{\"head\":\"$pre_commit_head\",\"repo_root\":\"$repo_root\"}" \
+                                    "$SAZO_CWD" 2>/dev/null || true
+                            fi
                             local has_code_staged=0
                             # `--name-status -M`: 각 라인 = `<status>\t<path>` 또는
                             # rename/copy의 경우 `R<score>\t<old>\t<new>` (`C<score>` 동일).

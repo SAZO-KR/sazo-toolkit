@@ -795,6 +795,96 @@ val=$(get_ci_passed_at "t12e" "$WORK_REPO_FAIL")
 assert_exit "0" "$?" "12e. post-commit failed → ci_passed_at preserved (exit_code != 0)"
 rm -rf "$WORK_REPO_FAIL"
 
+# 12f. PostToolUse multi-commit chain `commit code && commit docs` (Codex PR #30 round 9 P2)
+# 같은 Bash 한 번에 코드 commit + docs commit. 마지막이 docs-only 여서 prior
+# `diff-tree --root HEAD` 만 보던 fallback 은 code commit 을 누락 → ci_passed_at
+# 유지된 채 PR create 통과. pre-hook HEAD marker → post-hook `<marker>..HEAD`
+# 범위 검사로 모든 새 commit 을 본다.
+WORK_REPO_MULTI="/tmp/sazo-ci-invalidate-multi-$$"
+rm -rf "$WORK_REPO_MULTI"; mkdir -p "$WORK_REPO_MULTI"
+(
+    cd "$WORK_REPO_MULTI"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    git commit -q --allow-empty -m init
+)
+mark_ci_passed "t12f" "$WORK_REPO_MULTI"
+# Pre-hook fires before the actual commits run. Marker captured.
+run_hook_pre "{\"session_id\":\"t12f\",\"cwd\":\"$WORK_REPO_MULTI\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo 'package main' > $WORK_REPO_MULTI/foo.go && git -C $WORK_REPO_MULTI add foo.go && git -C $WORK_REPO_MULTI commit -m code && echo doc > $WORK_REPO_MULTI/README.md && git -C $WORK_REPO_MULTI add README.md && git -C $WORK_REPO_MULTI commit -m docs\"}}" >/dev/null
+# Now actually create the two commits — code first, docs second.
+(
+    cd "$WORK_REPO_MULTI"
+    echo 'package main' > foo.go
+    git add foo.go
+    git commit -q -m code
+    echo doc > README.md
+    git add README.md
+    git commit -q -m docs
+)
+# Pre-hook (above) already invalidated via the chained `git add foo.go` path.
+# Reset to isolate the post-hook fallback path under test.
+bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_set_str 't12f' '.ci_passed_at' '2026-05-09T10:00:00+0900' '$WORK_REPO_MULTI'
+"
+run_hook_post "{\"session_id\":\"t12f\",\"cwd\":\"$WORK_REPO_MULTI\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo 'package main' > $WORK_REPO_MULTI/foo.go && git -C $WORK_REPO_MULTI add foo.go && git -C $WORK_REPO_MULTI commit -m code && echo doc > $WORK_REPO_MULTI/README.md && git -C $WORK_REPO_MULTI add README.md && git -C $WORK_REPO_MULTI commit -m docs\"},\"tool_response\":{\"exit_code\":0}}" >/dev/null
+val=$(get_ci_passed_at "t12f" "$WORK_REPO_MULTI")
+assert_null "$val" "12f. post-commit multi-commit chain (code then docs) — earlier code commit detected via marker..HEAD range"
+rm -rf "$WORK_REPO_MULTI"
+
+# 12g. PostToolUse multi-commit, all docs → ci_passed_at preserved (false-positive guard)
+WORK_REPO_MD="/tmp/sazo-ci-invalidate-multidocs-$$"
+rm -rf "$WORK_REPO_MD"; mkdir -p "$WORK_REPO_MD"
+(
+    cd "$WORK_REPO_MD"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    git commit -q --allow-empty -m init
+)
+mark_ci_passed "t12g" "$WORK_REPO_MD"
+run_hook_pre "{\"session_id\":\"t12g\",\"cwd\":\"$WORK_REPO_MD\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo 'a' > $WORK_REPO_MD/A.md && git -C $WORK_REPO_MD add A.md && git -C $WORK_REPO_MD commit -m a && echo 'b' > $WORK_REPO_MD/B.md && git -C $WORK_REPO_MD add B.md && git -C $WORK_REPO_MD commit -m b\"}}" >/dev/null
+(
+    cd "$WORK_REPO_MD"
+    echo a > A.md && git add A.md && git commit -q -m a
+    echo b > B.md && git add B.md && git commit -q -m b
+)
+# Restore ci_passed_at — pre-hook above was a no-op (no code in chain) so this
+# is the fresh state we want post-hook to evaluate.
+bash -c "
+    export SAZO_STATE_DIR='$SAZO_STATE_DIR'
+    source '$LIB'
+    state_set_str 't12g' '.ci_passed_at' '2026-05-09T10:00:00+0900' '$WORK_REPO_MD'
+"
+run_hook_post "{\"session_id\":\"t12g\",\"cwd\":\"$WORK_REPO_MD\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo 'a' > $WORK_REPO_MD/A.md && git -C $WORK_REPO_MD add A.md && git -C $WORK_REPO_MD commit -m a && echo 'b' > $WORK_REPO_MD/B.md && git -C $WORK_REPO_MD add B.md && git -C $WORK_REPO_MD commit -m b\"},\"tool_response\":{\"exit_code\":0}}" >/dev/null
+val=$(get_ci_passed_at "t12g" "$WORK_REPO_MD")
+[ -n "$val" ] && [ "$val" != "null" ]
+assert_exit "0" "$?" "12g. post-commit multi-commit all-docs — ci_passed_at preserved"
+rm -rf "$WORK_REPO_MD"
+
+# 12h. Marker-missing fallback — post-hook without prior pre-hook marker still
+# detects HEAD commit (legacy single-commit safety net).
+WORK_REPO_NM="/tmp/sazo-ci-invalidate-nomark-$$"
+rm -rf "$WORK_REPO_NM"; mkdir -p "$WORK_REPO_NM"
+(
+    cd "$WORK_REPO_NM"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    git commit -q --allow-empty -m init
+    echo 'package main' > foo.go
+    git add foo.go
+    git commit -q -m code
+)
+mark_ci_passed "t12h" "$WORK_REPO_NM"
+# Skip pre-hook entirely — only post fires. Marker absent → HEAD-only fallback.
+run_hook_post "{\"session_id\":\"t12h\",\"cwd\":\"$WORK_REPO_NM\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m code\"},\"tool_response\":{\"exit_code\":0}}" >/dev/null
+val=$(get_ci_passed_at "t12h" "$WORK_REPO_NM")
+assert_null "$val" "12h. post-commit marker-missing → HEAD-only fallback still invalidates"
+rm -rf "$WORK_REPO_NM"
+
 # 13. PreToolUse Task subagent_type=plan-executor + ci_passed_at!=null → invalidate
 reset_state
 mark_ci_passed "t13" "/tmp"
