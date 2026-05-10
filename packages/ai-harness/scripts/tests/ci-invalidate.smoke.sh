@@ -1203,6 +1203,42 @@ run_hook_post "{\"session_id\":\"t12r2\",\"cwd\":\"/tmp\",\"tool_name\":\"Edit\"
 val=$(get_ci_passed_at "t12r2" "/tmp")
 assert_null "$val" "12r2. Edit go.mod → ci_passed_at null"
 
+# 12s. `git commit --pathspec-from-file=<file>` (Codex PR #30 round 15 #3215117950)
+# 파일 안 path 목록은 hook 입장에서 opaque. working-tree 에 코드 파일이 있으면
+# 보수적 invalidate.
+WORK_REPO="/tmp/sazo-ci-invalidate-pathspec-file-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    echo 'package main' > foo.go
+    git add foo.go
+    git commit -q -m init
+    echo "// edit" >> foo.go
+    printf 'foo.go\n' > paths
+)
+mark_ci_passed "t12s" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t12s\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO commit --pathspec-from-file=$WORK_REPO/paths -m x\"}}" >/dev/null
+val=$(get_ci_passed_at "t12s" "$WORK_REPO")
+assert_null "$val" "12s. ci_passed_at invalidated by 'git commit --pathspec-from-file' (file opaque, working-tree code present)"
+rm -rf "$WORK_REPO"
+
+# 12s2. PR-chain `--pathspec-from-file` opaque guard
+WORK_REPO="/tmp/sazo-ci-invalidate-pathspec-file-prchain-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main && git config user.email s@t && git config user.name s
+    echo 'package main' > foo.go && git add foo.go && git commit -q -m init
+    echo "// edit" >> foo.go
+    printf 'foo.go\n' > paths
+)
+mark_ci_passed "t12s2" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t12s2\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO commit --pathspec-from-file=$WORK_REPO/paths -m x && gh pr create --title psf\"}}" >/dev/null 2>&1
+val=$(get_ci_passed_at "t12s2" "$WORK_REPO")
+assert_null "$val" "12s2. opaque-chain catches '--pathspec-from-file' commit + gh pr create"
+rm -rf "$WORK_REPO"
+
 # 13. PreToolUse Task subagent_type=plan-executor + ci_passed_at!=null → invalidate
 reset_state
 mark_ci_passed "t13" "/tmp"

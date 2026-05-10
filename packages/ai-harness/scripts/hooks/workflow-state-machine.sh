@@ -847,6 +847,17 @@ EOF_RT
                                             if (skip_next) { skip_next = 0; continue }
                                             if (in_pathspec) { print t; continue }
                                             if (t == "--") { in_pathspec = 1; continue }
+                                            # Codex PR #30 round 15 P2 (#3215117950):
+                                            # --pathspec-from-file is an opaque
+                                            # pathspec source (file lists paths).
+                                            # Treat as positional pathspec by
+                                            # emitting a sentinel so the caller
+                                            # marks the segment opaque.
+                                            if (t == "--pathspec-from-file" || t ~ /^--pathspec-from-file=/) {
+                                                if (t == "--pathspec-from-file") skip_next = 1
+                                                print "__OPAQUE_PATHSPEC_FROM_FILE__"
+                                                continue
+                                            }
                                             # value-bearing short opts: next token = value
                                             if (t == "-m" || t == "-F" || t == "-c" || t == "-C" || t == "-t" || t == "-T" || t == "--trailer") {
                                                 skip_next = 1
@@ -863,6 +874,23 @@ EOF_RT
                                     local pst
                                     while IFS= read -r pst; do
                                         [ -z "$pst" ] && continue
+                                        # Codex PR #30 round 15 P2: sentinel from
+                                        # awk = `--pathspec-from-file`. File contents
+                                        # opaque to us → conservatively scan the
+                                        # repo's working tree for any code path
+                                        # that could be referenced.
+                                        if [ "$pst" = "__OPAQUE_PATHSPEC_FROM_FILE__" ]; then
+                                            while IFS= read -r line; do
+                                                [ -z "$line" ] && continue
+                                                local _p="${line:3}"
+                                                case "$_p" in
+                                                    *' -> '*) _p="${_p##* -> }" ;;
+                                                esac
+                                                if _is_doc_only_path "$_p"; then continue; fi
+                                                if _is_code_file "$_p"; then has_code_staged=1; break 2; fi
+                                            done < <(git -C "$repo_root" status --porcelain --untracked-files=all 2>/dev/null)
+                                            continue
+                                        fi
                                         if _is_doc_only_path "$pst"; then continue; fi
                                         if _is_code_file "$pst"; then
                                             has_code_staged=1
@@ -981,6 +1009,12 @@ EOF_PST
                                         }
                                         if (skip_next) { skip_next = 0; continue }
                                         if (t == "--") { print "1"; exit }
+                                        # Codex PR #30 round 15 P2 (#3215117950):
+                                        # --pathspec-from-file=<file> is opaque
+                                        # pathspec source — flag it like positional.
+                                        if (t == "--pathspec-from-file" || t ~ /^--pathspec-from-file=/) {
+                                            print "1"; exit
+                                        }
                                         if (t == "-m" || t == "-F" || t == "-c" || t == "-C" || t == "-t" || t == "-T" || t == "--trailer") {
                                             skip_next = 1
                                             continue
