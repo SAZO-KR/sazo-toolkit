@@ -613,6 +613,88 @@ val=$(get_ci_passed_at "t11s" "$WORK_REPO")
 assert_null "$val" "11s. -C extraction bound to commit segment (chain 의 다른 -C 우회 차단)"
 rm -rf "$WORK_REPO" "$OTHER_REPO"
 
+# 11t. Pathspec commit form (Codex PR #30 round 8 P2)
+# `git commit foo.go -m x` — git docs: `git commit [<pathspec>...]`. 기본 동작은
+# `--only` 로, working-tree 의 해당 path 변경을 stage 없이 직접 commit. 사전 `git add`
+# 도, `-a/--all` 도 없어 현재 fallback chain 모두 우회 → ci_passed_at 유지된 채 PR 통과.
+WORK_REPO="/tmp/sazo-ci-invalidate-pathspec-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    echo "package main" > foo.go
+    git add foo.go
+    git commit -q -m init
+    # Modify tracked file but DO NOT stage. Pathspec commit will pick it up.
+    echo "// edit" >> foo.go
+)
+mark_ci_passed "t11t" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11t\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO commit foo.go -m pathspec\"}}" >/dev/null
+val=$(get_ci_passed_at "t11t" "$WORK_REPO")
+assert_null "$val" "11t. ci_passed_at invalidated by 'git commit <pathspec>' (no add, no -a)"
+rm -rf "$WORK_REPO"
+
+# 11u. `git commit -i <pathspec>` (--include) — same risk as bare pathspec form
+WORK_REPO="/tmp/sazo-ci-invalidate-pathspec-i-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    echo "package main" > bar.go
+    git add bar.go
+    git commit -q -m init
+    echo "// edit" >> bar.go
+)
+mark_ci_passed "t11u" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11u\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO commit -i bar.go -m include\"}}" >/dev/null
+val=$(get_ci_passed_at "t11u" "$WORK_REPO")
+assert_null "$val" "11u. ci_passed_at invalidated by 'git commit -i <pathspec>' (include)"
+rm -rf "$WORK_REPO"
+
+# 11v. chained `git commit <pathspec> && gh pr create` — opaque-chain guard 가
+# pathspec commit 도 trigger 해야. 기존 guard 는 `git add|rm|mv|commit -a*` 만 매치.
+WORK_REPO="/tmp/sazo-ci-invalidate-pathspec-prchain-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    echo "package main" > foo.go
+    git add foo.go
+    git commit -q -m init
+    echo "// edit" >> foo.go
+)
+mark_ci_passed "t11v" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11v\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO commit foo.go -m pathspec && gh pr create --title pathspec\"}}" >/dev/null 2>&1
+val=$(get_ci_passed_at "t11v" "$WORK_REPO")
+assert_null "$val" "11v. ci_passed_at invalidated by 'git commit <pathspec> && gh pr create' opaque-chain guard"
+rm -rf "$WORK_REPO"
+
+# 11w. False-positive guard: pathspec commit of docs-only path → ci_passed_at 유지
+WORK_REPO="/tmp/sazo-ci-invalidate-pathspec-docs-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    echo "# v1" > README.md
+    git add README.md
+    git commit -q -m init
+    echo "# v2" >> README.md
+)
+mark_ci_passed "t11w" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11w\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO commit README.md -m doc\"}}" >/dev/null
+val=$(get_ci_passed_at "t11w" "$WORK_REPO")
+[ -n "$val" ] && [ "$val" != "null" ]
+assert_exit "0" "$?" "11w. ci_passed_at preserved when 'git commit <docs-pathspec>' (false-positive guard)"
+rm -rf "$WORK_REPO"
+
 # 12. git commit + staged 비어있음 → ci_passed_at 유지
 WORK_REPO="/tmp/sazo-ci-invalidate-commit3-$$"
 rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"

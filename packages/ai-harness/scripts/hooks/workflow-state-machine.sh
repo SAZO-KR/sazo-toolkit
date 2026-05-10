@@ -627,7 +627,7 @@ EOF_RT
                                 # (b) `git commit -a` / `-am` / `--all` 감지.
                                 # cmd 분석: commit 토큰 이후 단어 중 -a/-am/-aXY/--all 매치.
                                 local commit_tail
-                                commit_tail=$(printf '%s' "$cmd" | sed -E 's/.*\bcommit\b//')
+                                commit_tail=$(printf '%s' "$commit_segment" | sed -E 's/.*\bcommit\b//')
                                 if printf '%s' "$commit_tail" | grep -qE '(^|[[:space:]])(-a([^-=[:space:]]*)?|--all)\b'; then
                                     # working tree (tracked, unstaged) 검사.
                                     while IFS= read -r line; do
@@ -650,6 +650,72 @@ EOF_RT
                                             if _is_code_file "$p"; then has_code_staged=1; break 2; fi
                                         done
                                     done < <(git -C "$repo_root" diff --name-status -M --diff-filter=ACMRD 2>/dev/null)
+                                fi
+                            fi
+
+                            if [ "$has_code_staged" != "1" ]; then
+                                # (c) Pathspec commit form (Codex PR #30 round 8 P2).
+                                # `git commit foo.go -m x` / `git commit -i foo.go -m x` /
+                                # `git commit -o foo.go -m x` — git docs:
+                                #   `git commit [-i | -o] [--] [<pathspec>...]`
+                                # 사전 `git add` 없이, 또한 `-a/--all` 없이도 working-tree
+                                # 변경이 commit 되므로 (a)/(b)/staged-set 모두 우회됨.
+                                # commit 토큰 뒤를 토큰화 → value-bearing flag 의 값 skip →
+                                # `--` 이후 또는 non-flag 토큰을 pathspec 으로 간주.
+                                local pathspec_tokens
+                                pathspec_tokens=$(printf '%s' "$commit_segment" | awk '
+                                    {
+                                        n = split($0, a, /[[:space:]]+/)
+                                        in_commit = 0
+                                        in_pathspec = 0
+                                        skip_next = 0
+                                        for (i = 1; i <= n; i++) {
+                                            t = a[i]
+                                            if (t == "") continue
+                                            if (!in_commit) {
+                                                if (t == "commit") in_commit = 1
+                                                continue
+                                            }
+                                            if (skip_next) { skip_next = 0; continue }
+                                            if (in_pathspec) { print t; continue }
+                                            if (t == "--") { in_pathspec = 1; continue }
+                                            # value-bearing short opts 다음 토큰 skip
+                                            if (t == "-m" || t == "-F" || t == "-c" || t == "-C" || t == "-t" || t == "-T" || t == "--trailer") {
+                                                skip_next = 1
+                                                continue
+                                            }
+                                            # 옵션 (long-form `--foo=bar` 또는 stand-alone `--foo`/short `-x`)
+                                            if (substr(t, 1, 1) == "-") continue
+                                            # 첫 non-flag → pathspec 시작
+                                            in_pathspec = 1
+                                            print t
+                                        }
+                                    }')
+                                if [ -n "$pathspec_tokens" ]; then
+                                    local pst
+                                    while IFS= read -r pst; do
+                                        [ -z "$pst" ] && continue
+                                        if _is_doc_only_path "$pst"; then continue; fi
+                                        if _is_code_file "$pst"; then
+                                            has_code_staged=1
+                                            break
+                                        fi
+                                        # 디렉토리 pathspec: working-tree 변경 중 해당 디렉토리
+                                        # 안 코드 파일 있으면 invalidate.
+                                        if [ -d "$repo_root/$pst" ]; then
+                                            while IFS= read -r line; do
+                                                [ -z "$line" ] && continue
+                                                local p="${line:3}"
+                                                case "$p" in
+                                                    *' -> '*) p="${p##* -> }" ;;
+                                                esac
+                                                if _is_doc_only_path "$p"; then continue; fi
+                                                if _is_code_file "$p"; then has_code_staged=1; break 2; fi
+                                            done < <(git -C "$repo_root" status --porcelain --untracked-files=all -- "$pst" 2>/dev/null)
+                                        fi
+                                    done <<EOF_PST
+$pathspec_tokens
+EOF_PST
                                 fi
                             fi
 
@@ -679,8 +745,52 @@ EOF_RT
                     # `git rm`, `git mv`, `git commit -a`. 코드 파일 추가/삭제/이동
                     # 모두 build break 또는 stale CI 위험. `git -C <path> ...`,
                     # `git -c k=v ...` 처럼 global option 끼는 케이스도 매치.
+                    # Codex PR #30 round 8 P2: pathspec commit form (`git commit foo.go -m x`)
+                    # 도 opaque — 사전 add 없이 working-tree 코드 파일을 commit. 매치
+                    # 추가: `commit` 토큰 뒤가 옵션만이 아니라 positional pathspec 포함
+                    # 케이스 (commit_segment 안에 -- 또는 non-flag 토큰 존재).
+                    local has_opaque=0
                     if echo "$pre_chain" | grep -qE '[[:space:]](&&|\|\||;)[[:space:]]' \
                         && echo "$pre_chain" | grep -qE '\bgit[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*(add\b|rm\b|mv\b|commit[[:space:]]+-[aA-Za-z]*[aA])'; then
+                        has_opaque=1
+                    fi
+                    if [ "$has_opaque" != "1" ] \
+                        && echo "$pre_chain" | grep -qE '[[:space:]](&&|\|\||;)[[:space:]]'; then
+                        # Pathspec commit detection in pre_chain.
+                        local pre_commit_segment
+                        pre_commit_segment=$(printf '%s\n' "$pre_chain" | tr ';|&' '\n' \
+                            | grep -E '(^|[[:space:]])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*commit\b' \
+                            | head -1)
+                        if [ -n "$pre_commit_segment" ]; then
+                            local has_pathspec
+                            has_pathspec=$(printf '%s' "$pre_commit_segment" | awk '
+                                {
+                                    n = split($0, a, /[[:space:]]+/)
+                                    in_commit = 0
+                                    skip_next = 0
+                                    for (i = 1; i <= n; i++) {
+                                        t = a[i]
+                                        if (t == "") continue
+                                        if (!in_commit) {
+                                            if (t == "commit") in_commit = 1
+                                            continue
+                                        }
+                                        if (skip_next) { skip_next = 0; continue }
+                                        if (t == "--") { print "1"; exit }
+                                        if (t == "-m" || t == "-F" || t == "-c" || t == "-C" || t == "-t" || t == "-T" || t == "--trailer") {
+                                            skip_next = 1
+                                            continue
+                                        }
+                                        if (substr(t, 1, 1) == "-") continue
+                                        print "1"; exit
+                                    }
+                                }')
+                            if [ "$has_pathspec" = "1" ]; then
+                                has_opaque=1
+                            fi
+                        fi
+                    fi
+                    if [ "$has_opaque" = "1" ]; then
                         local cur_cp_chain
                         cur_cp_chain=$(state_get "$SAZO_SESSION_ID" ".ci_passed_at" "$SAZO_CWD")
                         if [ -n "$cur_cp_chain" ] && [ "$cur_cp_chain" != "null" ]; then
