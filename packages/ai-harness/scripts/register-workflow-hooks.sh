@@ -79,12 +79,17 @@ register_workflow_hooks() {
     _register_one_hook "PreToolUse" "Grep|Bash" \
         "$hooks_dir/pre-exploration-gate.sh"
 
-    # 3) workflow-state-machine pre — Write/Edit/NotebookEdit/Bash
-    _register_one_hook "PreToolUse" "Write|Edit|NotebookEdit|Bash" \
+    # 3) workflow-state-machine pre — Task/Write/Edit/NotebookEdit/Bash
+    # Task 추가: Plan 04 §6 (B) GH#34692 fallback — subagent 내부 Edit/Write/Bash가
+    # parent hook을 미발동하므로, mutating subagent(plan-executor/ui-engineer) Task
+    # PreToolUse 시점에 ci_passed_at preemptive invalidate. 매처에 Task 빠지면
+    # 해당 분기가 실제 설치 환경에서 절대 발동하지 않아 GH#34692 방어가 무력화됨.
+    _register_one_hook "PreToolUse" "Task|Write|Edit|NotebookEdit|Bash" \
         "$hooks_dir/workflow-state-machine.sh" "pre"
 
-    # 4) workflow-state-machine post — Task/Bash
-    _register_one_hook "PostToolUse" "Task|Bash" \
+    # 4) workflow-state-machine post — Task/Bash/Edit/Write/NotebookEdit
+    # Edit/Write/NotebookEdit 추가는 Plan 04 — ci_passed_at invalidate 트리거.
+    _register_one_hook "PostToolUse" "Task|Bash|Edit|Write|NotebookEdit" \
         "$hooks_dir/workflow-state-machine.sh" "post"
 
     # 5) user-prompt-approval-detect — UserPromptSubmit (matcher 없음)

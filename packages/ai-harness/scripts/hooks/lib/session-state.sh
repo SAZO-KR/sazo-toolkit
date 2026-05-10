@@ -20,7 +20,7 @@ set -uo pipefail
 
 STATE_DIR="${SAZO_STATE_DIR:-$HOME/.claude/session-state}"
 AUDIT_LOG="$STATE_DIR/audit.log"
-SCHEMA_VERSION=2
+SCHEMA_VERSION=3  # v3: added pre_commit_markers (per-repo HEAD baseline dict)
 mkdir -p -m 700 "$STATE_DIR" 2>/dev/null || mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR" 2>/dev/null || true
 
@@ -139,7 +139,8 @@ _state_init_inner() {
             verdict_unset_expected_set_count: 0,
             review_expected_set: [],
             last_cycle_at: {},
-            last_cycle_id: {}
+            last_cycle_id: {},
+            pre_commit_markers: {}
         }' > "$f"
 }
 
@@ -193,6 +194,42 @@ _state_set_str_inner() {
     else
         rm -f "$tmp"
         printf '[%s] jq_error file=%s op=set_str path=%s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$f" "$path" >> "$AUDIT_LOG" 2>/dev/null
+        return 1
+    fi
+}
+
+# state_set_dict_value <sid> <dict_path> <key> <json_value> [cwd]
+#
+# Null-safe dict insertion. Atomically: read `<dict_path>` (`null` → `{}` bootstrap),
+# set `[key]=value`, write back. Eliminates the manual bootstrap pattern that
+# was duplicated across callsites (round 13 marker dict bug — empty stdin to
+# jq pipeline silently dropped the write).
+#
+# `key` is passed via `--arg` so `"`/`\` in key cannot break the jq filter
+# (self-review N3/N6).
+# `json_value` must be valid JSON (`"str"`, `123`, `{...}`, etc).
+# `dict_path` is interpolated into the jq source — caller MUST pass a
+# trusted literal (e.g. `.pre_commit_markers`), never a user-controlled value.
+state_set_dict_value() {
+    local sid="$1" dict_path="$2" key="$3" json_value="$4" cwd="${5:-${SAZO_CWD:-}}"
+    local f
+    f=$(state_file "$sid" "$cwd") || return 1
+    [ -f "$f" ] || { echo "[session-state] state missing for $sid; call state_init first" >&2; return 1; }
+    _with_lock "$f" _state_set_dict_value_inner "$f" "$dict_path" "$key" "$json_value"
+}
+
+_state_set_dict_value_inner() {
+    local f="$1" dict_path="$2" key="$3" json_value="$4"
+    local tmp
+    tmp=$(mktemp)
+    # `($d // {})` bootstraps null → empty dict before .[k]=v assignment.
+    if jq --arg k "$key" --argjson v "$json_value" \
+        "$dict_path = (($dict_path // {}) | .[\$k] = \$v)" \
+        "$f" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$f"
+    else
+        rm -f "$tmp"
+        printf '[%s] jq_error file=%s op=set_dict_value path=%s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$f" "$dict_path" >> "$AUDIT_LOG" 2>/dev/null
         return 1
     fi
 }
@@ -297,11 +334,27 @@ stage_is_passed() {
             ' "$f" >/dev/null 2>&1
             ;;
         ci)
+            # ci_passed_at AND condition (Plan 04): completed-by-auto/user only
+            # passes when ci_passed_at is non-null. Code mutation after CI clears
+            # ci_passed_at via _is_code_file detection — forces re-run before PR.
+            # user-skipped path remains unconditional override.
+            # NOTE: jq pipe `.history | any(...)` binds tighter than `and` —
+            # explicit parens required so the AND condition reads from root,
+            # not from inside the array context.
             jq -e '
-                .history | any(
+                (.history | any(
                     .stage == "ci"
-                    and ((.status == "completed" and (.by == "user" or .by == "auto"))
-                        or (.status == "skipped" and .by == "user"))
+                    and (
+                        (
+                            .status == "completed"
+                            and (.by == "user" or .by == "auto")
+                        )
+                        or (.status == "skipped" and .by == "user")
+                    )
+                ))
+                and (
+                    (.ci_passed_at != null)
+                    or (.history | any(.stage == "ci" and .status == "skipped" and .by == "user"))
                 )
             ' "$f" >/dev/null 2>&1
             ;;
@@ -952,4 +1005,111 @@ parse_verdict_footer() {
 
     printf 'STATUS=ok\nNONCE=%s\nVERDICT=%s\nISSUES=%s\n' \
         "$nonce" "$verdict" "${issues:-0}"
+}
+
+# ----- ci invalidate helpers (Plan 04) -----
+
+# _is_doc_only_path: doc/markdown 전용 경로면 0 (skip 대상). 우선 평가 — 호출자는
+# _is_doc_only_path 먼저 → true면 invalidate skip. 그래야 docs/foo.go 처럼
+# 코드 확장자라도 docs 경로에 있으면 docs로 다룸 (Risk R2 완화).
+#
+# Codex PR #30 round 2 P2: Edit/Write payload는 absolute path. 절대 경로에서
+# `*/docs/*`만 매치하면 `/home/me/docs/proj/src/foo.go` 같은 워크스페이스 상위에
+# `docs` 디렉토리가 있는 경우 코드 파일도 docs로 오인되어 invalidate가 누락된다.
+# 따라서 입력 경로가 absolute면 가능한 한 repo root(또는 SAZO_CWD) 기준 relative로
+# 정규화 후 매칭한다. 호출자는 file_path만 넘기고 SAZO_CWD/SAZO_REPO_ROOT 환경
+# 변수로 base를 추론.
+_is_doc_only_path() {
+    local p="$1"
+    # extension은 위치 무관 — 먼저 처리.
+    case "$p" in
+        *.md) return 0 ;;
+    esac
+    # absolute path → repo root 기준 relative로 변환.
+    # Codex PR #30 round 2 P2: SAZO_CWD가 repo 안의 임의 subdir(또는 repo의
+    # parent)일 수 있어 SAZO_CWD를 base로 쓰면 `~/docs/proj/src/foo.go`
+    # (cwd=`~`) 같은 경로가 `docs/proj/src/foo.go`로 normalize되어 docs/*에
+    # 잘못 매칭됨. git rev-parse로 실제 repo root를 우선 사용한다.
+    if [ "${p#/}" != "$p" ]; then
+        local base="${SAZO_REPO_ROOT:-}"
+        if [ -z "$base" ]; then
+            # SAZO_REPO_ROOT 미지정 → SAZO_CWD에서 git repo root 추론.
+            base=$(git -C "${SAZO_CWD:-.}" rev-parse --show-toplevel 2>/dev/null || true)
+        fi
+        if [ -z "$base" ]; then
+            base="${SAZO_CWD:-}"  # 마지막 fallback
+        fi
+        if [ -n "$base" ] && [ -d "$base" ]; then
+            local resolved_base
+            resolved_base=$(cd "$base" 2>/dev/null && pwd -P) || resolved_base="$base"
+            case "$p" in
+                "$resolved_base"/*) p="${p#$resolved_base/}" ;;
+                "$base"/*) p="${p#$base/}" ;;
+                *)
+                    # path가 base 밖 → 다른 repo 또는 외부 파일. 보수적으로
+                    # absolute path 그대로 두면 docs/* 매칭 안 됨 → 코드 취급
+                    # (invalidate). 안전 default.
+                    ;;
+            esac
+        fi
+    fi
+    # relative 경로 기준 매칭 — repo root에서 출발하는 docs/* 만 doc-only로 인정.
+    case "$p" in
+        docs/*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# _is_code_file: 코드/설정/lockfile 파일이면 0. _is_doc_only_path 가 먼저 평가됐다고 가정.
+# Lockfile (.lock/.sum) 은 CI 영향 있어 코드 취급. README는 _is_doc_only_path가 잡음.
+_is_code_file() {
+    case "$1" in
+        *.go|*.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs|*.py|*.rs|*.sh) return 0 ;;
+        *.bash|*.zsh|*.rb|*.java|*.kt|*.swift|*.c|*.h|*.cpp|*.hpp) return 0 ;;
+        *.json|*.yml|*.yaml|*.toml|*.ini|*.lock|*.sum) return 0 ;;
+        Dockerfile|*/Dockerfile|Makefile|*/Makefile) return 0 ;;
+        # Codex PR #30 round 14 P2: Go module manifest (`go.mod`) is build
+        # input — dependency edits change resolution and can break build
+        # without touching .go sources. `go.sum` already covered by `*.sum`.
+        # Same intent for other language manifests with similar coverage gap.
+        go.mod|*/go.mod) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# ci_invalidate_if_code_changed <sid> <cwd> <file_path> [source]
+# 호출자: PostToolUse Edit/Write/NotebookEdit, Bash git commit defense, Task preemptive.
+# ci_passed_at != null 일 때만 null 로 설정 + audit log. doc-only 또는 비-code 파일은
+# noop. SAZO_DISABLE_CI_INVALIDATE=1 면 전체 우회.
+ci_invalidate_if_code_changed() {
+    local sid="$1" cwd="$2" path="$3" src="${4:-edit}"
+    [ -z "$path" ] && return 0
+    if _is_doc_only_path "$path"; then
+        return 0
+    fi
+    if ! _is_code_file "$path"; then
+        return 0
+    fi
+    [ "${SAZO_DISABLE_CI_INVALIDATE:-0}" = "1" ] && return 0
+
+    local cur
+    cur=$(state_get "$sid" ".ci_passed_at" "$cwd")
+    [ -z "$cur" ] || [ "$cur" = "null" ] && return 0
+
+    state_set_json "$sid" ".ci_passed_at" "null" "$cwd" || return 1
+    simple_audit "ci_invalidated" "src=$src" "path=$path" "sid=$sid"
+}
+
+# ci_invalidate_unconditional <sid> <cwd> <source>
+# git commit / Task preemptive 처럼 file_path 가 없는 경로용. 호출자가 staged file
+# 또는 subagent type 으로 이미 mutating 판정한 후 호출. ci_passed_at != null 일 때만
+# 처리. SAZO_DISABLE_CI_INVALIDATE 존중.
+ci_invalidate_unconditional() {
+    local sid="$1" cwd="$2" src="$3"
+    [ "${SAZO_DISABLE_CI_INVALIDATE:-0}" = "1" ] && return 0
+    local cur
+    cur=$(state_get "$sid" ".ci_passed_at" "$cwd")
+    [ -z "$cur" ] || [ "$cur" = "null" ] && return 0
+    state_set_json "$sid" ".ci_passed_at" "null" "$cwd" || return 1
+    simple_audit "ci_invalidated" "src=$src" "sid=$sid"
 }

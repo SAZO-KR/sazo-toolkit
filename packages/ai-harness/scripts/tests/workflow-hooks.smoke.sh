@@ -820,6 +820,49 @@ else
     FAIL=$((FAIL + 1))
     echo "  ✗ UserPromptSubmit: run1=$USR1 run2=$USR2 (expected 1)"
 fi
+
+# workflow-state-machine.sh pre matcher must include Task — Plan 04 §6 (B)
+# GH#34692 fallback (Codex PR #30 P1). Task 빠지면 mutating subagent의
+# preemptive ci_passed_at invalidate가 실제 설치 환경에서 절대 발동 안 함.
+WSM_PRE_MATCHER=$(jq -r '
+    (.hooks.PreToolUse // [])
+    | map(select(.hooks // [] | any(.command | endswith("workflow-state-machine.sh pre"))))
+    | .[0].matcher // ""
+' "$TMP_SETTINGS")
+if echo "$WSM_PRE_MATCHER" | grep -qE '(^|\|)Task(\||$)'; then
+    PASS=$((PASS + 1))
+    echo "  ✓ workflow-state-machine.sh pre matcher includes Task ($WSM_PRE_MATCHER)"
+else
+    FAIL=$((FAIL + 1))
+    echo "  ✗ workflow-state-machine.sh pre matcher missing Task: $WSM_PRE_MATCHER"
+fi
+
+# Migration: 기존 설치 환경에서 matcher가 'Write|Edit|NotebookEdit|Bash'로
+# 등록돼 있어도 register_workflow_hooks 재호출 시 'Task|...'로 갱신돼야 한다.
+TMP_MIGRATE=$(mktemp)
+WSM_PRE_CMD="$HARNESS/scripts/hooks/workflow-state-machine.sh pre"
+jq -n --arg cmd "$WSM_PRE_CMD" '{
+    "hooks": {
+        "PreToolUse": [
+            {"matcher": "Write|Edit|NotebookEdit|Bash", "hooks": [{"type": "command", "command": $cmd}]}
+        ]
+    }
+}' > "$TMP_MIGRATE"
+register_workflow_hooks "$HARNESS" "$TMP_MIGRATE" >/dev/null
+MIGRATED_MATCHER=$(jq -r --arg cmd "$WSM_PRE_CMD" '
+    (.hooks.PreToolUse // [])
+    | map(select(.hooks // [] | any(.command == $cmd)))
+    | .[0].matcher // ""
+' "$TMP_MIGRATE")
+if echo "$MIGRATED_MATCHER" | grep -qE '(^|\|)Task(\||$)'; then
+    PASS=$((PASS + 1))
+    echo "  ✓ legacy matcher migrated to include Task ($MIGRATED_MATCHER)"
+else
+    FAIL=$((FAIL + 1))
+    echo "  ✗ legacy matcher not migrated: $MIGRATED_MATCHER"
+fi
+rm -f "$TMP_MIGRATE"
+
 rm -f "$TMP_SETTINGS"
 
 echo ""
