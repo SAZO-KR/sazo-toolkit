@@ -481,6 +481,39 @@ EOF
                             #       unstaged 변경을 commit이 자동 stage. `git diff`
                             #       (working tree, w/o --cached)로 검사.
                             if [ "$has_code_staged" != "1" ]; then
+                                # (a-rm) chained `git rm <path>` — 코드 파일 삭제도
+                                # build break/missing import 가능 → invalidate.
+                                # Codex PR #30 round 5 P2.
+                                local rm_args_block rm_tokens
+                                rm_args_block=$(printf '%s\n' "$cmd" | tr ';|&' '\n' \
+                                    | grep -E '(^|[[:space:]])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*rm\b' \
+                                    | sed -E 's/.*\brm\b[[:space:]]+//')
+                                rm_tokens=$(printf '%s\n' "$rm_args_block" \
+                                    | tr ' ' '\n' \
+                                    | grep -v '^$')
+                                local rt2
+                                while IFS= read -r rt2; do
+                                    [ -z "$rt2" ] && continue
+                                    case "$rt2" in
+                                        -*) : ;;  # 옵션 (-r/-f/--cached 등) skip
+                                        *)
+                                            if _is_doc_only_path "$rt2"; then continue; fi
+                                            if _is_code_file "$rt2"; then
+                                                has_code_staged=1
+                                                break
+                                            fi
+                                            # 디렉토리 rm: 보수적 — repo 디렉토리이면 invalidate.
+                                            if [ -d "$repo_root/$rt2" ]; then
+                                                has_code_staged=1
+                                                break
+                                            fi
+                                            ;;
+                                    esac
+                                done <<EOF_RM
+$rm_tokens
+EOF_RM
+                            fi
+                            if [ "$has_code_staged" != "1" ]; then
                                 # (a) chained `git add <path>` 인자 추출.
                                 # cmd 안 모든 'git add <args> ;|&|&&|||' 까지 캡처. 단순화:
                                 # `git add` 토큰 뒤 단어들을 옵션 제외하고 path로 취급.
@@ -617,8 +650,11 @@ EOF_RT
                 if [ "${SAZO_DISABLE_CI_INVALIDATE:-0}" != "1" ]; then
                     local pre_chain
                     pre_chain=$(printf '%s' "$cmd" | sed -E 's/\bgh[[:space:]]+pr[[:space:]]+create.*$//')
+                    # Codex PR #30 round 5 P2: `git rm <code>` 도 opaque-stage primitive.
+                    # 코드 파일 삭제는 build break 가능 → ci_passed_at 무효화 필요.
+                    # `git -C <path> rm`, `git -c k=v add` 처럼 global option 끼는 케이스도 매치.
                     if echo "$pre_chain" | grep -qE '[[:space:]](&&|\|\||;)[[:space:]]' \
-                        && echo "$pre_chain" | grep -qE '\bgit[[:space:]]+(add\b|commit[[:space:]]+-[aA-Za-z]*[aA])'; then
+                        && echo "$pre_chain" | grep -qE '\bgit[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*(add\b|rm\b|commit[[:space:]]+-[aA-Za-z]*[aA])'; then
                         local cur_cp_chain
                         cur_cp_chain=$(state_get "$SAZO_SESSION_ID" ".ci_passed_at" "$SAZO_CWD")
                         if [ -n "$cur_cp_chain" ] && [ "$cur_cp_chain" != "null" ]; then

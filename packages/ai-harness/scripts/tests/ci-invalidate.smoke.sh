@@ -533,6 +533,45 @@ val=$(get_ci_passed_at "t11o" "$WORK_REPO")
 assert_exit "0" "$?" "11o. ci_passed_at preserved when 'git add .' + working-tree has only docs"
 rm -rf "$WORK_REPO"
 
+# 11p. chained `git rm code.go && git commit && gh pr create` (Codex PR #30 round 5 P2)
+# 코드 파일 삭제는 build break 가능 → invalidate.
+WORK_REPO="/tmp/sazo-ci-invalidate-rm-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    echo "package main" > foo.go
+    git add foo.go
+    git commit -q -m init
+)
+mark_ci_passed "t11p" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11p\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO rm foo.go && git -C $WORK_REPO commit -m rm-code\"}}" >/dev/null
+val=$(get_ci_passed_at "t11p" "$WORK_REPO")
+assert_null "$val" "11p. ci_passed_at invalidated by chained 'git rm <code> && git commit'"
+rm -rf "$WORK_REPO"
+
+# 11q. chained `git rm <code> && git commit && gh pr create` opaque guard
+# (PR create 시점에 ci_passed_at != null 이라도 chain 의 git rm 검출되면 invalidate)
+WORK_REPO="/tmp/sazo-ci-invalidate-rm-prchain-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    echo "package main" > bar.go
+    git add bar.go
+    git commit -q -m init
+)
+mark_ci_passed "t11q" "$WORK_REPO"
+# PR create chain opaque guard 가 git rm 도 trigger 해야.
+run_hook_pre "{\"session_id\":\"t11q\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO rm bar.go && gh pr create --title rm\"}}" >/dev/null 2>&1
+val=$(get_ci_passed_at "t11q" "$WORK_REPO")
+assert_null "$val" "11q. ci_passed_at invalidated by 'git rm ... && gh pr create' opaque-chain guard"
+rm -rf "$WORK_REPO"
+
 # 12. git commit + staged 비어있음 → ci_passed_at 유지
 WORK_REPO="/tmp/sazo-ci-invalidate-commit3-$$"
 rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
