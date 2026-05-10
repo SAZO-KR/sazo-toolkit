@@ -577,6 +577,30 @@ else
 fi
 rm -rf "$CTRL_PARENT"
 
+# 26b. stats: malformed JSON line in audit.log must NOT discard valid entries
+# (Codex PR #29 round 11 P2). 단일 jq fail → `|| entries=""` 이 valid 라인까지
+# 전부 버려서 stage_block count 가 0 으로 보고됨 (no-data 분기까지 빠질 수 있음).
+mkdir -p "$TMP_STATE"
+rm -f "$TMP_STATE"/*.json
+rm -f "$TMP_STATE/audit.log"
+# 1) malformed JSON line (truncated)
+printf '{"ts":"2026-05-09T10:00:00+0900","event":"stage_block","sid":"sX","stage":"plan","reaso\n' \
+    >> "$TMP_STATE/audit.log"
+# 2) valid stage_block lines after the bad one
+printf '{"ts":"2026-05-09T11:00:00+0900","event":"stage_block","sid":"sA","stage":"plan","status":"blocked","by":"hook","reason":"r1"}\n' \
+    >> "$TMP_STATE/audit.log"
+printf '{"ts":"2026-05-09T12:00:00+0900","event":"stage_block","sid":"sB","stage":"ci","status":"blocked","by":"hook","reason":"r2"}\n' \
+    >> "$TMP_STATE/audit.log"
+OUT_26b=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" stats --days 30 2>&1)
+rc_26b=$?
+# 정상이라면 total stage_block events = 2 (malformed 라인은 무시).
+if [ "$rc_26b" = "0" ] && echo "$OUT_26b" | grep -qE "Total stage_block events:[[:space:]]+2"; then
+    pass "26b. stats: malformed audit line skipped, valid entries counted"
+else
+    fail "26b." "rc=$rc_26b out=$OUT_26b"
+fi
+rm -f "$TMP_STATE/audit.log"
+
 # 27. stats batched jq aggregation (Gemini PR #29 round 10 P2)
 # 다중 state file 의 verdict_unset_expected_set_count 합산 — 이전엔 file별 jq 호출.
 # jq 단일 호출로 변경 후에도 합산 결과 동일해야 함.

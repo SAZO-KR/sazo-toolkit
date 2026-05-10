@@ -526,13 +526,21 @@ cmd_stats() {
         || since=$(date -v"-${days}d" +%Y-%m-%dT%H:%M:%S%z 2>/dev/null) \
         || since=""
 
+    # Codex PR #29 round 11 P2: 단일 jq invocation 으로 stream 처리 시 한 줄이라도
+    # malformed JSON 이면 jq rc≠0 → `|| entries=""` 가 valid 라인까지 전부 폐기.
+    # truncated append + 후속 valid JSONL 시나리오에서 stage_block count=0 으로 보고.
+    # 해결: line-by-line 평가 (`-cR fromjson?`) — `?` operator 가 parse 실패 라인을
+    # null 로 만들고 `select(. != null)` 로 drop. jq 단일 호출 유지하면서 robust.
     local entries=""
     if [ -f "$AUDIT_LOG" ]; then
         if [ -n "$since" ]; then
             entries=$(grep -h '^{' "$AUDIT_LOG" 2>/dev/null \
-                | jq -c "select(.ts >= \"$since\")" 2>/dev/null) || entries=""
+                | jq -cR --arg since "$since" \
+                    'fromjson? | select(. != null and (.ts // "") >= $since)' \
+                    2>/dev/null) || entries=""
         else
-            entries=$(grep -h '^{' "$AUDIT_LOG" 2>/dev/null) || entries=""
+            entries=$(grep -h '^{' "$AUDIT_LOG" 2>/dev/null \
+                | jq -cR 'fromjson? | select(. != null)' 2>/dev/null) || entries=""
         fi
     fi
 
