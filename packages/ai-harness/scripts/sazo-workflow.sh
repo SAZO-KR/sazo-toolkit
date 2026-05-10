@@ -83,7 +83,11 @@ list_active_sessions() {
     local files
     files=$(find "$STATE_DIR" -maxdepth 1 -name '*--*.json' -type f 2>/dev/null) || return 0
     [ -z "$files" ] && return 0
-    local rows=""
+    # Codex PR #29 round 8 P2: STATE_DIR 또는 user home 에 space 포함 시
+    # `mtime path` row 가 awk space-split 으로 잘려 sid/path 가 깨짐.
+    # delimiter 를 TAB 으로 통일 (path 에 등장 거의 없는 byte) + IFS 명시 분리.
+    local rows="" tab
+    tab=$(printf '\t')
     while IFS= read -r f; do
         [ -z "$f" ] && continue
         local mt
@@ -91,15 +95,15 @@ list_active_sessions() {
         [ -z "$mt" ] && continue
         [ "$mt" -ge "$since_ts" ] || continue
         rows="$rows
-$mt $f"
+$mt$tab$f"
     done <<EOF
 $files
 EOF
     printf '%s\n' "$rows" \
         | sed '/^$/d' \
         | sort -rn -k1,1 \
-        | awk '{print $2}' \
-        | while IFS= read -r path; do
+        | while IFS=$'\t' read -r _mt path; do
+            [ -z "$path" ] && continue
             local base="${path##*/}"
             printf '%s\n' "${base%%--*}"
         done \
@@ -149,7 +153,9 @@ list_active_sessions_with_days() {
     local files
     files=$(find "$STATE_DIR" -maxdepth 1 -name '*--*.json' -type f 2>/dev/null) || return 0
     [ -z "$files" ] && return 0
-    local rows=""
+    # Codex PR #29 round 8 P2: TAB delimiter (path 에 space 포함 시 안전).
+    local rows="" tab
+    tab=$(printf '\t')
     while IFS= read -r f; do
         [ -z "$f" ] && continue
         local mt
@@ -157,7 +163,7 @@ list_active_sessions_with_days() {
         [ -z "$mt" ] && continue
         [ "$mt" -ge "$since_ts" ] || continue
         rows="$rows
-$mt $f"
+$mt$tab$f"
     done <<EOF
 $files
 EOF
@@ -469,8 +475,9 @@ cmd_sessions() {
     if [ -z "$rows" ]; then
         return 2
     fi
+    # Codex PR #29 round 8 P2: TAB delimiter (path 안 space 보호).
     if [ "$JSON_MODE" = "1" ]; then
-        printf '%s\n' "$rows" | awk '{
+        printf '%s\n' "$rows" | awk -F'\t' '{
             mt=$1; path=$2;
             n=split(path,parts,"/"); base=parts[n];
             sub(/\.json$/, "", base);
@@ -481,7 +488,7 @@ cmd_sessions() {
         }'
         return 0
     fi
-    printf '%s\n' "$rows" | awk '{
+    printf '%s\n' "$rows" | awk -F'\t' '{
         mt=$1; path=$2;
         n=split(path,parts,"/"); base=parts[n];
         sub(/\.json$/, "", base);

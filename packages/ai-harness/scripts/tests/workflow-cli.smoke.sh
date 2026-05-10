@@ -497,6 +497,32 @@ else
     fail "23b." "out=$OUT_23b"
 fi
 
+# 24. STATE_DIR path containing space (Codex PR #29 round 8 P2)
+# `mtime path` row 가 awk space-split 으로 잘리면 sid/path 가 깨짐. tab delimiter 로 해결.
+SPACED_PARENT=$(mktemp -d)
+SPACED_DIR="$SPACED_PARENT/dir with space"
+mkdir -p "$SPACED_DIR"
+printf '{"stage":"plan","started_at":"2026-05-09T10:00:00+0900","plan_approved_at":null,"ci_passed_at":null,"history":[]}\n' \
+    > "$SPACED_DIR/spaceSession--abchash.json"
+OUT_24=$(SAZO_STATE_DIR="$SPACED_DIR" "$CLI" sessions --days 7 2>&1)
+rc_24=$?
+if [ "$rc_24" = "0" ] \
+    && echo "$OUT_24" | grep -q "sid=spaceSession" \
+    && echo "$OUT_24" | grep -q "dir with space"; then
+    pass "24. STATE_DIR with spaces — sessions parses sid/path correctly (TAB delimiter)"
+else
+    fail "24." "rc=$rc_24 out=$OUT_24"
+fi
+
+OUT_24b=$(SAZO_STATE_DIR="$SPACED_DIR" "$CLI" status 2>&1)
+rc_24b=$?
+if [ "$rc_24b" = "0" ] && echo "$OUT_24b" | grep -q "Session: spaceSession"; then
+    pass "24b. STATE_DIR with spaces — implicit status resolves spaceSession"
+else
+    fail "24b." "rc=$rc_24b out=$OUT_24b"
+fi
+rm -rf "$SPACED_PARENT"
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"
