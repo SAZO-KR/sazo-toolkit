@@ -484,21 +484,86 @@ EOF
                                 # (a) chained `git add <path>` 인자 추출.
                                 # cmd 안 모든 'git add <args> ;|&|&&|||' 까지 캡처. 단순화:
                                 # `git add` 토큰 뒤 단어들을 옵션 제외하고 path로 취급.
-                                local add_paths
-                                add_paths=$(printf '%s\n' "$cmd" | tr ';|&' '\n' \
+                                local add_args_block
+                                add_args_block=$(printf '%s\n' "$cmd" | tr ';|&' '\n' \
                                     | grep -E '(^|[[:space:]])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*add\b' \
-                                    | sed -E 's/.*\badd\b[[:space:]]+//' \
+                                    | sed -E 's/.*\badd\b[[:space:]]+//')
+                                local add_tokens
+                                add_tokens=$(printf '%s\n' "$add_args_block" \
                                     | tr ' ' '\n' \
-                                    | grep -vE '^-' \
                                     | grep -v '^$')
-                                local ap
-                                while IFS= read -r ap; do
-                                    [ -z "$ap" ] && continue
-                                    if _is_doc_only_path "$ap"; then continue; fi
-                                    if _is_code_file "$ap"; then has_code_staged=1; break; fi
-                                done <<EOF_AP
-$add_paths
-EOF_AP
+                                # Codex PR #30 round 4 P2: ambiguous pathspec (`.`/`-A`/
+                                # `--all`/`-u`/디렉토리/glob) 은 단일 path로 매핑되지
+                                # 않아 _is_code_file 만으로는 우회됨. ambiguous 검출 시
+                                # 동일 chain 의 `>`/`>>`/`tee` redirect target 또는
+                                # working-tree untracked file 중 코드 파일이 있으면
+                                # invalidate (보수적이지만 stale CI 차단 우선).
+                                local ambiguous_add=0
+                                local at
+                                while IFS= read -r at; do
+                                    [ -z "$at" ] && continue
+                                    case "$at" in
+                                        # path-modifying flags
+                                        -A|--all|-u|--update|.) ambiguous_add=1 ;;
+                                        # trailing slash → directory
+                                        */) ambiguous_add=1 ;;
+                                        # glob meta → shell expand → uncertain
+                                        *\**|*\?*|*\[*) ambiguous_add=1 ;;
+                                        -*) : ;;  # 다른 -옵션은 path 아님
+                                        *)
+                                            # explicit path 케이스: doc/code 분류 가능.
+                                            if _is_doc_only_path "$at"; then continue; fi
+                                            if _is_code_file "$at"; then
+                                                has_code_staged=1
+                                                break
+                                            fi
+                                            # explicit path 인데 _is_code_file 도 false면
+                                            # 디렉토리일 수 있음 (확장자 없음). 보수적
+                                            # 처리 — repo 안 디렉토리로 존재하면 ambiguous.
+                                            if [ -d "$repo_root/$at" ]; then
+                                                ambiguous_add=1
+                                            fi
+                                            ;;
+                                    esac
+                                done <<EOF_AT
+$add_tokens
+EOF_AT
+
+                                if [ "$has_code_staged" != "1" ] && [ "$ambiguous_add" = "1" ]; then
+                                    # (a-i) chain 안 redirect/tee target 검사.
+                                    # `>file.go` / `> file.go` / `>>file.go` / `tee file.go` / `tee -a file.go`
+                                    local redir_targets
+                                    redir_targets=$(printf '%s' "$cmd" \
+                                        | grep -oE '(>>?[[:space:]]*[^[:space:]&|;<>]+|\btee([[:space:]]+-[a-zA-Z]+)*[[:space:]]+[^[:space:]&|;<>]+)' \
+                                        | sed -E 's/^>>?[[:space:]]*//; s/^tee([[:space:]]+-[a-zA-Z]+)*[[:space:]]+//')
+                                    local rt
+                                    while IFS= read -r rt; do
+                                        [ -z "$rt" ] && continue
+                                        # strip basename only path 안 살피고 _is_*에 그대로.
+                                        if _is_doc_only_path "$rt"; then continue; fi
+                                        if _is_code_file "$rt"; then has_code_staged=1; break; fi
+                                    done <<EOF_RT
+$redir_targets
+EOF_RT
+                                fi
+
+                                if [ "$has_code_staged" != "1" ] && [ "$ambiguous_add" = "1" ]; then
+                                    # (a-ii) repo 안 untracked/modified working-tree 코드 파일.
+                                    # ambiguous pathspec 가 어떤 코드 파일이든 잡아 stage 할 수
+                                    # 있으므로 working tree 의 변경/untracked 코드 한 건이라도
+                                    # 있으면 invalidate. CI 무효화 보수성 우선.
+                                    while IFS= read -r line; do
+                                        [ -z "$line" ] && continue
+                                        # porcelain: `XY path` (3 chars + path); rename은 `R  old -> new`
+                                        local p="${line:3}"
+                                        # arrow 처리 (rename)
+                                        case "$p" in
+                                            *' -> '*) p="${p##* -> }" ;;
+                                        esac
+                                        if _is_doc_only_path "$p"; then continue; fi
+                                        if _is_code_file "$p"; then has_code_staged=1; break; fi
+                                    done < <(git -C "$repo_root" status --porcelain --untracked-files=all 2>/dev/null)
+                                fi
                             fi
                             if [ "$has_code_staged" != "1" ]; then
                                 # (b) `git commit -a` / `-am` / `--all` 감지.

@@ -440,6 +440,71 @@ val=$(get_ci_passed_at "t11k" "$WORK_REPO")
 assert_exit "0" "$?" "11k. ci_passed_at preserved when 'git commit -a' touches only docs"
 rm -rf "$WORK_REPO"
 
+# 11l. chained `git add .` + redirect creates code file (Codex PR #30 round 4 P2)
+# `echo 'package main' > foo.go && git add . && git commit -m x` 형태.
+# add 인자가 `.` 라 단일 파일로 매핑 안 됨 → ambiguous → redirect target(.go) 검사로 감지.
+WORK_REPO="/tmp/sazo-ci-invalidate-add-dot-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(cd "$WORK_REPO" && git init -q -b main && git config user.email smoke@test && git config user.name smoke && git commit -q --allow-empty -m init)
+mark_ci_passed "t11l" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11l\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo 'package main' > $WORK_REPO/foo.go && git -C $WORK_REPO add . && git -C $WORK_REPO commit -m chained\"}}" >/dev/null
+val=$(get_ci_passed_at "t11l" "$WORK_REPO")
+assert_null "$val" "11l. ci_passed_at invalidated by chained 'git add . && git commit' (redirect-target detection)"
+rm -rf "$WORK_REPO"
+
+# 11m. `git add -A` + working-tree untracked code → invalidate
+# echo 가 chain 밖, 이전에 file 만들어진 후 add -A & commit. ambiguous → working-tree untracked 검사.
+WORK_REPO="/tmp/sazo-ci-invalidate-add-A-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    git commit -q --allow-empty -m init
+    echo "package main" > foo.go  # untracked
+)
+mark_ci_passed "t11m" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11m\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO add -A && git -C $WORK_REPO commit -m all\"}}" >/dev/null
+val=$(get_ci_passed_at "t11m" "$WORK_REPO")
+assert_null "$val" "11m. ci_passed_at invalidated by 'git add -A' + working-tree untracked code"
+rm -rf "$WORK_REPO"
+
+# 11n. `git add src/` (디렉토리) + working-tree untracked code → invalidate
+WORK_REPO="/tmp/sazo-ci-invalidate-add-dir-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO/src"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    git commit -q --allow-empty -m init
+    echo "package main" > src/foo.go
+)
+mark_ci_passed "t11n" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11n\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO add src/ && git -C $WORK_REPO commit -m dir\"}}" >/dev/null
+val=$(get_ci_passed_at "t11n" "$WORK_REPO")
+assert_null "$val" "11n. ci_passed_at invalidated by 'git add src/' (directory pathspec) + untracked code"
+rm -rf "$WORK_REPO"
+
+# 11o. `git add .` + working-tree only docs → ci_passed_at 유지 (false positive 방지)
+WORK_REPO="/tmp/sazo-ci-invalidate-add-dot-docs-$$"
+rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    git commit -q --allow-empty -m init
+    echo "# title" > README.md  # untracked docs
+)
+mark_ci_passed "t11o" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11o\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $WORK_REPO add . && git -C $WORK_REPO commit -m docs\"}}" >/dev/null
+val=$(get_ci_passed_at "t11o" "$WORK_REPO")
+[ -n "$val" ] && [ "$val" != "null" ]
+assert_exit "0" "$?" "11o. ci_passed_at preserved when 'git add .' + working-tree has only docs"
+rm -rf "$WORK_REPO"
+
 # 12. git commit + staged 비어있음 → ci_passed_at 유지
 WORK_REPO="/tmp/sazo-ci-invalidate-commit3-$$"
 rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
