@@ -143,9 +143,62 @@ sync_awake() {
     mkdir -p "$HOME/.local/bin" 2>/dev/null || true
     # symlink target이 이미 정확하면 ln 호출 자체 skip — noise 감소.
     if [ -L "$awake_symlink" ] && [ "$(readlink "$awake_symlink")" = "$awake_script" ]; then
+        sync_awake_cleanup_legacy
         return 0
     fi
     ln -sfn "$awake_script" "$awake_symlink" 2>>"$LOG_FILE" || true
+    sync_awake_cleanup_legacy
+}
+
+# 구 sleep-guard 잔재 자동 정리 — 다른 팀원이 새 버전을 auto-update로 받았을 때
+# 이전 launchd plist + hook symlink + 마커가 silent하게 남아 있는 문제를 self-heal.
+# - sudoers 파일은 sudo 필요 → 건드리지 않음 (사용자가 수동 처리)
+# - settings.json hook은 sudo 불필요 → jq로 정리
+# 멱등. 이미 정리된 환경에서는 비용 거의 0 (파일 존재 체크만).
+sync_awake_cleanup_legacy() {
+    local plist="$HOME/Library/LaunchAgents/shop.sazo.claude-sleep-guard.plist"
+    if [ -f "$plist" ]; then
+        launchctl unload "$plist" >/dev/null 2>&1 || true
+        rm -f "$plist" 2>/dev/null || true
+    fi
+    rm -f "$HOME/.claude/hooks/sazo-caffeinate-session.sh" 2>/dev/null || true
+    rm -f "$HOME/.claude/hooks/sazo-sleep-watchdog.sh" 2>/dev/null || true
+    local marker
+    for marker in \
+        "$HOME/.config/sazo-ai-harness/.sleep-guard-init-done" \
+        "$HOME/.config/sazo-ai-harness/.sleep-guard-optout" \
+        "$HOME/.config/sazo-ai-harness/.sleep-guard-notify-throttle" \
+        "$HOME/.config/sazo-ai-harness/.sleep-guard-optin-notify-throttle"
+    do
+        [ -e "$marker" ] && rm -f "$marker" 2>/dev/null
+    done
+    # /tmp 디렉토리는 본인 소유만 정리 (다른 사용자 디렉토리 권한 충돌 방지).
+    rm -rf "/tmp/claude-awake-${USER:-$(id -un)}" 2>/dev/null || true
+    # settings.json hook 정리 — jq 있을 때만, 본인 사용자 hook만.
+    if command -v jq >/dev/null 2>&1; then
+        local settings="$HOME/.claude/settings.json"
+        if [ -f "$settings" ] && grep -q "sazo-caffeinate-session.sh" "$settings" 2>/dev/null; then
+            local tmp
+            tmp=$(mktemp)
+            if jq '
+                .hooks //= {}
+                | .hooks.UserPromptSubmit = ((.hooks.UserPromptSubmit // []) | map(
+                    .hooks = ((.hooks // []) | map(select(.command | test("sazo-caffeinate-session.sh") | not)))
+                  ) | map(select((.hooks // []) | length > 0)))
+                | .hooks.PostToolUse = ((.hooks.PostToolUse // []) | map(
+                    .hooks = ((.hooks // []) | map(select(.command | test("sazo-caffeinate-session.sh") | not)))
+                  ) | map(select((.hooks // []) | length > 0)))
+                | .hooks.Stop = ((.hooks.Stop // []) | map(
+                    .hooks = ((.hooks // []) | map(select(.command | test("sazo-caffeinate-session.sh") | not)))
+                  ) | map(select((.hooks // []) | length > 0)))
+            ' "$settings" > "$tmp" 2>/dev/null; then
+                mv "$tmp" "$settings"
+                log "Cleaned up legacy sleep-guard hooks from settings.json"
+            else
+                rm -f "$tmp"
+            fi
+        fi
+    fi
 }
 
 # 테스트 전용: `AUTOUPDATE_LOAD_ONLY=1 source auto-update.sh` 로 호출하면 함수
