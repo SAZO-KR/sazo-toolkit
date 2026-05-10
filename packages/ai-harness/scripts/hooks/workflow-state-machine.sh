@@ -196,11 +196,21 @@ handle_post() {
                 cur_cp_post=$(state_get "$SAZO_SESSION_ID" ".ci_passed_at" "$SAZO_CWD")
                 if [ -n "$cur_cp_post" ] && [ "$cur_cp_post" != "null" ]; then
                     # Resolve git target same way as pre-hook (-C respect).
+                    # Codex PR #30 round 7 P2: bind `-C` extraction to the commit
+                    # invocation segment (chain 안 다른 git 호출의 `-C` 가 잘못
+                    # 매치되지 않도록).
                     local git_target_post="$SAZO_CWD"
-                    local c_path_post
-                    c_path_post=$(printf '%s' "$cmd" \
-                        | sed -E -n 's/.*[[:space:]]-C[[:space:]]+([^[:space:]]+).*/\1/p' \
+                    local commit_segment_post c_path_post
+                    commit_segment_post=$(printf '%s\n' "$cmd" | tr ';|&' '\n' \
+                        | grep -E '(^|[[:space:]])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*commit\b' \
                         | head -1)
+                    if [ -n "$commit_segment_post" ]; then
+                        c_path_post=$(printf '%s' "$commit_segment_post" \
+                            | sed -E -n 's/.*[[:space:]]-C[[:space:]]+([^[:space:]]+).*/\1/p' \
+                            | head -1)
+                    else
+                        c_path_post=""
+                    fi
                     if [ -n "$c_path_post" ]; then
                         case "$c_path_post" in
                             /*) git_target_post="$c_path_post" ;;
@@ -423,11 +433,26 @@ EOF
                         # not SAZO_CWD. Extract `-C <path>` from cmd and use that as
                         # the diff target. Without this, staged code in the actual
                         # target repo is invisible to our defense layer.
+                        #
+                        # Codex PR #30 round 7 P2: `-C` extraction must be bound to
+                        # the `git commit` invocation. cmd 가 `git commit -m x &&
+                        # git -C /tmp/other status` 같이 다른 git 호출을 포함하면
+                        # greedy 추출이 잘못된 `-C` 를 잡아 staged diff 가 엉뚱한
+                        # repo 에서 조회되어 invalidate 가 누락됨. → cmd 를 chain
+                        # 단위로 분리한 뒤 `git commit` 토큰을 포함하는 segment
+                        # 안에서만 `-C` 를 찾는다.
                         local git_target="$SAZO_CWD"
-                        local c_path
-                        c_path=$(printf '%s' "$cmd" \
-                            | sed -E -n 's/.*[[:space:]]-C[[:space:]]+([^[:space:]]+).*/\1/p' \
+                        local commit_segment c_path
+                        commit_segment=$(printf '%s\n' "$cmd" | tr ';|&' '\n' \
+                            | grep -E '(^|[[:space:]])git[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*commit\b' \
                             | head -1)
+                        if [ -n "$commit_segment" ]; then
+                            c_path=$(printf '%s' "$commit_segment" \
+                                | sed -E -n 's/.*[[:space:]]-C[[:space:]]+([^[:space:]]+).*/\1/p' \
+                                | head -1)
+                        else
+                            c_path=""
+                        fi
                         if [ -n "$c_path" ]; then
                             # Resolve relative -C path against SAZO_CWD
                             case "$c_path" in

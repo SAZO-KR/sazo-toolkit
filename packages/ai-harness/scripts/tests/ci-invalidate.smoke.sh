@@ -591,6 +591,28 @@ val=$(get_ci_passed_at "t11r" "$WORK_REPO")
 assert_null "$val" "11r. ci_passed_at invalidated by 'git mv ... && gh pr create' opaque-chain guard"
 rm -rf "$WORK_REPO"
 
+# 11s. -C extraction bound to commit invocation (Codex PR #30 round 7 P2)
+# `git commit -m x && git -C /tmp/other status` — greedy 추출 시 잘못된 `-C` 잡아
+# /tmp/other 의 staged diff 조회 → invalidate 누락. fix: commit 토큰 segment 안의 -C 만 사용.
+WORK_REPO="/tmp/sazo-ci-invalidate-greedyC-$$"
+OTHER_REPO="/tmp/sazo-ci-invalidate-greedyC-other-$$"
+rm -rf "$WORK_REPO" "$OTHER_REPO"; mkdir -p "$WORK_REPO" "$OTHER_REPO"
+(
+    cd "$WORK_REPO"
+    git init -q -b main
+    git config user.email smoke@test
+    git config user.name smoke
+    git commit -q --allow-empty -m init
+    echo "package main" > foo.go
+    git add foo.go
+)
+(cd "$OTHER_REPO" && git init -q -b main && git config user.email smoke@test && git config user.name smoke && git commit -q --allow-empty -m init)
+mark_ci_passed "t11s" "$WORK_REPO"
+run_hook_pre "{\"session_id\":\"t11s\",\"cwd\":\"$WORK_REPO\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m x && git -C $OTHER_REPO status\"}}" >/dev/null
+val=$(get_ci_passed_at "t11s" "$WORK_REPO")
+assert_null "$val" "11s. -C extraction bound to commit segment (chain 의 다른 -C 우회 차단)"
+rm -rf "$WORK_REPO" "$OTHER_REPO"
+
 # 12. git commit + staged 비어있음 → ci_passed_at 유지
 WORK_REPO="/tmp/sazo-ci-invalidate-commit3-$$"
 rm -rf "$WORK_REPO"; mkdir -p "$WORK_REPO"
