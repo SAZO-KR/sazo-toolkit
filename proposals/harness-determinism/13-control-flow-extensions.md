@@ -548,20 +548,20 @@ HOME="$TMP_HOME" hook_healthy  # → false 기대
 ## Acceptance criteria (v2)
 
 - [x] **Stage S0 spike 결과 PASS** — PR #32 머지 완료 (payload 4-field CONFIRMED, trigger 제약 6 케이스 documented)
-- [ ] `mark_approval_complete` + atomic helper 구현 (lib/session-state.sh)
-- [ ] `stage_is_passed` approval 분기에 `or .by == "bypass"` 추가 (정확 jq 표시)
-- [ ] `slash-commands.sh` is_known_slash + `trim_leading` (sed 채택)
-- [ ] `post-session-end-metrics.sh` 신규 작성 + `hook_healthy` 7-check (fixture mock 포함, OR 분기 3 sub-case)
-- [ ] Portable timeout wrapper (timeout → gtimeout → perl alarm → no-timeout+warn) 동작
-- [ ] `_append_metrics_inner`, `hook_healthy` lib/session-state.sh에 정의 + hook script가 절대 경로 source
-- [ ] Record schema `source` field 추가 (`"session_end"` 값 default, Stop fallback deferred PR 대비 호환성)
-- [ ] `post-task-output-audit.sh` + rules lib (warn-only)
-- [ ] `mark_skip_with_check` wrapper — `pre-worktree-gate.sh:110` 한 곳 교체 + CI lint 추가
-- [ ] Approval bypass env 동작 (T1-T4 regression)
-- [ ] ADR D2 명시 (hook 본체 shebang `#!/usr/bin/env bash` 준수)
-- [ ] **신규 smoke test 6개 모두 GREEN**: `approval-immediate`, `slash-detect`, `session-end-metrics`, `task-output-audit`, `auto-skip-block`, `approval-bypass`
-- [ ] **현 CLAUDE.md ai-harness baseline + 신규 6 smoke 모두 GREEN** (baseline test 개수는 root CLAUDE.md ai-harness 행 기준 — revision 시점에 hardcode 표기 회피)
-- [ ] CLAUDE.md MANAGED BLOCK env 매트릭스 추가 (`SAZO_DISABLE_SESSION_END_HOOK`, `SAZO_ENABLE_STOP_FALLBACK` 등)
-- [ ] **root CLAUDE.md CI 커맨드 갱신** — ai-harness 행에 신규 6 smoke test 추가
-- [ ] `docs/workflow-hooks.md` 에 SessionEnd known limitations 섹션 추가 (/exit/clear/Ctrl+C 미지원, async 5s 제한, --continue stale)
-- [ ] **Stop hook fallback 명세** 본문 포함 (record schema 호환성: `source` field + `transcript_path` nullable). 실제 hook script 구현은 deferred PR.
+- [x] `mark_approval_complete` + atomic helper 구현 (lib/session-state.sh)
+- [x] `stage_is_passed` approval 분기에 `or .by == "bypass"` 추가 (정확 jq 표시)
+- [x] `slash-commands.sh` is_known_slash + `trim_leading` (sed 채택)
+- [x] `post-session-end-metrics.sh` 신규 작성 + `hook_healthy` 7-check (fixture mock 포함, OR 분기 3 sub-case)
+- [x] Portable timeout wrapper (timeout → gtimeout → perl alarm → no-timeout+warn) 동작
+- [x] `_append_metrics_inner`, `hook_healthy` lib/session-state.sh에 정의 + hook script가 절대 경로 source
+- [x] Record schema `source` field 추가 (`"session_end"` 값 default, Stop fallback deferred PR 대비 호환성)
+- [x] `post-task-output-audit.sh` + rules lib (warn-only)
+- [x] `mark_skip_with_check` wrapper — `pre-worktree-gate.sh:110` 한 곳 교체 + CI lint 추가
+- [x] Approval bypass env 동작 (T1-T4 regression)
+- [x] ADR D2 명시 (hook 본체 shebang `#!/usr/bin/env bash` 준수) — `packages/ai-harness/docs/proposals/control-flow-determinism.md`
+- [x] **신규 smoke test 6개 모두 GREEN**: `approval-immediate`, `slash-detect`, `session-end-metrics`, `task-output-audit`, `auto-skip-block`, `approval-bypass`
+- [x] **현 CLAUDE.md ai-harness baseline + 신규 6 smoke 모두 GREEN** (baseline test 개수는 root CLAUDE.md ai-harness 행 기준 — revision 시점에 hardcode 표기 회피)
+- [x] CLAUDE.md MANAGED BLOCK env 매트릭스 추가 (`SAZO_DISABLE_SESSION_END_HOOK`, `SAZO_ENABLE_STOP_FALLBACK` 등) — `register-workflow-hooks.sh`가 env 매트릭스 적용
+- [x] **root CLAUDE.md CI 커맨드 갱신** — ai-harness 행에 신규 6 smoke test 추가
+- [x] `docs/workflow-hooks.md` 에 SessionEnd known limitations 섹션 추가 (/exit/clear/Ctrl+C 미지원, async 5s 제한, --continue stale)
+- [x] **Stop hook fallback 명세** 본문 포함 (record schema 호환성: `source` field + `transcript_path` nullable). 실제 hook script 구현은 deferred PR.
