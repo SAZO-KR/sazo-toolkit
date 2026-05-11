@@ -6,6 +6,15 @@
 **출처**: `/Users/hakun.lee/work/integrator/docs/harness-determinism-plan-2026-05-10.md` v6
 **결정성 이동**: 🟡 → 🟢 (autonomous skip 차단, /approved 즉시 처리, audit warn-only)
 
+> ⚠️ **POST-SPIKE NOTICE (2026-05-11)** — Stage S0 spike 결과 (`proposals/harness-determinism/spike-stop-hook.md`):
+> - **Hook pivot**: Stop hook → **SessionEnd hook** (Stop은 매 turn fire, SessionEnd는 세션 종료 1회 fire 라 메트릭 용도에 적합)
+> - **파일명 변경**: `post-stop-determinism-log.sh` → **`post-session-end-metrics.sh`**
+> - **Trigger 제약**: `/exit` 명령은 SessionEnd fire 안 함 (GH#17885, #35892). **Ctrl+D 종료만 신뢰 가능**.
+> - **Async 한계**: hook이 5s 이내 종료 보장 필요 (GH#41577). `timeout 5s` wrapper 권장.
+> - **Fallback**: SessionEnd 실패 시 Stop hook + `session_id` dedup (record 형식 변경 필요 — Stage A revision에서 명세)
+>
+> 본문의 Stage A 섹션 + acceptance criteria (line 374 이후)는 **아직 위 결정으로 동기화되지 않음**. 후속 revision PR에서 처리 예정. 구현 진입 전 spike doc 우선 참조.
+
 ## 목표
 
 Integrator 프로젝트팀이 6회 plan 회전을 거쳐 도출한 control flow 강화 항목 중 **shared harness 영역**에 속하는 것을 통합. PR #27이 처리한 영역(schema/nonce/cycle)과 겹치지 않는 신규 stage들.
