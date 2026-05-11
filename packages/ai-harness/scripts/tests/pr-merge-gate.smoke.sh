@@ -114,6 +114,35 @@ assert_exit 0 "$rc" "M4: SAZO_ALLOW_MERGE_BYPASS=1 + review not passed → pass 
     fi
 ) && PASS=$((PASS+1)) || FAIL=$((FAIL+1))
 
+# ─── M4b: broad ON + verdict_cycle_init + BLOCK verdict + SAZO_ALLOW_MERGE_BYPASS=1 → pass ───
+# Critical production scenario: reviewer가 BLOCK verdict 반환 후 user가 bypass.
+# stage_is_passed review의 user-skip 분기가 by="bypass" 허용해야 통과 (vacuous-truth 의존 X).
+echo "=== M4b: BLOCK verdict + SAZO_ALLOW_MERGE_BYPASS=1 ==="
+rm -rf "$SAZO_STATE_DIR"
+sid="m4b"
+(
+    source "$LIB"
+    state_init "$sid" "$TMP_REPO" "unknown"
+    # verdict_cycle_init으로 expected reviewer 등록 — vacuous-truth path 차단
+    verdict_cycle_init "$sid" "$TMP_REPO" "review" '["code-reviewer","architect-advisor"]'
+    nonce_cr=$(verdict_nonce_issue "$sid" "$TMP_REPO" "code-reviewer" "review")
+    # BLOCK verdict 기록 — bypass가 이걸 override해야 함
+    verdict_consume_and_record "$nonce_cr" "$sid" "$TMP_REPO" "code-reviewer" "review" "BLOCK" "1"
+) >/dev/null 2>&1
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 SAZO_ALLOW_MERGE_BYPASS=1 run_hook "pre" "$(mk_merge_payload "$sid")")
+assert_exit 0 "$rc" "M4b: BLOCK verdict + SAZO_ALLOW_MERGE_BYPASS=1 → pass (bypass overrides BLOCK)"
+# idempotency under BLOCK: stage_is_passed review must be true via user-skip+bypass 분기
+(
+    source "$LIB"
+    if SAZO_CWD="$TMP_REPO" stage_is_passed "$sid" "review"; then
+        echo "  ✓ M4b-idempotent: stage_is_passed review true even with BLOCK verdict (bypass authoritative)"
+        exit 0
+    else
+        echo "  ✗ M4b-idempotent: stage_is_passed review false — bypass not overriding BLOCK"
+        exit 1
+    fi
+) && PASS=$((PASS+1)) || FAIL=$((FAIL+1))
+
 # ─── M5: broad ON + review skipped (legacy path) → pass ───
 echo "=== M5: broad ON + review skipped via legacy stage_mark ==="
 rm -rf "$SAZO_STATE_DIR"

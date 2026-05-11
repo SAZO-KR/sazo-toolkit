@@ -424,7 +424,7 @@ stage_is_passed() {
                 (.history | any(
                     .stage == $s
                     and .status == "skipped"
-                    and .by == "user"
+                    and (.by == "user" or .by == "bypass")
                     and (
                         ($cycle_id == "" and ($cycle_at == null or .ts > $cycle_at))
                         or
