@@ -1216,10 +1216,12 @@ EOF_PST
             # shell command boundary 강제 — segment 분리 후 각 segment의 첫 토큰이
             # `gh` 일 때만 매칭. compound 명령 (`a && gh pr merge`) 도 지원.
             gh_merge_invoked=0
-            # Codex PR#39 round 6: gh CLI inherited options (`-R/--repo` 등) 가
-            # `pr`과 `merge` 사이 올 수 있음 (e.g., `gh pr -R owner/repo merge --auto`).
-            # `gh[[:space:]]+pr[[:space:]]+(<inherited>[[:space:]]+)*merge\b` — 중간 옵션 허용.
-            if echo "$cmd" | grep -qE '\bgh[[:space:]]+pr[[:space:]]+([^[:space:]]+[[:space:]]+)*merge\b'; then
+            # Codex PR#39 round 6/7: gh CLI inherited options (`-R/--repo` 등) 가
+            # `pr`과 `merge` 사이 올 수 있음. 단 `gh pr view merge` 같이 branch name이
+            # `merge` 인 read-only command false-positive 방지 — 중간에 dash-prefix
+            # option(+optional value) 만 허용. positional sub-command(view/checkout 등) 거부.
+            # 패턴: `-flag` 또는 `-flag value` 또는 `--flag` 또는 `--flag value` 또는 `--flag=value`.
+            if echo "$cmd" | grep -qE '\bgh[[:space:]]+pr[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-][^[:space:]]*)?[[:space:]]+)*merge\b'; then
                 # Codex PR#39 round 4: pipe(`|`) 도 command separator로 추가.
                 # `yes | gh pr merge` 같은 pipeline. order 중요 — `\|\|` 먼저 매칭 후 single `\|`.
                 # awk regex alternation은 leftmost match라 `\|\|`를 single `\|`보다 먼저 배치.
@@ -1242,8 +1244,8 @@ EOF_PST
                     if echo "$seg" | grep -qE '^command[[:space:]]+'; then
                         seg=$(printf '%s' "$seg" | sed -E 's/^command[[:space:]]+(-[pVv]+[[:space:]]+)?//')
                     fi
-                    # 첫 토큰이 gh 이고 pr ... merge 패턴 (inherited flags 중간 허용)
-                    if echo "$seg" | grep -qE '^gh[[:space:]]+pr[[:space:]]+([^[:space:]]+[[:space:]]+)*merge\b'; then
+                    # 첫 토큰이 gh 이고 pr (dash-prefix opt + opt-value)* merge 패턴
+                    if echo "$seg" | grep -qE '^gh[[:space:]]+pr[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-][^[:space:]]*)?[[:space:]]+)*merge\b'; then
                         gh_merge_invoked=1
                         break
                     fi

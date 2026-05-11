@@ -236,6 +236,15 @@ rm -rf "$SAZO_STATE_DIR"
 rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m20" 'gh pr --repo owner/repo merge')")
 assert_exit 2 "$rc" "M20: 'gh pr --repo owner/repo merge' → block (inherited --repo flag)"
 
+# Codex PR#39 round 7: branch name = "merge" false-positive 방지
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m21" 'gh pr view merge')")
+assert_exit 0 "$rc" "M21: 'gh pr view merge' → pass (view is sub-command, merge is branch name)"
+
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m22" 'gh pr checkout merge')")
+assert_exit 0 "$rc" "M22: 'gh pr checkout merge' → pass (checkout sub-command, merge branch)"
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"
