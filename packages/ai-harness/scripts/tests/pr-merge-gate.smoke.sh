@@ -127,8 +127,14 @@ sid="m4b"
     verdict_cycle_init "$sid" "$TMP_REPO" "review" '["code-reviewer","architect-advisor"]'
     nonce_cr=$(verdict_nonce_issue "$sid" "$TMP_REPO" "code-reviewer" "review")
     # BLOCK verdict 기록 — bypass가 이걸 override해야 함
-    verdict_consume_and_record "$nonce_cr" "$sid" "$TMP_REPO" "code-reviewer" "review" "BLOCK" "1"
+    verdict_consume_and_record "$sid" "$TMP_REPO" "$nonce_cr" "code-reviewer" "review" "BLOCK" "1"
 ) >/dev/null 2>&1
+# Debug guard — BLOCK verdict 실제 기록 확인 (vacuous-truth path 회피 보장)
+m4b_last=$(source "$LIB" && state_get "$sid" '.last_verdicts.review // {} | length' "$TMP_REPO")
+if [ "${m4b_last:-0}" -lt 1 ]; then
+    echo "  ✗ M4b setup precondition: last_verdicts.review empty — verdict_consume_and_record no-op?"
+    FAIL=$((FAIL+1))
+fi
 rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 SAZO_ALLOW_MERGE_BYPASS=1 run_hook "pre" "$(mk_merge_payload "$sid")")
 assert_exit 0 "$rc" "M4b: BLOCK verdict + SAZO_ALLOW_MERGE_BYPASS=1 → pass (bypass overrides BLOCK)"
 # idempotency under BLOCK: stage_is_passed review must be true via user-skip+bypass 분기
