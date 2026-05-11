@@ -20,7 +20,7 @@
 | ~~03~~ | ~~Task depth counter~~ — **DEPRECATED** | — | — | spike Q4: Claude Code가 이미 강제 |
 | 04 | ci_passed_at invalidation (+ GH #34692 fallback) | P1 (revision) | 00-spike | 0.5주 |
 | 05 | Hook circuit breaker (degraded mode) | P1 | 없음 | 0.5주 |
-| 06 | Phase 1 default ON (narrow hooks) | P1 | 02 | 0.3주 |
+| 06 | Phase 1 default ON (narrow hooks) | **P0 (상향)** | 02 | 0.3주 |
 | 07 | Test edits counter (warn only) | P2 (revision) | 00-spike | 0.5주 |
 | 08 | Bot review GitHub API label gate | P2 (revision) | — | 1주 |
 | 09 | Skip streak hard escalation | P2 | — | 0.3주 |
@@ -28,7 +28,19 @@
 | 11 | Approval nonce idle TTL | P2 | — | 0.3주 |
 | 12 | Phase 2 default ON (workflow-state-machine) | P3 | 02, 06, dogfood | 0.3주 |
 | 13 | Control flow extensions (integrator wishlist 통합) | P1 (PR #27 후속) | PR #27 | 1.5주 |
-| 14? | (proposed) subagent tools whitelist enforcement | P1 candidate | — | TBD |
+| 14? | (proposed) subagent routing enforcement (general-purpose 차단 + tools whitelist + Glob exploration-gate) | **P0 candidate** | 06 | TBD |
+
+### 우선순위 변경 사유 (2026-05-11)
+
+**Plan 06 P1 → P0 상향** + **Plan 14 후보 P0**.
+
+`ccusage daily -s 20260501 -b` 측정 결과 2026-05 Opus 비용 비율 95-100%. 기대치 30-50% (탐색/리뷰/문서는 haiku/sonnet 위임). 원인 분석:
+
+1. **메인 루프 직접 탐색 차단 부재** — Grep 777 / Glob 475 / Bash grep-find 다수가 메인 Opus에서 직접. `pre-exploration-gate` 있지만 `SAZO_WORKFLOW_HOOKS_ENABLED` 미설정 시 비활성. → **Plan 06**이 narrow hook으로 default ON 분리하면 해결.
+2. **`general-purpose` subagent 남용 (10일 181건)** — Opus 부모 모델 inherit. 컨텍스트만 절약, 토큰 비용 동일. plan revision / 자동 리뷰 / /review wrap 등에 광범위 사용. → **Plan 14**가 routing 강제로 차단.
+3. **Glob tool exploration-gate 미포함** — 현재 gate는 Grep + Bash만. Glob 475건은 메인 Opus에서 그대로. → Plan 14에서 Glob도 gate에 포함.
+
+`SAZO_WORKFLOW_HOOKS_ENABLED=1` 임시 활성으로 1번 부분 해결 (Grep + Bash grep만). 2/3번은 plan 진행 필요.
 
 ## 공통 가이드
 
