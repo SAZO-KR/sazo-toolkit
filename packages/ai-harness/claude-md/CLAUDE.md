@@ -58,7 +58,8 @@
 **Narrow hooks — 기본 활성 (Plan 06)**. 영향 범위 좁고 사용자가 즉시 인지 가능:
 - `pre-worktree-gate` — 보호 브랜치 mutating 차단
 - `pre-commit-lint` — staged 파일 lint autofix
-- `pre-exploration-gate` — Opus 직접 grep/find 3회 후 block
+- `pre-exploration-gate` — Opus 직접 grep/find/glob 3회 후 block
+- `pre-task-general-purpose-gate` — Opus가 `general-purpose` subagent 호출 시 soft warn (전용 subagent 권장)
 - `user-prompt-approval-detect` — `/approved` nonce 발급
 
 비활성: `export SAZO_DISABLE_NARROW_HOOKS=1`

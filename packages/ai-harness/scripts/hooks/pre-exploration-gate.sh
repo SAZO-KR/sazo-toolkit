@@ -7,7 +7,7 @@
 #
 # 정책:
 # - Narrow hook (Plan 06부터 default ON) + Opus 모델만 적용
-# - Grep tool + Bash `grep|egrep|fgrep|git grep|rg|ag|fd|xargs grep|find -name` → 카운트
+# - Grep tool + Glob tool + Bash `grep|egrep|fgrep|git grep|rg|ag|fd|xargs grep|find -name` → 카운트
 # - 1-2회는 soft 경고, 3회부터 block
 # - SAZO_ALLOW_GREP_ONCE=1: 1회 override
 # - SAZO_SKIP_EXPLORE_GATE=1: 본 hook만 비활성
@@ -37,8 +37,9 @@ case "${SAZO_MODEL:-${CLAUDE_MODEL:-}}" in
 esac
 
 # 탐색 tool 판별 (word-boundary)
+# Plan 14: Glob도 메인 직접 탐색의 일부 (475건/10일). code-searcher 위임 대상.
 is_exploration=0
-if [ "$SAZO_TOOL_NAME" = "Grep" ]; then
+if [ "$SAZO_TOOL_NAME" = "Grep" ] || [ "$SAZO_TOOL_NAME" = "Glob" ]; then
     is_exploration=1
 elif [ "$SAZO_TOOL_NAME" = "Bash" ]; then
     cmd=$(echo "$SAZO_TOOL_INPUT" | jq -r '.command // ""')
