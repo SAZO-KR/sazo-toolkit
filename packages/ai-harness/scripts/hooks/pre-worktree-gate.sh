@@ -55,13 +55,22 @@ if [ "$SAZO_TOOL_NAME" = "Bash" ]; then
     if echo "$cmd" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?(commit|add|push|merge|rebase|reset|cherry-pick|stash|restore|worktree[[:space:]]+add)\b'; then
         is_mutating=1
     fi
-    # git branch: <name> (non-dash arg) → create, 옵션 -d/-D/-m/-M/-c/-C → mutating.
+    # git branch: 다음 중 하나면 mutating
+    #   (1) <name> (non-dash positional) — create
+    #   (2) -d/-D/-m/-M/-c/-C/-f short — delete/rename/copy/force
+    #   (3) --delete/--move/--copy/--force/--track/--no-track/
+    #       --set-upstream-to/--unset-upstream/--edit-description long
+    # Read-only: 단독, -l/-v/-vv/-r/-a/-h, --list, --verbose, --remotes, --all,
+    #            --show-current, --contains/--no-contains, --merged/--no-merged,
+    #            --points-at, --column, --sort, --format.
     if echo "$cmd" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?branch[[:space:]]+[^-[:space:]]'; then
         is_mutating=1
     fi
-    if echo "$cmd" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?branch[[:space:]]+-([dDmMcC]|-(delete|move|copy)\b)'; then
+    if echo "$cmd" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?branch[[:space:]]+([^[:space:]]+[[:space:]]+)*-([dDmMcCf]|-(delete|move|copy|force|track|no-track|set-upstream-to|unset-upstream|edit-description))(\b|=)'; then
         is_mutating=1
     fi
+    # Note: 안쪽 `[^[:space:]]+` (1글자 이상) — POSIX ERE backtracking 안전.
+    # `*` (0글자 이상) 사용 시 nested quantifier로 catastrophic backtracking 위험 (critic v2).
     # git tag: `git tag <name>` (non-dash arg → create) 및 `-a`/`-d`/`-f` 옵션은
     # mutating. `git tag` 단독 / `-l` / `--list`는 read-only (Codex V6 P1).
     # `-C <path>` optional prefix 인식.

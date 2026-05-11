@@ -1205,6 +1205,28 @@ EOF_PST
 문서/주석만 수정: /skip review <reason>"
                 fi
             fi
+            # gh pr merge — review stage hard block (Plan 13 follow-up)
+            # PR 생성 후 별도 머지 사이클. review (Step 6)가 verdict aggregation
+            # 통과 상태여야 머지 허용. approval/ci는 PR 생성 시점에 이미 통과돼 있어
+            # normal flow에서 추가 검사 불필요. 우회 경로(approval/ci bypass)로 PR 생성한
+            # 케이스에서도 review만큼은 강제 — 이게 본 fix의 핵심 의도.
+            if echo "$cmd" | grep -qE '\bgh[[:space:]]+pr[[:space:]]+merge\b'; then
+                if ! stage_is_passed "$SAZO_SESSION_ID" "review"; then
+                    if [ "${SAZO_ALLOW_MERGE_BYPASS:-0}" = "1" ]; then
+                        audit_log "merge_bypass_warn" "${SAZO_SESSION_ID:-}" "review" "bypassed" "bypass" \
+                            "SAZO_ALLOW_MERGE_BYPASS=1; tool=gh_pr_merge"
+                        # approval/ci bypass 패턴과 일관 — stage_mark로 영속화하여
+                        # 후속 stage_is_passed review 호출도 통과. idempotency 보장.
+                        stage_mark "$SAZO_SESSION_ID" "review" "skipped" "bypass" "SAZO_ALLOW_MERGE_BYPASS=1"
+                    else
+                        emit_skip_warning_if_needed
+                        hard_block "review" "PR 머지 전 독립 리뷰 완료 필수.
+  Step 6 (code-reviewer / architect-advisor verdict APPROVE) 또는
+  문서/주석만 수정: /skip review <reason>
+극단 예외: SAZO_ALLOW_MERGE_BYPASS=1"
+                    fi
+                fi
+            fi
             ;;
     esac
     exit 0

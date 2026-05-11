@@ -50,7 +50,7 @@ invoke_hook() {
         \"model\": \"unknown\"
     }")
     local actual
-    actual=$(printf '%s' "$payload" | bash "$HOOK" 2>/dev/null; echo "rc=$?")
+    actual=$(printf '%s' "$payload" | SAZO_SKIP_WORKTREE_GATE=0 bash "$HOOK" 2>/dev/null; echo "rc=$?")
     actual=${actual##*rc=}
     if [ "$actual" = "$expected" ]; then
         PASS=$((PASS+1))
@@ -102,6 +102,19 @@ invoke_hook 0 'git branch -v' 'T20b git branch -v → 통과 (verbose list)'
 invoke_hook 2 'git branch new-feature' 'T20c git branch <name> → 차단 (create)'
 invoke_hook 2 'git branch -d old-feature' 'T20d git branch -d → 차단 (delete)'
 invoke_hook 2 'git branch -m new-name' 'T20e git branch -m → 차단 (rename)'
+
+# T20f-T20o: branch precision (Plan v3 Phase A)
+echo "--- T20f-T20o: branch carve-out precision ---"
+invoke_hook 2 'git branch -f topic' 'T20f git branch -f → 차단 (force)'
+invoke_hook 2 'git branch --force topic main' 'T20g git branch --force → 차단'
+invoke_hook 2 'git branch --track topic origin/main' 'T20h git branch --track → 차단'
+invoke_hook 2 'git branch --no-track topic main' 'T20i git branch --no-track → 차단'
+invoke_hook 2 'git branch --set-upstream-to=origin/main' 'T20j git branch --set-upstream-to → 차단'
+invoke_hook 2 'git branch --unset-upstream' 'T20k git branch --unset-upstream → 차단'
+invoke_hook 2 'git branch --edit-description topic' 'T20l git branch --edit-description → 차단'
+invoke_hook 0 'git branch --merged' 'T20m git branch --merged → 통과 (read-only)'
+invoke_hook 0 'git branch --contains HEAD' 'T20n git branch --contains → 통과 (read-only)'
+invoke_hook 0 'git branch --sort=-committerdate' 'T20o git branch --sort → 통과 (read-only)'
 
 # T21: cwd 변경 trick — non-git dir + git -C ...
 # 현재 hook은 cd "$SAZO_CWD" → not git → stage_mark auto skip → exit 0.

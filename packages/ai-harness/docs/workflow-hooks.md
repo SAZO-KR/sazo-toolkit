@@ -135,6 +135,43 @@ implementation에는 별도 gate 없음 (approval ~ ci 사이 자유 구간). PR
 
 `scripts/hooks/lib/session-state.sh` — read/write/transition/lock 함수. slash command (`/skip`, `/approved`)도 동일 lib source.
 
+## gh pr merge gate
+
+`workflow-state-machine` broad hook이 활성 상태(`SAZO_WORKFLOW_HOOKS_ENABLED=1`)일 때,
+`gh pr merge` 호출 직전에 review stage 통과 여부를 검사한다.
+
+**동작**:
+- review 미통과 → `exit 2` (hard block). 메시지:
+  ```
+  PR 머지 전 독립 리뷰 완료 필수.
+    Step 6 (code-reviewer / architect-advisor verdict APPROVE) 또는
+    문서/주석만 수정: /skip review <reason>
+  극단 예외: SAZO_ALLOW_MERGE_BYPASS=1
+  ```
+- review 통과 (verdict aggregation APPROVE 또는 legacy `/skip review`) → 통과
+- `--auto` 등 subflag 무관 — `gh pr merge` 포함하면 모두 검사
+
+**설계 의도**: PR 생성 시점(ci/approval gate)을 우회한 경로라도 머지 전에 독립 리뷰를 강제.
+approval/ci bypass(`SAZO_ALLOW_APPROVAL_BYPASS`, `SAZO_ALLOW_CI_SKIP`)로 PR을 만들었어도
+review만큼은 건너뛸 수 없다.
+
+**한계**: `gh pr m` (gh CLI abbreviation) 미매칭. alias 사용 시 우회 가능 — 알려진 한계.
+
+### SAZO_ALLOW_MERGE_BYPASS=1
+
+극단 예외 escape valve. 세션별 환경변수.
+
+```bash
+SAZO_ALLOW_MERGE_BYPASS=1 gh pr merge
+```
+
+동작:
+1. audit.log에 `merge_bypass_warn` 기록
+2. review stage를 `skipped/by=bypass`로 영속화 (idempotency — 이후 `stage_is_passed review` 호출도 통과)
+3. 머지 허용
+
+broad hook OFF(`SAZO_WORKFLOW_HOOKS_ENABLED` 미설정)이면 본 gate 자체가 비활성 — bypass flag 불필요.
+
 ## Override Flag
 
 Narrow / broad gate가 독립적. **모든 hook을 끄려면 두 flag 모두 필요**.
@@ -156,6 +193,7 @@ SAZO_SKIP_EXPLORE_GATE=1
 SAZO_SKIP_STATE_MACHINE=1
 SAZO_ALLOW_CI_SKIP=1
 SAZO_ALLOW_GREP_ONCE=1    # 1회 사용
+SAZO_ALLOW_MERGE_BYPASS=1 # gh pr merge review 우회 (audit 기록됨)
 ```
 
 ## 비침습성
