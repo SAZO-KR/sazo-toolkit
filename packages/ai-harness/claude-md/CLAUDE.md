@@ -51,19 +51,29 @@
 - 사용자에게 제안: "이 작업은 [복잡도 판단 근거]이므로, [N단계]와 [M단계]는 생략해도 될 것 같습니다. 동의하시나요?"
   - **사용자가 동의한 단계만 skip**. 사용자 응답 없이 자의적으로 skip 금지.
 
-### Workflow hook (opt-in)
+### Workflow hook
 
-워크플로우는 hook으로 stage gate가 강제될 수 있다 (`packages/ai-harness/docs/workflow-hooks.md`).
+워크플로우는 hook으로 stage gate가 강제된다 (`packages/ai-harness/docs/workflow-hooks.md`). Plan 06부터 narrow / broad로 분리.
 
-**기본 비활성**. 활성화: `export SAZO_WORKFLOW_HOOKS_ENABLED=1` (`~/.zshrc`/`~/.bashrc`).
+**Narrow hooks — 기본 활성 (Plan 06)**. 영향 범위 좁고 사용자가 즉시 인지 가능:
+- `pre-worktree-gate` — 보호 브랜치 mutating 차단
+- `pre-commit-lint` — staged 파일 lint autofix
+- `pre-exploration-gate` — Opus 직접 grep/find 3회 후 block
+- `user-prompt-approval-detect` — `/approved` nonce 발급
+
+비활성: `export SAZO_DISABLE_NARROW_HOOKS=1`
+
+**Broad hooks — 기본 비활성 (opt-in alpha)**. 영향 광범위, dogfood 필요:
+- `workflow-state-machine` — research/plan/approval/ci/review stage gate
+
+활성: `export SAZO_WORKFLOW_HOOKS_ENABLED=1` (`~/.zshrc`/`~/.bashrc`)
 
 활성 시 동작:
 - worktree, gh-pr-create(ci/review): hard block
 - Write/Edit (research/plan): soft warn ×3 후 hard block
 - Write/Edit (approval): 항상 soft warn (사용자 직접 `/approved` 입력만 인정)
-- Opus 직접 grep/find: 3회 후 block
 
-비활성 시 워크플로우는 지시문 수준 — 본 섹션의 단계별 규칙대로 Claude가 자체 준수.
+비활성 시 워크플로우 state machine은 지시문 수준 — Claude가 자체 준수.
 
 ### Skip 정책
 

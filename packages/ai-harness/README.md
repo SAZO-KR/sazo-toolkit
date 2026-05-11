@@ -36,6 +36,21 @@ curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/
 | claude-sync        | Claude CLI → OpenCode 토큰 자동 동기화 (15분)  |
 | claude-sync-notify | 토큰 만료 시 macOS 알림                        |
 
+## Workflow hooks (Phase 1 narrow vs Phase 2 broad)
+
+Plan 06부터 hook을 narrow(좁은 영향) / broad(광범위)로 분리.
+
+**Narrow — 기본 활성** (`SAZO_DISABLE_NARROW_HOOKS=1`로 opt-out):
+- `pre-worktree-gate` — 보호 브랜치 mutating 차단
+- `pre-commit-lint` — staged 파일 lint autofix
+- `pre-exploration-gate` — Opus 직접 grep/find 3회 후 block
+- `user-prompt-approval-detect` — `/approved` nonce 발급
+
+**Broad — opt-in alpha** (`SAZO_WORKFLOW_HOOKS_ENABLED=1`로 활성):
+- `workflow-state-machine` — research/plan/approval/ci/review stage gate
+
+상세: `docs/workflow-hooks.md`.
+
 ## Pre-commit lint autofix hook
 
 `git commit` 직전에 **스테이징된 파일만** 대상으로 lint autofix를 자동 실행한다. 스코프 외 파일 drift가 PR에 섞이는 문제(cf. integrator PR #622)를 차단하는 용도.
