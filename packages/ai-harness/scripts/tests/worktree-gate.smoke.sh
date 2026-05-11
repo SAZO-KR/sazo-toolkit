@@ -133,6 +133,9 @@ invoke_hook 2 'git branch --no-create-reflog topic' 'T20x branch --no-create-ref
 # Codex PR#39 round 5: pipe boundary
 invoke_hook 0 'git branch --show-current | grep -f patterns' 'T20y branch --show-current | grep -f → 통과 (pipe boundary)'
 invoke_hook 0 'git branch -a | wc -l' 'T20z branch -a | wc -l → 통과 (pipe boundary)'
+# Codex PR#39 round 8: --recurse-submodules
+invoke_hook 2 'git branch --recurse-submodules topic' 'T20aa branch --recurse-submodules topic → 차단'
+invoke_hook 2 'git branch --no-recurse-submodules topic' 'T20bb branch --no-recurse-submodules topic → 차단'
 
 # T21: cwd 변경 trick — non-git dir + git -C ...
 # 현재 hook은 cd "$SAZO_CWD" → not git → stage_mark auto skip → exit 0.

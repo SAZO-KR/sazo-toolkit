@@ -87,7 +87,8 @@ if [ "$SAZO_TOOL_NAME" = "Bash" ]; then
             # long: --delete/--move/--copy/--force/--track/--no-track/
             #       --set-upstream-to/--unset-upstream/--edit-description/--create-reflog
             # Codex PR#39 round 4: `--create-reflog` 추가 (`git branch --create-reflog ...`는 mutating).
-            if echo "$bseg" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?branch[[:space:]]+([^[:space:]]+[[:space:]]+)*(-[a-zA-Z]*[dDmMcCfu][a-zA-Z]*|--(delete|move|copy|force|track|no-track|set-upstream-to|unset-upstream|edit-description|create-reflog|no-create-reflog))(\b|=)'; then
+            # Codex PR#39 round 8: `--recurse-submodules` (submodule branch propagation 시 create).
+            if echo "$bseg" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?branch[[:space:]]+([^[:space:]]+[[:space:]]+)*(-[a-zA-Z]*[dDmMcCfu][a-zA-Z]*|--(delete|move|copy|force|track|no-track|set-upstream-to|unset-upstream|edit-description|create-reflog|no-create-reflog|recurse-submodules|no-recurse-submodules))(\b|=)'; then
                 is_mutating=1
                 break
             fi

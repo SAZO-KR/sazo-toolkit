@@ -245,6 +245,15 @@ rm -rf "$SAZO_STATE_DIR"
 rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m22" 'gh pr checkout merge')")
 assert_exit 0 "$rc" "M22: 'gh pr checkout merge' → pass (checkout sub-command, merge branch)"
 
+# Codex PR#39 round 8: env options
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m23" 'env -i GH_TOKEN=xxx gh pr merge')")
+assert_exit 2 "$rc" "M23: 'env -i GH_TOKEN=xxx gh pr merge' → block (env -i option)"
+
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m24" 'env --ignore-environment GH_TOKEN=xxx gh pr merge')")
+assert_exit 2 "$rc" "M24: 'env --ignore-environment ... gh pr merge' → block (env long option)"
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"

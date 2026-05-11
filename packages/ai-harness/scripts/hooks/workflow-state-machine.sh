@@ -1234,10 +1234,12 @@ EOF_PST
                     # POSIX simple command 문법: `[NAME=word]... command [args]`.
                     # NAME은 `[a-zA-Z_][a-zA-Z0-9_]*` (POSIX 3.231).
                     seg=$(printf '%s' "$seg" | sed -E 's/^([a-zA-Z_][a-zA-Z0-9_]*=[^[:space:]]*[[:space:]]+)+//')
-                    # Codex PR#39 round 3 P2: `env [VAR=val]... cmd` wrapper도 strip.
-                    # `env GH_TOKEN=xxx gh pr merge` 같은 패턴.
+                    # Codex PR#39 round 3/8 P2: `env [-options]... [VAR=val]... cmd` wrapper도 strip.
+                    # `env GH_TOKEN=xxx gh pr merge`, `env -i GH_TOKEN=xxx gh pr merge` 같은 패턴.
+                    # env 옵션 (`-i`/`-S ...`/`-u ...`/`--block-signal`/`--default-signal=...`/
+                    # `--ignore-environment`/`--null`/`--split-string=...`/`-C` 등) 와 NAME=value 둘 다 strip.
                     if echo "$seg" | grep -qE '^env[[:space:]]+'; then
-                        seg=$(printf '%s' "$seg" | sed -E 's/^env[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*=[^[:space:]]*[[:space:]]+)*//')
+                        seg=$(printf '%s' "$seg" | sed -E 's/^env[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-][^[:space:]]*)?[[:space:]]+)*([a-zA-Z_][a-zA-Z0-9_]*=[^[:space:]]*[[:space:]]+)*//')
                     fi
                     # Codex PR#39 round 5 P2: `command [-pVv] cmd` Bash builtin wrapper도 strip.
                     # `command gh pr merge` 같은 alias/function bypass 패턴.
