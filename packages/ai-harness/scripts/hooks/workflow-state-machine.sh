@@ -1217,7 +1217,10 @@ EOF_PST
             # `gh` 일 때만 매칭. compound 명령 (`a && gh pr merge`) 도 지원.
             gh_merge_invoked=0
             if echo "$cmd" | grep -qE '\bgh[[:space:]]+pr[[:space:]]+merge\b'; then
-                merge_segments=$(printf '%s' "$cmd" | awk '{gsub(/&&|\|\||;/, "\n"); print}')
+                # Codex PR#39 round 4: pipe(`|`) 도 command separator로 추가.
+                # `yes | gh pr merge` 같은 pipeline. order 중요 — `\|\|` 먼저 매칭 후 single `\|`.
+                # awk regex alternation은 leftmost match라 `\|\|`를 single `\|`보다 먼저 배치.
+                merge_segments=$(printf '%s' "$cmd" | awk '{gsub(/&&|\|\||;|\|/, "\n"); print}')
                 while IFS= read -r seg; do
                     seg=$(printf '%s' "$seg" | sed -E 's/^[[:space:]]+//')
                     [ -z "$seg" ] && continue

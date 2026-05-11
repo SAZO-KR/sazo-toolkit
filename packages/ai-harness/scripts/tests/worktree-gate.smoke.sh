@@ -127,6 +127,9 @@ invoke_hook 2 'git branch -du topic' 'T20t git branch -du (clustered delete + up
 # Codex PR#39 round 3: segment boundary — read-only branch + chain의 unrelated `-f`
 invoke_hook 0 'git branch --show-current && echo -f' 'T20u branch --show-current && echo -f → 통과 (chain boundary)'
 invoke_hook 2 'git branch -a && rm -rf tmp.log' 'T20v branch -a && rm ... → 차단 (rm이 별도 mutating filter)'
+# Codex PR#39 round 4: --create-reflog 옵션
+invoke_hook 2 'git branch --create-reflog topic' 'T20w branch --create-reflog topic → 차단 (long mutating option)'
+invoke_hook 2 'git branch --no-create-reflog topic' 'T20x branch --no-create-reflog topic → 차단'
 
 # T21: cwd 변경 trick — non-git dir + git -C ...
 # 현재 hook은 cd "$SAZO_CWD" → not git → stage_mark auto skip → exit 0.

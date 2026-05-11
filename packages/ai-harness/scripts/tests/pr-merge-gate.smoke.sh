@@ -209,6 +209,15 @@ rm -rf "$SAZO_STATE_DIR"
 rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m14" 'env FOO=1 BAR=2 gh pr merge')")
 assert_exit 2 "$rc" "M14: 'env FOO=1 BAR=2 gh pr merge' → block (env wrapper with multiple assignments)"
 
+# Codex PR#39 round 4: pipe `|` separator
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m15" 'yes | gh pr merge')")
+assert_exit 2 "$rc" "M15: 'yes | gh pr merge' → block (pipe separator)"
+
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m16" 'echo y | gh pr merge --auto')")
+assert_exit 2 "$rc" "M16: 'echo y | gh pr merge --auto' → block (pipe + subflag)"
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"

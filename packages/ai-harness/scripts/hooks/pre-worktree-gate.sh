@@ -74,7 +74,9 @@ if [ "$SAZO_TOOL_NAME" = "Bash" ]; then
         while IFS= read -r bseg; do
             bseg=$(printf '%s' "$bseg" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
             [ -z "$bseg" ] && continue
-            # (1) non-dash positional → create
+            # (1) non-dash positional 첫 인자 → create
+            # 옵션 prefix 후의 positional은 검사 안 함 — `--contains HEAD`, `--merged <commit>` 등
+            # 인자 받는 read-only 옵션과 구분 어려움. mutating 옵션은 (2)에서 명시적으로 catch.
             if echo "$bseg" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?branch[[:space:]]+[^-[:space:]]'; then
                 is_mutating=1
                 break
@@ -82,8 +84,9 @@ if [ "$SAZO_TOOL_NAME" = "Bash" ]; then
             # (2) mutating short/long flag — segment 안에서만 검사
             # short: cluster 어디든 dDmMcCfu 포함
             # long: --delete/--move/--copy/--force/--track/--no-track/
-            #       --set-upstream-to/--unset-upstream/--edit-description
-            if echo "$bseg" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?branch[[:space:]]+([^[:space:]]+[[:space:]]+)*(-[a-zA-Z]*[dDmMcCfu][a-zA-Z]*|--(delete|move|copy|force|track|no-track|set-upstream-to|unset-upstream|edit-description))(\b|=)'; then
+            #       --set-upstream-to/--unset-upstream/--edit-description/--create-reflog
+            # Codex PR#39 round 4: `--create-reflog` 추가 (`git branch --create-reflog ...`는 mutating).
+            if echo "$bseg" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?branch[[:space:]]+([^[:space:]]+[[:space:]]+)*(-[a-zA-Z]*[dDmMcCfu][a-zA-Z]*|--(delete|move|copy|force|track|no-track|set-upstream-to|unset-upstream|edit-description|create-reflog|no-create-reflog))(\b|=)'; then
                 is_mutating=1
                 break
             fi
