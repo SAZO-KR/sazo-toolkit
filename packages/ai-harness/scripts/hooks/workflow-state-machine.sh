@@ -1175,6 +1175,20 @@ EOF_PST
                         fi
                     fi
                 fi
+                # Stage B: approval hard block — PR create requires approval completed.
+                # SAZO_ALLOW_APPROVAL_BYPASS=1 → mark_approval_complete by="bypass" then pass (warn metric).
+                if ! stage_is_passed "$SAZO_SESSION_ID" "approval"; then
+                    if [ "${SAZO_ALLOW_APPROVAL_BYPASS:-0}" = "1" ]; then
+                        audit_log "approval_bypass_warn" "${SAZO_SESSION_ID:-}" "approval" "completed" "bypass" \
+                            "SAZO_ALLOW_APPROVAL_BYPASS=1; tool=gh_pr_create"
+                        mark_approval_complete "$SAZO_SESSION_ID" "bypass" "SAZO_ALLOW_APPROVAL_BYPASS=1" "$SAZO_CWD"
+                    else
+                        emit_skip_warning_if_needed
+                        hard_block "approval" "PR 생성 전 플랜 승인 필수.
+플랜 제시 후 /approved 입력하거나 사용자가 직접 승인해야 합니다.
+긴급 예외: SAZO_ALLOW_APPROVAL_BYPASS=1"
+                    fi
+                fi
                 if ! stage_is_passed "$SAZO_SESSION_ID" "ci"; then
                     if [ "${SAZO_ALLOW_CI_SKIP:-0}" = "1" ]; then
                         stage_mark "$SAZO_SESSION_ID" "ci" "skipped" "user" "SAZO_ALLOW_CI_SKIP=1"

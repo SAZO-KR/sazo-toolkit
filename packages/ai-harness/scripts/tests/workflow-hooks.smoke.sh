@@ -347,12 +347,17 @@ rc=$(SAZO_ALLOW_CI_SKIP=1 run_hook "$STATE_HOOK" "pre" \
     '{"session_id":"pr2","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"gh pr create --title foo"}}')
 assert_exit 2 "$rc" "SAZO_ALLOW_CI_SKIP set, but review missing → block"
 
-# Add review, then SAZO_ALLOW_CI_SKIP allows pr create
+# Add review, then mark approval (Stage B: approval now required before gh pr create)
 run_hook "$STATE_HOOK" "post" \
     '{"session_id":"pr2","cwd":"/tmp","tool_name":"Task","tool_input":{"subagent_type":"code-reviewer"}}' >/dev/null
+# Mark approval via bypass env so the test stays self-contained (no /approved flow needed).
+(
+    source "$HOOKS/lib/session-state.sh"
+    SAZO_CWD="/tmp" mark_approval_complete "pr2" "user" "smoke-test" "/tmp"
+) >/dev/null
 rc=$(SAZO_ALLOW_CI_SKIP=1 run_hook "$STATE_HOOK" "pre" \
     '{"session_id":"pr2","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"gh pr create --title foo"}}')
-assert_exit 0 "$rc" "SAZO_ALLOW_CI_SKIP + review → pass"
+assert_exit 0 "$rc" "SAZO_ALLOW_CI_SKIP + review + approval → pass"
 
 echo ""
 echo "=== validator: approval/ci require by != auto-claude ==="
@@ -837,12 +842,12 @@ else
     FAIL=$((FAIL + 1))
     echo "  ✗ PreToolUse: run1=$PRE1 run2=$PRE2 (expected 4)"
 fi
-if [ "$POST1" = "$POST2" ] && [ "$POST1" = "1" ]; then
+if [ "$POST1" = "$POST2" ] && [ "$POST1" = "2" ]; then
     PASS=$((PASS + 1))
-    echo "  ✓ PostToolUse 1 entry idempotent"
+    echo "  ✓ PostToolUse 2 entries idempotent"
 else
     FAIL=$((FAIL + 1))
-    echo "  ✗ PostToolUse: run1=$POST1 run2=$POST2 (expected 1)"
+    echo "  ✗ PostToolUse: run1=$POST1 run2=$POST2 (expected 2)"
 fi
 if [ "$USR1" = "$USR2" ] && [ "$USR1" = "1" ]; then
     PASS=$((PASS + 1))

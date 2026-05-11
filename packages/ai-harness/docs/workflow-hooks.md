@@ -162,6 +162,16 @@ SAZO_ALLOW_GREP_ONCE=1    # 1회 사용
 
 각 hook 독립 실행. 하나 실패해도 나머지 작동. narrow는 default-on(좁은 영향), broad는 opt-in(광범위) — 도입 충격 최소화.
 
+## SessionEnd hook known limitations (Plan 13 Stage A, 2026-05-11)
+
+본 hook은 Anthropic Claude Code `SessionEnd` event를 사용한다. 다음 한계 known + documented:
+
+- `/exit` 종료 시 SessionEnd 미발사 (GH#17885, #35892) — Ctrl+D 권장
+- `/clear` 종료 시 미발사 (GH#6428)
+- Ctrl+C → 발사되나 mid-execution kill 가능 (GH#32712)
+- `--continue` resume → stale session_id/transcript_path (GH#9188): record `source="session_end"` 외 별도 표시 안 함. Plan 02 workflow CLI 메트릭 단계에서 dedup
+- async 5s 초과 작업 kill (GH#41577) — `timeout 5` portable wrapper로 graceful fail
+
 ## Roadmap
 
 - subagent lineage 추적 (현재 main session의 직접 Task 호출만 감지)
