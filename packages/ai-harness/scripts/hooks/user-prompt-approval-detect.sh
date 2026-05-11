@@ -1,20 +1,22 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # user-prompt-approval-detect.sh — UserPromptSubmit hook.
 #
-# 사용자가 직접 입력한 메시지가 정확한 승인 패턴 (`/approved`만)일 때 nonce 발급.
-# `/approved` slash command는 nonce 검증 후에만 approval stage 마킹.
-# Claude가 자의적으로 `/approved` 호출해도 nonce 없으면 거부 → "사용자 의사결정"
-# 원칙 보장.
+# 사용자가 직접 입력한 메시지가 승인/스킵 패턴일 때 즉시 처리.
 #
-# 패턴 — 정확히 "/approved" (앞뒤 공백 허용, 다른 텍스트 금지).
-# 한국어 자연어 "ok/승인/go" 등은 의도적으로 제외 — Claude가 사용자 메시지 해석
-# 오류로 통과시키는 것을 막기 위해 명시적 슬래시 명령만 인정.
+# /approved — mark_approval_complete by="user" 직접 호출 (Plan 13 A0a: nonce 우회).
+# /skip <stage> <reason> — stage_mark skipped by="user" 직접 호출.
+#
+# 패턴 — "/approved" 또는 "/skip <stage> <reason>" (앞뒤 공백 허용).
+# mixed slash ("/approved /skip") 는 무시.
+# 한국어 자연어 "ok/승인/go" 등은 의도적으로 제외 — 명시적 슬래시 명령만 인정.
 
 set -uo pipefail
 
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
 # shellcheck source=lib/session-state.sh
 source "$LIB_DIR/session-state.sh"
+# shellcheck source=lib/slash-commands.sh
+source "$LIB_DIR/slash-commands.sh"
 
 if ! narrow_hooks_enabled; then
     exit 0
@@ -24,18 +26,39 @@ read_hook_payload
 
 [ -z "${SAZO_SESSION_ID:-}" ] && exit 0
 
-# trim whitespace + 첫 토큰만 검사. "/approved", "/approved 진행", "/approved please"
-# 모두 인정. 단 다른 슬래시 명령이 함께 있는 경우는 거부.
-trimmed=$(echo "$SAZO_USER_PROMPT" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
-first_token="${trimmed%%[[:space:]]*}"
+# Trim leading/trailing whitespace from user prompt
+trimmed=$(trim_leading "$SAZO_USER_PROMPT")
+trimmed_rev=$(printf '%s' "$trimmed" | sed -E 's/[[:space:]]+$//')
 
-if [ "$first_token" = "/approved" ]; then
-    state_init "$SAZO_SESSION_ID" "$SAZO_CWD" "$SAZO_MODEL"
-    # 짧은 nonce — UUIDv4 대신 랜덤 hex (의존성 최소화)
-    nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
-    approval_nonce_set "$SAZO_SESSION_ID" "$nonce"
-    # /approved 명령이 같은 turn 내에서 실행되면서 nonce 소비.
-    # Claude에게 노출 안 함 (stdout 비움).
-fi
+# Parse slash command (rejects mixed slash, empty input)
+parsed=$(parse_slash_command "$trimmed_rev")
+
+# Determine first token for dispatch
+first_token="${trimmed_rev%%[[:space:]]*}"
+
+case "$first_token" in
+    /approved)
+        if [ -n "$parsed" ]; then
+            state_init "$SAZO_SESSION_ID" "$SAZO_CWD" "${SAZO_MODEL:-unknown}"
+            mark_approval_complete "$SAZO_SESSION_ID" "user" "/approved" "$SAZO_CWD"
+        fi
+        ;;
+    /skip)
+        if [ -n "$parsed" ]; then
+            # parsed = "skip <stage> <reason...>"
+            # Strip "skip " prefix to get "<stage> <reason...>"
+            local_rest="${parsed#skip}"
+            local_rest=$(trim_leading "$local_rest")
+            # Extract stage (first word) and reason (rest)
+            skip_stage="${local_rest%%[[:space:]]*}"
+            skip_reason_raw="${local_rest#"$skip_stage"}"
+            skip_reason=$(trim_leading "$skip_reason_raw")
+            if [ -n "$skip_stage" ]; then
+                state_init "$SAZO_SESSION_ID" "$SAZO_CWD" "${SAZO_MODEL:-unknown}"
+                stage_mark "$SAZO_SESSION_ID" "$skip_stage" "skipped" "user" "$skip_reason" "$SAZO_CWD"
+            fi
+        fi
+        ;;
+esac
 
 exit 0

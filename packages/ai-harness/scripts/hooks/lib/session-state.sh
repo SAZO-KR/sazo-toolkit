@@ -349,7 +349,11 @@ stage_is_passed() {
         approval)
             jq -e '
                 (.plan_approved_at != null)
-                and (.history | any(.stage == "approval" and .status == "completed" and .by == "user"))
+                and (.history | any(
+                    .stage == "approval"
+                    and .status == "completed"
+                    and (.by == "user" or .by == "bypass")
+                ))
             ' "$f" >/dev/null 2>&1
             ;;
         ci)
@@ -492,6 +496,29 @@ approval_nonce_consume() {
     [ -n "$stored" ] && [ "$stored" = "$nonce" ] || return 1
     state_set_json "$sid" ".approval_nonce" "null" "$cwd"
     return 0
+}
+
+# ----- mark_approval_complete (Plan 13 Stage A0a) -----
+# mark_approval_complete <sid> <by> <reason> [cwd]
+# Atomic helper: sets plan_approved_at + appends history entry.
+# by values: "user" (direct /approved), "bypass" (SAZO_ALLOW_APPROVAL_BYPASS=1).
+# "auto" is not accepted by stage_is_passed validator — caller must not pass "auto".
+mark_approval_complete() {
+    local sid="$1" by="$2" reason="$3" cwd="${4:-${SAZO_CWD:-}}"
+    local f
+    f=$(state_file "$sid" "$cwd") || return 1
+    [ -f "$f" ] || state_init "$sid" "$cwd" "${SAZO_MODEL:-unknown}"
+    _with_lock "$f" _mark_approval_complete_inner "$f" "$by" "$reason"
+}
+
+_mark_approval_complete_inner() {
+    local f="$1" by="$2" reason="$3"
+    local now; now=$(date +%Y-%m-%dT%H:%M:%S%z)
+    local tmp; tmp=$(mktemp "${f}.XXXXXX")
+    if jq --arg now "$now" --arg by "$by" --arg reason "$reason" '
+        .plan_approved_at = $now
+        | .history += [{stage: "approval", status: "completed", by: $by, reason: $reason, ts: $now}]
+    ' "$f" > "$tmp"; then mv "$tmp" "$f"; else rm -f "$tmp"; return 1; fi
 }
 
 # ----- hook payload reader -----
