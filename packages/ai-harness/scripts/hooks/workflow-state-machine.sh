@@ -1226,6 +1226,11 @@ EOF_PST
                     # POSIX simple command 문법: `[NAME=word]... command [args]`.
                     # NAME은 `[a-zA-Z_][a-zA-Z0-9_]*` (POSIX 3.231).
                     seg=$(printf '%s' "$seg" | sed -E 's/^([a-zA-Z_][a-zA-Z0-9_]*=[^[:space:]]*[[:space:]]+)+//')
+                    # Codex PR#39 round 3 P2: `env [VAR=val]... cmd` wrapper도 strip.
+                    # `env GH_TOKEN=xxx gh pr merge` 같은 패턴.
+                    if echo "$seg" | grep -qE '^env[[:space:]]+'; then
+                        seg=$(printf '%s' "$seg" | sed -E 's/^env[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*=[^[:space:]]*[[:space:]]+)*//')
+                    fi
                     # 첫 토큰이 gh 이고 그 다음이 pr merge 인지 확인
                     if echo "$seg" | grep -qE '^gh[[:space:]]+pr[[:space:]]+merge\b'; then
                         gh_merge_invoked=1

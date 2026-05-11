@@ -124,6 +124,9 @@ invoke_hook 0 'git branch -av' 'T20r git branch -av (clustered list+verbose) →
 # Codex PR#39 round 2: short upstream flag `-u`
 invoke_hook 2 'git branch -u origin/main' 'T20s git branch -u (short --set-upstream-to) → 차단'
 invoke_hook 2 'git branch -du topic' 'T20t git branch -du (clustered delete + upstream) → 차단'
+# Codex PR#39 round 3: segment boundary — read-only branch + chain의 unrelated `-f`
+invoke_hook 0 'git branch --show-current && echo -f' 'T20u branch --show-current && echo -f → 통과 (chain boundary)'
+invoke_hook 2 'git branch -a && rm -rf tmp.log' 'T20v branch -a && rm ... → 차단 (rm이 별도 mutating filter)'
 
 # T21: cwd 변경 trick — non-git dir + git -C ...
 # 현재 hook은 cd "$SAZO_CWD" → not git → stage_mark auto skip → exit 0.

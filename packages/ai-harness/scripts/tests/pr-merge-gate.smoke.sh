@@ -200,6 +200,15 @@ rm -rf "$SAZO_STATE_DIR"
 rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m12" 'FOO=1 BAR=2 gh pr merge')")
 assert_exit 2 "$rc" "M12: 'FOO=1 BAR=2 gh pr merge' → block (multiple inline assignments)"
 
+# Codex PR#39 round 3: env wrapper
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m13" 'env GH_TOKEN=xxx gh pr merge')")
+assert_exit 2 "$rc" "M13: 'env GH_TOKEN=xxx gh pr merge' → block (env wrapper)"
+
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m14" 'env FOO=1 BAR=2 gh pr merge')")
+assert_exit 2 "$rc" "M14: 'env FOO=1 BAR=2 gh pr merge' → block (env wrapper with multiple assignments)"
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"
