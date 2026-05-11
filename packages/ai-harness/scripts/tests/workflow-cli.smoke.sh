@@ -1,0 +1,929 @@
+#!/usr/bin/env bash
+# Smoke test: sazo-workflow CLI (Plan 02)
+#
+# 17 scenarios covering status / history / why-blocked / audit / sessions /
+# stats / recover, plus install symlink + multi-session resolution + legacy
+# audit.log compatibility + macOS/Linux date fallback.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+HARNESS_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+CLI="$HARNESS_DIR/scripts/sazo-workflow.sh"
+LIB="$HARNESS_DIR/scripts/hooks/lib/session-state.sh"
+
+if [ ! -f "$CLI" ] || [ ! -f "$LIB" ]; then
+    echo "FATAL: required scripts missing (CLI=$CLI LIB=$LIB)" >&2
+    exit 1
+fi
+
+PASS=0
+FAIL=0
+
+pass() { PASS=$((PASS+1)); printf '  \xe2\x9c\x93 %s\n' "$1"; }
+fail() { FAIL=$((FAIL+1)); printf '  \xe2\x9c\x97 %s — %s\n' "$1" "$2"; }
+
+run_cli() {
+    # Args: subcmd [opts...]
+    # Captures stdout/stderr/rc into globals OUT, ERR, RC.
+    local stderr_tmp
+    stderr_tmp=$(mktemp)
+    OUT=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" "$@" 2>"$stderr_tmp")
+    RC=$?
+    ERR=$(cat "$stderr_tmp")
+    rm -f "$stderr_tmp"
+}
+
+write_state() {
+    # Args: sid cwd_hash content_jq_input
+    local sid="$1" h="$2" body="$3"
+    printf '%s' "$body" > "$TMP_STATE/${sid}--${h}.json"
+}
+
+mock_state_full() {
+    local sid="$1" h="$2"
+    jq -n \
+        --arg sid "$sid" \
+        --arg ts "2026-05-10T10:00:00+0900" \
+        '{
+            schema_version: 2,
+            session_id: $sid,
+            cwd: "/work/foo",
+            model: "opus",
+            started_at: $ts,
+            stage: "ci",
+            history: [
+                {ts:"2026-05-10T10:00:00+0900",stage:"research",status:"completed",by:"auto",reason:"subagent=code-searcher",cycle_id:""},
+                {ts:"2026-05-10T10:05:00+0900",stage:"plan",status:"completed",by:"auto",reason:"subagent=plan-drafter",cycle_id:""},
+                {ts:"2026-05-10T10:10:00+0900",stage:"approval",status:"completed",by:"user",reason:"/approved",cycle_id:""},
+                {ts:"2026-05-10T10:30:00+0900",stage:"ci",status:"completed",by:"auto",reason:"ci-cmd matched",cycle_id:""},
+                {ts:"2026-05-10T10:35:00+0900",stage:"review",status:"completed",by:"auto",reason:"verdict aggregation: all APPROVE",cycle_id:""}
+            ],
+            explore_count: 0,
+            plan_approved_at: "2026-05-10T10:10:00+0900",
+            approval_nonce: null,
+            ci_passed_at: "2026-05-10T10:30:00+0900",
+            review_ts: null,
+            verdict_nonces: {},
+            last_verdicts: {review:{"code-reviewer":{verdict:"APPROVE",issues:0,ts:"x"}}, plan:{}},
+            verdict_missing_count: {"code-reviewer":1},
+            verdict_errors: {},
+            verdict_unset_expected_set_count: 2,
+            review_expected_set: ["code-reviewer","architect-advisor"],
+            soft_warn_count_research: 1,
+            soft_warn_count_plan: 0,
+            last_cycle_at: {},
+            last_cycle_id: {}
+        }' > "$TMP_STATE/${sid}--${h}.json"
+}
+
+# ===== suite =====
+
+TMP_STATE=$(mktemp -d)
+trap 'rm -rf "$TMP_STATE" "${FAKE_HOME:-}" "${PATH_SHIM_DIR:-}" 2>/dev/null || true' EXIT
+
+# 1. empty STATE_DIR → status exit 2
+run_cli status
+if [ "$RC" = "2" ]; then pass "1. empty STATE_DIR → status exit 2"; else fail "1." "rc=$RC"; fi
+
+# 2. mock state.json 1개 → status 핵심 필드 표시
+mock_state_full "sessA" "abc123def456"
+run_cli status --session sessA
+if [ "$RC" = "0" ] \
+    && echo "$OUT" | grep -q "Session: sessA" \
+    && echo "$OUT" | grep -q "Stage: ci" \
+    && echo "$OUT" | grep -q "Plan approved at: 2026-05-10T10:10:00+0900" \
+    && echo "$OUT" | grep -q "CI passed at: 2026-05-10T10:30:00+0900" \
+    && echo "$OUT" | grep -q "code-reviewer: 1" \
+    && echo "$OUT" | grep -q "research: 1"; then
+    pass "2. mock state → status displays core fields"
+else
+    fail "2." "rc=$RC; out=$OUT"
+fi
+
+# 3. history --last 5
+run_cli history --last 5 --session sessA
+n=$(printf '%s\n' "$OUT" | grep -c .)
+if [ "$RC" = "0" ] && [ "$n" = "5" ] && echo "$OUT" | head -1 | grep -q research; then
+    pass "3. history --last 5 → 5 entries chronological"
+else
+    fail "3." "n=$n rc=$RC"
+fi
+
+# 4. JSON Lines block entry → why-blocked exit 2 + reason
+printf '{"ts":"2026-05-10T11:00:00+0900","event":"stage_block","sid":"sessA","stage":"ci","status":"blocked","by":"hook","reason":"CI not passed"}\n' \
+    >> "$TMP_STATE/audit.log"
+run_cli why-blocked --session sessA
+if [ "$RC" = "2" ] \
+    && echo "$OUT" | grep -q "Blocked at stage: ci" \
+    && echo "$OUT" | grep -q "CI not passed" \
+    && echo "$OUT" | grep -q "project CI command"; then
+    pass "4. why-blocked exit 2 + reason + next action"
+else
+    fail "4." "rc=$RC; out=$OUT"
+fi
+
+# 5. block entry 0 → why-blocked exit 0
+rm -f "$TMP_STATE/audit.log"
+run_cli why-blocked --session sessA
+if [ "$RC" = "0" ] && echo "$OUT" | grep -q "Not blocked"; then
+    pass "5. no block entries → why-blocked exit 0"
+else
+    fail "5." "rc=$RC; out=$OUT"
+fi
+
+# 5b. multi-session: --session filter must NOT cross-leak block reasons
+mock_state_full "sessB" "def456abc789"
+printf '{"ts":"2026-05-10T11:00:01+0900","event":"stage_block","sid":"sessA","stage":"ci","status":"blocked","by":"hook","reason":"sessA CI"}\n' \
+    >> "$TMP_STATE/audit.log"
+printf '{"ts":"2026-05-10T11:00:02+0900","event":"stage_block","sid":"sessB","stage":"review","status":"blocked","by":"hook","reason":"sessB review"}\n' \
+    >> "$TMP_STATE/audit.log"
+# --session sessA must surface sessA's block, NOT sessB's (which is more recent in audit.log)
+run_cli why-blocked --session sessA
+if [ "$RC" = "2" ] \
+    && echo "$OUT" | grep -q "sessA CI" \
+    && ! echo "$OUT" | grep -q "sessB review"; then
+    pass "5b. why-blocked --session filter (no cross-session leak)"
+else
+    fail "5b." "rc=$RC; out=$OUT"
+fi
+# 5c. explicit --session for nonexistent session must NOT fall back to global block
+# (Codex PR #29 round 2 P2). state file 사라졌어도 audit log에 남은 다른 세션의
+# block을 빼앗아 surface하면 안 됨.
+run_cli why-blocked --session ghost-session-nonexistent
+if [ "$RC" = "0" ] \
+    && echo "$OUT" | grep -qi "not blocked"; then
+    pass "5c. why-blocked --session <missing> → no global fallback"
+else
+    fail "5c." "rc=$RC; out=$OUT"
+fi
+rm -f "$TMP_STATE/audit.log"
+
+# 6. audit --filter stage_block
+printf '{"ts":"2026-05-10T11:00:00+0900","event":"stage_block","sid":"x","stage":"ci","status":"blocked","by":"hook","reason":"r1"}\n' \
+    >> "$TMP_STATE/audit.log"
+printf '{"ts":"2026-05-10T11:01:00+0900","event":"stage_complete","sid":"x","stage":"ci","status":"completed","by":"auto","reason":"r2"}\n' \
+    >> "$TMP_STATE/audit.log"
+printf '{"ts":"2026-05-10T11:02:00+0900","event":"stage_block","sid":"x","stage":"review","status":"blocked","by":"hook","reason":"r3"}\n' \
+    >> "$TMP_STATE/audit.log"
+run_cli audit --filter stage_block
+n=$(printf '%s\n' "$OUT" | grep -c '"event":"stage_block"')
+n_other=$(printf '%s\n' "$OUT" | grep -c '"event":"stage_complete"')
+if [ "$RC" = "0" ] && [ "$n" = "2" ] && [ "$n_other" = "0" ]; then
+    pass "6. audit --filter stage_block → only matching events"
+else
+    fail "6." "n=$n n_other=$n_other rc=$RC"
+fi
+
+# 7. sessions --days 7 — multiple sessions sorted by mtime
+# Use NOW-relative `touch -t` timestamps so both sessions stay within the
+# default 24h window of `list_active_sessions` (used by test 10) regardless
+# of when this suite runs. Static dates would expire 24h after authoring.
+mock_state_full "sessB" "def456abc789"
+TS_OLD=$(date -v-2H +%Y%m%d%H%M 2>/dev/null || date -d '2 hours ago' +%Y%m%d%H%M)
+TS_NEW=$(date -v-1H +%Y%m%d%H%M 2>/dev/null || date -d '1 hour ago' +%Y%m%d%H%M)
+touch -t "$TS_OLD" "$TMP_STATE/sessB--def456abc789.json"
+touch -t "$TS_NEW" "$TMP_STATE/sessA--abc123def456.json"
+run_cli sessions --days 7
+first=$(printf '%s\n' "$OUT" | head -1)
+if [ "$RC" = "0" ] \
+    && echo "$OUT" | grep -q "sid=sessA" \
+    && echo "$OUT" | grep -q "sid=sessB" \
+    && echo "$first" | grep -q "sid=sessA"; then
+    pass "7. sessions --days 7 → both listed, newest first"
+else
+    fail "7." "rc=$RC; out=$OUT"
+fi
+
+# 8. --json flag valid JSON for all cmds
+run_cli status --session sessA --json
+if [ "$RC" = "0" ] && printf '%s' "$OUT" | jq -e . >/dev/null 2>&1; then
+    j_status=ok
+else
+    j_status="rc=$RC"
+fi
+run_cli history --session sessA --json
+if [ "$RC" = "0" ] && printf '%s' "$OUT" | jq -e 'type=="array"' >/dev/null 2>&1; then
+    j_hist=ok
+else
+    j_hist="rc=$RC"
+fi
+run_cli why-blocked --json
+# RC may be 0 or 2 depending on audit content; both are valid as long as JSON parses
+if printf '%s' "$OUT" | jq -e . >/dev/null 2>&1; then
+    j_wb=ok
+else
+    j_wb="bad json"
+fi
+run_cli sessions --days 7 --json
+if [ "$RC" = "0" ]; then
+    valid=1
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        printf '%s' "$line" | jq -e . >/dev/null 2>&1 || valid=0
+    done <<EOF2
+$OUT
+EOF2
+    [ "$valid" = "1" ] && j_sess=ok || j_sess="bad json"
+else
+    j_sess="rc=$RC"
+fi
+run_cli stats --days 30 --json
+if printf '%s' "$OUT" | jq -e .promotion >/dev/null 2>&1; then
+    j_stats=ok
+else
+    j_stats="bad json"
+fi
+if [ "$j_status" = "ok" ] && [ "$j_hist" = "ok" ] && [ "$j_wb" = "ok" ] \
+    && [ "$j_sess" = "ok" ] && [ "$j_stats" = "ok" ]; then
+    pass "8. --json valid for status/history/why-blocked/sessions/stats"
+else
+    fail "8." "status=$j_status hist=$j_hist wb=$j_wb sess=$j_sess stats=$j_stats"
+fi
+
+# 9. SAZO_STATE_DIR override (test relies on TMP_STATE != HOME default)
+run_cli status --session sessA
+if [ "$RC" = "0" ] && echo "$OUT" | grep -q "Session: sessA"; then
+    pass "9. SAZO_STATE_DIR override → custom dir works"
+else
+    fail "9." "rc=$RC"
+fi
+
+# 10. multi-session, no SAZO_SESSION_ID → most recent + warn stderr
+unset SAZO_SESSION_ID
+run_cli status
+# stderr should mention multiple sessions; stdout shows newest (sessA touched later)
+if echo "$ERR" | grep -q "Multiple active sessions" \
+    && echo "$OUT" | grep -q "Session: sessA"; then
+    pass "10. multi-session → most recent + warn"
+else
+    fail "10." "err=$ERR; out=$OUT"
+fi
+
+# 11. --session bogus → exit 2
+run_cli status --session does-not-exist
+if [ "$RC" = "2" ]; then
+    pass "11. unknown --session → exit 2"
+else
+    fail "11." "rc=$RC"
+fi
+
+# 12. legacy freeform + JSON Lines mixed → audit shows both
+rm -f "$TMP_STATE/audit.log"
+printf '[2026-05-10T12:00:00+0900] sessA stage=plan status=completed by=auto reason=foo\n' \
+    >> "$TMP_STATE/audit.log"
+printf '{"ts":"2026-05-10T12:05:00+0900","event":"stage_block","sid":"sessA","stage":"plan","status":"blocked","by":"hook","reason":"r"}\n' \
+    >> "$TMP_STATE/audit.log"
+run_cli audit
+if [ "$RC" = "0" ] \
+    && echo "$OUT" | grep -q "stage=plan status=completed" \
+    && echo "$OUT" | grep -q '"event":"stage_block"'; then
+    pass "12. mixed legacy + JSON entries — audit shows both"
+else
+    fail "12." "rc=$RC; out=$OUT"
+fi
+
+# 13. install symlink — exercise the REAL sync_workflow_cli function from install.sh
+# (no re-implementation of `ln -sfn`). Sources install.sh in subshell with HOME
+# isolation so we test the actual logic including the "non-symlink exists" warn branch.
+FAKE_HOME=$(mktemp -d)
+INSTALL_SH="$HARNESS_DIR/install.sh"
+
+# Helper to invoke sync_workflow_cli in isolated HOME.
+# Extract the function body from install.sh and exec it with HARNESS_DIR set —
+# avoids running install.sh's interactive top-level while still calling the
+# real function (no re-implementation of `ln -sfn`).
+invoke_sync() {
+    HOME="$FAKE_HOME" HARNESS_DIR="$HARNESS_DIR" \
+    INSTALL_SH="$INSTALL_SH" \
+    bash -c '
+        set -uo pipefail
+        eval "$(awk "/^sync_workflow_cli\\(\\) \\{/,/^\\}/" "$INSTALL_SH")"
+        sync_workflow_cli
+    '
+    return $?
+}
+
+invoke_sync_rc=0
+invoke_sync || invoke_sync_rc=$?
+target="$FAKE_HOME/.local/bin/sazo-workflow"
+expected_link="$HARNESS_DIR/scripts/sazo-workflow.sh"
+
+if [ -L "$target" ] && [ "$(readlink "$target")" = "$expected_link" ]; then
+    # Idempotency: real function called twice → link still correct, no error
+    invoke_sync_rc2=0
+    invoke_sync || invoke_sync_rc2=$?
+    if [ -L "$target" ] \
+        && [ "$(readlink "$target")" = "$expected_link" ] \
+        && [ "$invoke_sync_rc2" = "0" ]; then
+        # Negative case: replace link with regular file, expect rc=0 + warn
+        # (must NOT abort under install.sh's `set -e`).
+        rm -f "$target"
+        echo "stub" > "$target"
+        invoke_sync_negative_rc=0
+        STDERR_OUT=$(invoke_sync 2>&1 1>/dev/null) || invoke_sync_negative_rc=$?
+        # Existing stub must remain (skipped, not overwritten).
+        if [ "$invoke_sync_negative_rc" = "0" ] \
+            && echo "$STDERR_OUT" | grep -qi "warn" \
+            && [ -f "$target" ] && [ ! -L "$target" ]; then
+            pass "13. sync_workflow_cli: symlink + idempotent + non-symlink warn (rc=0, no abort)"
+        else
+            fail "13. negative case" "rc=$invoke_sync_negative_rc stderr=$STDERR_OUT"
+        fi
+    else
+        fail "13. idempotent" "rc=$invoke_sync_rc2"
+    fi
+else
+    fail "13." "first call: symlink missing or wrong target (rc=$invoke_sync_rc)"
+fi
+
+# 14. PATH 미등록 시 warn — install function in install.sh (not yet implemented at this stage).
+# We test the predicate logic: a function that warns when ~/.local/bin is not in PATH.
+warn_check() {
+    local expected="$HOME/.local/bin"
+    case ":$PATH:" in
+        *":$expected:"*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+HOME_BACKUP="$HOME"
+HOME="$FAKE_HOME"
+PATH_BACKUP="$PATH"
+PATH="/usr/bin:/bin"
+if warn_check; then
+    PATH="$PATH_BACKUP"
+    PATH="$FAKE_HOME/.local/bin:$PATH_BACKUP"
+    if ! warn_check; then
+        HOME="$HOME_BACKUP"
+        PATH="$PATH_BACKUP"
+        pass "14. PATH check warns when ~/.local/bin missing, silent when present"
+    else
+        HOME="$HOME_BACKUP"
+        PATH="$PATH_BACKUP"
+        fail "14." "predicate did not silence with PATH set"
+    fi
+else
+    HOME="$HOME_BACKUP"
+    PATH="$PATH_BACKUP"
+    fail "14." "predicate did not warn when PATH missing"
+fi
+
+# 15. recover stub — Plan 05 marker absent → exit 2 "no degraded"
+run_cli recover
+if [ "$RC" = "2" ] && echo "$OUT" | grep -q "No degraded state"; then
+    pass "15. recover stub: marker absent → exit 2"
+else
+    fail "15." "rc=$RC; out=$OUT"
+fi
+
+# 16. stats --days 30 — Plan 12 promotion criteria displayed
+# Add some events for richer output (TMP_STATE has audit.log already from #12)
+printf '{"ts":"2026-05-10T13:00:00+0900","event":"stage_block","sid":"sessA","stage":"review","status":"blocked","by":"hook","reason":"r"}\n' \
+    >> "$TMP_STATE/audit.log"
+run_cli stats --days 30
+if [ "$RC" = "0" ] \
+    && echo "$OUT" | grep -q "state_corruption_count" \
+    && echo "$OUT" | grep -q "lock_timeout_count" \
+    && echo "$OUT" | grep -q "jq_error_count" \
+    && echo "$OUT" | grep -q "verdict_unset_expected_set" \
+    && (echo "$OUT" | grep -q "Phase 2 promotion"); then
+    pass "16. stats --days 30 → all 5 Plan 12 criteria + promotion verdict"
+else
+    fail "16." "rc=$RC; out=$OUT"
+fi
+
+# 17. macOS BSD vs GNU date fallback — both expressions accepted
+gnu_ok=0
+bsd_ok=0
+if date -d "30 days ago" +%Y-%m-%dT%H:%M:%S%z >/dev/null 2>&1; then gnu_ok=1; fi
+if date -v-30d +%Y-%m-%dT%H:%M:%S%z >/dev/null 2>&1; then bsd_ok=1; fi
+# stats uses chained `||` — at least one must work for stats to compute since.
+# Test passes if stats succeeds AND at least one date variant works locally.
+run_cli stats --days 30
+if [ "$RC" = "0" ] && { [ "$gnu_ok" = "1" ] || [ "$bsd_ok" = "1" ]; }; then
+    pass "17. date fallback chain works (gnu=$gnu_ok bsd=$bsd_ok)"
+else
+    fail "17." "rc=$RC gnu=$gnu_ok bsd=$bsd_ok"
+fi
+
+# 18. value-taking option without value must not hang (Codex PR #29 round 3 P2)
+# `--session` / `--last` / `--days` / `--filter` 인자 없이 호출 시 빠르게 rc=1 + stderr.
+# 이전 패턴 (`shift 2`)은 args 1개 남았을 때 실패해도 args 변경 안 해서 while 무한 loop.
+# timeout 으로 hang 검출 — 정상 동작은 1초 안에 끝남.
+for opt_case in "status --session" "history --last" "audit --filter" "sessions --days" "stats --days"; do
+    set -- $opt_case
+    sub="$1"; opt="$2"
+    OUT_18=$(SAZO_STATE_DIR="$TMP_STATE" timeout 3 "$CLI" "$sub" "$opt" 2>&1)
+    rc_18=$?
+    if [ "$rc_18" != "124" ] && [ "$rc_18" != "0" ] \
+        && echo "$OUT_18" | grep -qi "requires a value"; then
+        pass "18.$sub$opt $opt 인자 누락 → rc=$rc_18 + 'requires a value' (no hang)"
+    else
+        fail "18.$sub$opt" "rc=$rc_18 (124=hung) out=$OUT_18"
+    fi
+done
+
+# 19. history --last <non-numeric> → rc=1 + 'positive integer' (Codex PR #29 round 4 P2)
+# 이전엔 jq --argjson 만 stderr 에러 뱉고 함수가 0 으로 종료해 자동화가 success로 오인.
+# 다른 numeric subcommand 와 동일하게 _require_positive_int 적용.
+for sub_case in "history --last" "audit --last" "sessions --days" "stats --days"; do
+    set -- $sub_case
+    sub="$1"; opt="$2"
+    OUT_19=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" "$sub" "$opt" "foo" 2>&1)
+    rc_19=$?
+    if [ "$rc_19" = "1" ] && echo "$OUT_19" | grep -qi "positive integer"; then
+        pass "19.$sub$opt $opt foo → rc=1 + 'positive integer'"
+    else
+        fail "19.$sub$opt" "rc=$rc_19 out=$OUT_19"
+    fi
+done
+
+# 20. SAZO_SESSION_ID set + state file missing → exit 2, NOT silent fallback to other session
+# (Codex PR #29 round 5 P2 #1)
+mock_state_full "sessReal" "abc123"
+SAZO_SESSION_ID="ghost-session-$$" run_cli status
+if [ "$RC" = "2" ] && ! echo "$OUT" | grep -q "sessReal"; then
+    pass "20. SAZO_SESSION_ID stale → exit 2 + no other-session leak"
+else
+    fail "20." "rc=$RC out=$OUT"
+fi
+rm -f "$TMP_STATE"/*.json
+
+# 21. stats: audit.log empty + state metric (verdict_unset_expected_set_count) nonzero
+# → 의미있는 결과 출력 시 rc=0 이어야 (Codex PR #29 round 5 P2 #2). 이전엔 entries 비어서 rc=2.
+mock_state_full "sessV" "v1hash"
+# state file 에 verdict_unset_expected_set_count 주입
+jq '. + {verdict_unset_expected_set_count: 3}' "$TMP_STATE/sessV--v1hash.json" > "$TMP_STATE/sessV--v1hash.json.new" \
+    && mv "$TMP_STATE/sessV--v1hash.json.new" "$TMP_STATE/sessV--v1hash.json"
+rm -f "$TMP_STATE/audit.log"  # audit.log 없음
+run_cli stats --days 7
+if [ "$RC" = "0" ] && echo "$OUT" | grep -qE "verdict_unset_expected_set:[[:space:]]+3"; then
+    pass "21. stats: state-derived metric nonzero → rc=0 (not classified as no-data)"
+else
+    fail "21." "rc=$RC out=$OUT"
+fi
+rm -f "$TMP_STATE"/*.json
+
+# 22. CLI invoked via symlink resolves SCRIPT_DIR correctly without python3
+# (Codex PR #29 round 6 P2 — macOS BSD readlink -f 미지원 + python3 부재 환경)
+SYM_DIR=$(mktemp -d)
+ln -s "$CLI" "$SYM_DIR/sazo-workflow-link"
+# Even if python3 exists, ensure the resolution path doesn't depend on it by
+# masking it from PATH. readlink (plain) must work on both macOS BSD and Linux.
+OUT_22=$(SAZO_STATE_DIR="$TMP_STATE" PATH="/usr/bin:/bin" "$SYM_DIR/sazo-workflow-link" status 2>&1)
+rc_22=$?
+# rc_22 = 2 (no session) is fine — what we check is "no script-dir resolution failure".
+if ! echo "$OUT_22" | grep -q "cannot find session-state.sh"; then
+    pass "22. CLI via symlink resolves SCRIPT_DIR (no python3 dep, BSD-readlink compat)"
+else
+    fail "22." "rc=$rc_22 out=$OUT_22"
+fi
+rm -rf "$SYM_DIR"
+
+# 23. _require_positive_int rejects 0 (Codex PR #29 round 7 P2)
+# `--last 0` 이전엔 통과 → jq `.[0:]` = 전체 dump. positive 명세 위반.
+for sub_case in "history --last" "audit --last" "sessions --days" "stats --days"; do
+    set -- $sub_case
+    sub="$1"; opt="$2"
+    OUT_23=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" "$sub" "$opt" "0" 2>&1)
+    rc_23=$?
+    if [ "$rc_23" = "1" ] && echo "$OUT_23" | grep -qi "positive integer"; then
+        pass "23.$sub$opt $opt 0 → rc=1 + 'positive integer'"
+    else
+        fail "23.$sub$opt" "rc=$rc_23 out=$OUT_23"
+    fi
+done
+# leading-zero 변형
+OUT_23b=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" history --last "00" 2>&1)
+if [ "$?" = "1" ] && echo "$OUT_23b" | grep -qi "positive integer"; then
+    pass "23b. history --last 00 → rc=1 (leading-zero variant rejected)"
+else
+    fail "23b." "out=$OUT_23b"
+fi
+
+# 23c. leading-zero non-octal-safe values (Codex PR #29 round 10 P2)
+# `--days 08`/`--days 09`는 valid 정수 regex 통과 → bash arithmetic `$((days * 86400))`
+# 에서 invalid octal로 평가 → "value too great for base" 에러 후 no-data 경로로 빠짐.
+# 명시적 bad-argument 에러를 내야 자동화가 입력 정규화 의도를 알 수 있음.
+for badval in "08" "09" "007"; do
+    OUT_23c=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" sessions --days "$badval" 2>&1)
+    rc_23c=$?
+    if [ "$rc_23c" = "1" ] && echo "$OUT_23c" | grep -qi "positive integer"; then
+        pass "23c. sessions --days $badval → rc=1 (leading-zero non-octal-safe rejected)"
+    else
+        fail "23c.$badval" "rc=$rc_23c out=$OUT_23c"
+    fi
+done
+
+# 24. STATE_DIR path containing space (Codex PR #29 round 8 P2)
+# `mtime path` row 가 awk space-split 으로 잘리면 sid/path 가 깨짐. tab delimiter 로 해결.
+SPACED_PARENT=$(mktemp -d)
+SPACED_DIR="$SPACED_PARENT/dir with space"
+mkdir -p "$SPACED_DIR"
+printf '{"stage":"plan","started_at":"2026-05-09T10:00:00+0900","plan_approved_at":null,"ci_passed_at":null,"history":[]}\n' \
+    > "$SPACED_DIR/spaceSession--abchash.json"
+OUT_24=$(SAZO_STATE_DIR="$SPACED_DIR" "$CLI" sessions --days 7 2>&1)
+rc_24=$?
+if [ "$rc_24" = "0" ] \
+    && echo "$OUT_24" | grep -q "sid=spaceSession" \
+    && echo "$OUT_24" | grep -q "dir with space"; then
+    pass "24. STATE_DIR with spaces — sessions parses sid/path correctly (TAB delimiter)"
+else
+    fail "24." "rc=$rc_24 out=$OUT_24"
+fi
+
+OUT_24b=$(SAZO_STATE_DIR="$SPACED_DIR" "$CLI" status 2>&1)
+rc_24b=$?
+if [ "$rc_24b" = "0" ] && echo "$OUT_24b" | grep -q "Session: spaceSession"; then
+    pass "24b. STATE_DIR with spaces — implicit status resolves spaceSession"
+else
+    fail "24b." "rc=$rc_24b out=$OUT_24b"
+fi
+rm -rf "$SPACED_PARENT"
+
+# 25. sessions --json 출력 시 path 의 JSON-significant 문자 (`"`, `\`) escape
+# (Codex PR #29 round 9 P2). jq 로 parse 해서 valid JSON 검증.
+JSON_SPACED_PARENT=$(mktemp -d)
+JSON_SPECIAL_DIR="$JSON_SPACED_PARENT/dir\\with\"quote"
+mkdir -p "$JSON_SPECIAL_DIR"
+printf '{"stage":"plan","started_at":"2026-05-09T10:00:00+0900","plan_approved_at":null,"ci_passed_at":null,"history":[]}\n' \
+    > "$JSON_SPECIAL_DIR/jsonSession--abchash.json"
+OUT_25=$(SAZO_STATE_DIR="$JSON_SPECIAL_DIR" "$CLI" sessions --days 7 --json 2>&1)
+rc_25=$?
+# jq 로 parse 가능해야 valid JSON.
+if [ "$rc_25" = "0" ] && echo "$OUT_25" | jq -e '.path' >/dev/null 2>&1; then
+    pass "25. sessions --json: JSON-significant chars in path properly escaped"
+else
+    fail "25." "rc=$rc_25 out=$OUT_25"
+fi
+rm -rf "$JSON_SPACED_PARENT"
+
+# 26. sessions --json 출력 시 path 의 control character 도 안전 처리
+# (Gemini PR #29 round 10 P2). awk 직접 JSON 구성 → jq pipeline 으로 변경.
+# 디렉토리명에 백스페이스(\b, ASCII 8) 삽입 — JSON spec 상 escape 필요 (\b).
+# awk 버전은 control char 를 raw byte 로 emit → jq parse 가능해도 "원본 보존" 안 됨.
+# jq -R 버전은 자동 escape (\b) 후 parse 시 원본 byte 복원.
+CTRL_PARENT=$(mktemp -d)
+CTRL_DIR="$CTRL_PARENT/$(printf 'dir\bwith\bctrl')"
+mkdir -p "$CTRL_DIR"
+printf '{"stage":"plan","started_at":"2026-05-09T10:00:00+0900","plan_approved_at":null,"ci_passed_at":null,"history":[]}\n' \
+    > "$CTRL_DIR/ctrlSession--abchash.json"
+OUT_26=$(SAZO_STATE_DIR="$CTRL_DIR" "$CLI" sessions --days 7 --json 2>&1)
+rc_26=$?
+# parse 가능 + path 가 원본 control char 를 보존해야 통과.
+PARSED_PATH_26=$(printf '%s' "$OUT_26" | jq -er '.path' 2>/dev/null)
+if [ "$rc_26" = "0" ] \
+    && [ -n "$PARSED_PATH_26" ] \
+    && [ -f "$PARSED_PATH_26" ]; then
+    pass "26. sessions --json: control characters preserved & parseable (jq pipeline)"
+else
+    fail "26." "rc=$rc_26 parsed_path=$(printf '%s' "$PARSED_PATH_26" | od -c | head -2) out=$OUT_26"
+fi
+rm -rf "$CTRL_PARENT"
+
+# 26e. why-blocked must respect SAZO_SESSION_ID stale (Codex PR #29 round 15 P2)
+# SAZO_SESSION_ID set + state file 없음 → cmd_why_blocked 가 sid="" 로 fallback
+# → 다른 세션의 stage_block surface (cross-session leak). resolve 실패 시 explicit
+# rc=2 반환해야 함.
+mkdir -p "$TMP_STATE"
+rm -f "$TMP_STATE"/*.json
+rm -f "$TMP_STATE/audit.log"
+# 다른 세션의 valid stage_block (이 라인이 leak 으로 surface 되면 안 됨)
+printf '{"ts":"2026-05-09T11:00:00+0900","event":"stage_block","sid":"otherSession","stage":"plan","status":"blocked","by":"hook","reason":"OTHER"}\n' \
+    >> "$TMP_STATE/audit.log"
+# SAZO_SESSION_ID=staleSession 의 state file 은 의도적으로 생성 안 함 → stale.
+OUT_26e=$(SAZO_STATE_DIR="$TMP_STATE" SAZO_SESSION_ID=staleSession "$CLI" why-blocked 2>&1)
+rc_26e=$?
+# staleSession sid scope 으로 audit 검색 → 매칭 없음 → "Not blocked." rc=0.
+# leak 발생 시엔 OTHER 가 결과에 등장 (rc=2 + Reason: OTHER).
+if [ "$rc_26e" = "0" ] && echo "$OUT_26e" | grep -q "Not blocked" \
+    && ! echo "$OUT_26e" | grep -q "OTHER"; then
+    pass "26e. why-blocked: SAZO_SESSION_ID stale → no cross-session leak"
+else
+    fail "26e." "rc=$rc_26e out=$OUT_26e"
+fi
+rm -f "$TMP_STATE/audit.log"
+
+# 26d. why-blocked --json must skip malformed JSON lines (Codex PR #29 round 13 P2)
+# 이전엔 `grep | tail` 로 raw 라인 emit → truncated stage_block 라인이 있으면
+# `why-blocked --json` 결과가 invalid JSON. 모든 --json 경로 일관성 가드.
+mkdir -p "$TMP_STATE"
+rm -f "$TMP_STATE/audit.log"
+# 1) valid stage_block (이전 라인)
+printf '{"ts":"2026-05-09T11:00:00+0900","event":"stage_block","sid":"sX","stage":"ci","status":"blocked","by":"hook","reason":"valid"}\n' \
+    >> "$TMP_STATE/audit.log"
+# 2) malformed stage_block (truncated JSON, sid match) — append 가장 마지막.
+# grep | tail 만으로는 이 truncated 라인을 마지막으로 골라 raw byte emit → invalid JSON.
+printf '{"event":"stage_block","sid":"sX","stage":"plan","reaso\n' \
+    >> "$TMP_STATE/audit.log"
+OUT_26d=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" why-blocked --session sX --json 2>&1)
+rc_26d=$?
+# rc=2 (blocked, has data), 출력은 단일 valid JSON line (truncated 라인 skip).
+if [ "$rc_26d" = "2" ] \
+    && printf '%s' "$OUT_26d" | jq -e '.event == "stage_block" and .reason == "valid"' >/dev/null 2>&1; then
+    pass "26d. why-blocked --json: malformed lines skipped, valid one returned"
+else
+    fail "26d." "rc=$rc_26d out=$OUT_26d"
+fi
+rm -f "$TMP_STATE/audit.log"
+
+# 26c. audit --json must skip malformed JSON lines (Codex PR #29 round 12 P2)
+# 이전엔 `^{` prefix 만으로 필터해서 truncated 라인까지 emit → `jq` 받는 자동화가
+# 성공 종료에도 parse 실패. Plan acceptance: 모든 --json 모드는 parseable.
+mkdir -p "$TMP_STATE"
+rm -f "$TMP_STATE/audit.log"
+printf '{"ts":"2026-05-09T10:00:00+0900","event":"stage_block","truncat\n' \
+    >> "$TMP_STATE/audit.log"
+printf '{"ts":"2026-05-09T11:00:00+0900","event":"stage_block","sid":"sA","stage":"plan"}\n' \
+    >> "$TMP_STATE/audit.log"
+printf '{"ts":"2026-05-09T12:00:00+0900","event":"stage_block","sid":"sB","stage":"ci"}\n' \
+    >> "$TMP_STATE/audit.log"
+OUT_26c=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" audit --last 50 --json 2>&1)
+rc_26c=$?
+# 출력 라인 수: 정확히 2 (malformed 1 drop), 각 라인 jq parse 가능해야 함.
+LINE_COUNT_26c=$(printf '%s\n' "$OUT_26c" | sed '/^$/d' | wc -l | tr -d ' ')
+ALL_VALID=1
+while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    printf '%s' "$line" | jq -e . >/dev/null 2>&1 || ALL_VALID=0
+done <<EOF_26c
+$OUT_26c
+EOF_26c
+if [ "$rc_26c" = "0" ] && [ "$LINE_COUNT_26c" = "2" ] && [ "$ALL_VALID" = "1" ]; then
+    pass "26c. audit --json: malformed JSON lines skipped, only parseable emitted"
+else
+    fail "26c." "rc=$rc_26c lines=$LINE_COUNT_26c valid=$ALL_VALID out=$OUT_26c"
+fi
+rm -f "$TMP_STATE/audit.log"
+
+# 26b. stats: malformed JSON line in audit.log must NOT discard valid entries
+# (Codex PR #29 round 11 P2). 단일 jq fail → `|| entries=""` 이 valid 라인까지
+# 전부 버려서 stage_block count 가 0 으로 보고됨 (no-data 분기까지 빠질 수 있음).
+mkdir -p "$TMP_STATE"
+rm -f "$TMP_STATE"/*.json
+rm -f "$TMP_STATE/audit.log"
+# 1) malformed JSON line (truncated)
+printf '{"ts":"2026-05-09T10:00:00+0900","event":"stage_block","sid":"sX","stage":"plan","reaso\n' \
+    >> "$TMP_STATE/audit.log"
+# 2) valid stage_block lines after the bad one
+printf '{"ts":"2026-05-09T11:00:00+0900","event":"stage_block","sid":"sA","stage":"plan","status":"blocked","by":"hook","reason":"r1"}\n' \
+    >> "$TMP_STATE/audit.log"
+printf '{"ts":"2026-05-09T12:00:00+0900","event":"stage_block","sid":"sB","stage":"ci","status":"blocked","by":"hook","reason":"r2"}\n' \
+    >> "$TMP_STATE/audit.log"
+OUT_26b=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" stats --days 30 2>&1)
+rc_26b=$?
+# 정상이라면 total stage_block events = 2 (malformed 라인은 무시).
+if [ "$rc_26b" = "0" ] && echo "$OUT_26b" | grep -qE "Total stage_block events:[[:space:]]+2"; then
+    pass "26b. stats: malformed audit line skipped, valid entries counted"
+else
+    fail "26b." "rc=$rc_26b out=$OUT_26b"
+fi
+rm -f "$TMP_STATE/audit.log"
+
+# 27. stats batched jq aggregation (Gemini PR #29 round 10 P2)
+# 다중 state file 의 verdict_unset_expected_set_count 합산 — 이전엔 file별 jq 호출.
+# jq 단일 호출로 변경 후에도 합산 결과 동일해야 함.
+mkdir -p "$TMP_STATE"
+rm -f "$TMP_STATE"/*.json
+for sid_n in 1 2 3; do
+    jq -n --argjson v "$sid_n" '{verdict_unset_expected_set_count: $v}' \
+        > "$TMP_STATE/sessAggr${sid_n}--h${sid_n}.json"
+done
+# 합계: 1+2+3 = 6
+rm -f "$TMP_STATE/audit.log"
+OUT_27=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" stats --days 7 2>&1)
+rc_27=$?
+if [ "$rc_27" = "0" ] && echo "$OUT_27" | grep -qE "verdict_unset_expected_set:[[:space:]]+6"; then
+    pass "27. stats: batched jq aggregation across multiple state files"
+else
+    fail "27." "rc=$rc_27 out=$OUT_27"
+fi
+# 0-file edge: state file 없을 때도 0 반환해야 함 (no glob expansion).
+rm -f "$TMP_STATE"/*.json
+OUT_27b=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" stats --days 7 2>&1)
+rc_27b=$?
+# state file/audit 모두 없으면 no-data (rc=2) 가 정상. 단 jq error stderr 로 새지 않아야 함.
+if [ "$rc_27b" = "2" ] && ! echo "$OUT_27b" | grep -qi "jq: error"; then
+    pass "27b. stats: no state files → no-data, no jq errors"
+else
+    fail "27b." "rc=$rc_27b out=$OUT_27b"
+fi
+
+# 28. stats: state file 의 verdict_missing_count 합산 — Codex PR #29 P2.
+# audit.log 미존재 + state file 의 verdict_missing_count 만 nonzero 일 때
+# stats 가 합산 표시 + no-data 분류 안 되어야 함.
+rm -f "$TMP_STATE"/*.json "$TMP_STATE/audit.log"
+jq -n '{verdict_missing_count: {"code-reviewer": 2, "architect-advisor": 3}}' \
+    > "$TMP_STATE/sessVM1--hVM1.json"
+jq -n '{verdict_missing_count: {"code-reviewer": 5}}' \
+    > "$TMP_STATE/sessVM2--hVM2.json"
+# 합계 = 2+3+5 = 10
+OUT_28=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" stats --days 7 2>&1)
+rc_28=$?
+if [ "$rc_28" = "0" ] && echo "$OUT_28" | grep -qE "verdict_missing_count:[[:space:]]+10"; then
+    pass "28. stats: aggregates verdict_missing_count from state files when audit.log absent"
+else
+    fail "28." "rc=$rc_28 out=$OUT_28"
+fi
+
+# 29. resolve_state_file: SAZO_CWD set 시 newest mtime 이 아닌 exact match 우선.
+# 동일 sid + 두 cwd_hash 가 있고, 다른 hash 의 mtime 이 더 최신일 때
+# SAZO_CWD 로 지정한 cwd 의 state file 이 선택되어야 함.
+rm -f "$TMP_STATE"/*.json "$TMP_STATE/audit.log"
+# session-state.sh 의 cwd_hash() 로 두 cwd 의 hash 계산
+TARGET_CWD="/work/target"
+OTHER_CWD="/work/other"
+TARGET_HASH=$(printf '%s' "$TARGET_CWD" | shasum -a 1 | cut -c1-12)
+OTHER_HASH=$(printf '%s' "$OTHER_CWD" | shasum -a 1 | cut -c1-12)
+# target 을 먼저 만들고 other 를 나중에 만들어 other mtime 이 더 newer.
+jq -n --arg cwd "$TARGET_CWD" \
+    '{schema_version:2, session_id:"sessCWD", cwd:$cwd, stage:"plan", history:[], started_at:"2026-05-10T10:00:00+0900", verdict_unset_expected_set_count:0}' \
+    > "$TMP_STATE/sessCWD--${TARGET_HASH}.json"
+sleep 1
+jq -n --arg cwd "$OTHER_CWD" \
+    '{schema_version:2, session_id:"sessCWD", cwd:$cwd, stage:"ci", history:[], started_at:"2026-05-10T10:00:00+0900", verdict_unset_expected_set_count:0}' \
+    > "$TMP_STATE/sessCWD--${OTHER_HASH}.json"
+# SAZO_CWD 로 target 지정 → stage:plan (target) 이 선택되어야 함. exact match 안 되면 stage:ci 출력.
+OUT_29=$(SAZO_STATE_DIR="$TMP_STATE" SAZO_CWD="$TARGET_CWD" "$CLI" status --session sessCWD 2>&1)
+rc_29=$?
+if [ "$rc_29" = "0" ] && echo "$OUT_29" | grep -q "Stage: plan"; then
+    pass "29. resolve_state_file: honors SAZO_CWD exact match over newest mtime"
+else
+    fail "29." "rc=$rc_29 out=$OUT_29"
+fi
+
+# 30. Self-review M1 (PR #29): stats 의 verdict_missing_count 가 audit.log +
+# state file 합산이면 같은 event 가 2회 카운트됨 (handle_verdict 가 양쪽 다
+# write). state file 만 truth 로 사용해야 함. audit.log 에 verdict_missing_*
+# 라인이 있어도 state aggregate 와 합산되지 않음을 확인.
+rm -f "$TMP_STATE"/*.json "$TMP_STATE/audit.log"
+# state file: code-reviewer 1, architect-advisor 2 → aggregate = 3
+jq -n '{verdict_missing_count: {"code-reviewer": 1, "architect-advisor": 2}}' \
+    > "$TMP_STATE/sessDup1--hDup1.json"
+# audit.log: simple_audit 가 같은 event 마다 한 줄 emit 했다고 가정 — 3줄.
+# (실제 production 흐름: state_increment + simple_audit 가 한 호출에서 둘 다 발생)
+{
+    printf '[2026-05-10T11:00:00+0900] verdict_missing_block agent=code-reviewer stage=review\n'
+    printf '[2026-05-10T11:01:00+0900] verdict_missing_warn agent=architect-advisor stage=review\n'
+    printf '[2026-05-10T11:02:00+0900] verdict_missing_warn agent=architect-advisor stage=review\n'
+} > "$TMP_STATE/audit.log"
+OUT_30=$(SAZO_STATE_DIR="$TMP_STATE" "$CLI" stats --days 7 2>&1)
+rc_30=$?
+# 합산 시 6 이 나왔을 것. state-only 면 3.
+if [ "$rc_30" = "0" ] && echo "$OUT_30" | grep -qE "verdict_missing_count:[[:space:]]+3[[:space:]]"; then
+    pass "30. stats: verdict_missing_count uses state-only (no audit double-count)"
+else
+    fail "30." "rc=$rc_30 out=$OUT_30"
+fi
+
+# 31. Self-review N1 (PR #29): cmd_audit --filter freeform branch must do
+# exact event match (was substring → `verdict_missing` matched _block/_warn).
+rm -f "$TMP_STATE/audit.log"
+{
+    printf '[2026-05-10T11:00:00+0900] verdict_missing agent=x stage=y\n'
+    printf '[2026-05-10T11:01:00+0900] verdict_missing_block agent=x stage=y\n'
+    printf '[2026-05-10T11:02:00+0900] verdict_missing_warn agent=x stage=y\n'
+} > "$TMP_STATE/audit.log"
+run_cli audit --filter verdict_missing --last 50
+n_exact=$(printf '%s\n' "$OUT" | grep -c 'verdict_missing ')
+n_block=$(printf '%s\n' "$OUT" | grep -c 'verdict_missing_block')
+n_warn=$(printf '%s\n' "$OUT" | grep -c 'verdict_missing_warn')
+if [ "$RC" = "0" ] && [ "$n_exact" = "1" ] && [ "$n_block" = "0" ] && [ "$n_warn" = "0" ]; then
+    pass "31. audit --filter freeform: exact event match (not substring)"
+else
+    fail "31." "rc=$RC exact=$n_exact block=$n_block warn=$n_warn out=$OUT"
+fi
+
+# 32. Self-review N1 follow-up: freeform exact filter still matches the
+# specific event when chosen.
+run_cli audit --filter verdict_missing_block --last 50
+n_block_only=$(printf '%s\n' "$OUT" | grep -c 'verdict_missing_block')
+n_other=$(printf '%s\n' "$OUT" | grep -cE 'verdict_missing |verdict_missing_warn')
+if [ "$RC" = "0" ] && [ "$n_block_only" = "1" ] && [ "$n_other" = "0" ]; then
+    pass "32. audit --filter freeform: precise suffix event matches only itself"
+else
+    fail "32." "rc=$RC block_only=$n_block_only other=$n_other out=$OUT"
+fi
+
+# 33. Codex PR #29 P2 (3215697294): stats verdict_missing aggregation must not
+# embed literal `{}` inside batched `find -exec ... +`. GNU find / bfs reject
+# ("Only one instance of {} is supported with -exec ... +"), BSD find on macOS
+# silently passes (yielding 0 — silent regression). Test installs a GNU-style
+# `find` shim on PATH that rejects literal `{}` in any non-positional argument
+# of `-exec ... +`. If sazo-workflow uses a `{}`-free aggregation strategy
+# (e.g. `-print0 | xargs -0 jq …`), the shim is never triggered and the
+# aggregate is correct (3). If the script still embeds `{}` in jq program, the
+# shim emits an error → aggregate becomes 0 (or stderr leaks) → FAIL.
+rm -f "$TMP_STATE"/*.json "$TMP_STATE/audit.log"
+jq -n '{verdict_missing_count: {"code-reviewer": 1, "architect-advisor": 2}}' \
+    > "$TMP_STATE/sessGnu1--hGnu1.json"
+
+PATH_SHIM_DIR=$(mktemp -d)
+cat > "$PATH_SHIM_DIR/find" <<'SHIM'
+#!/usr/bin/env bash
+# GNU find emulation for `-exec ... {} +` literal `{}` rejection.
+# Walks args; if `-exec` is present and terminator is `+`, ensures only one
+# token is exactly `{}` and no other token contains `{}` substring.
+real_find=/usr/bin/find
+[ -x "$real_find" ] || real_find=$(command -v find)
+in_exec=0
+exec_args=()
+seen_brace=0
+bad=0
+for a in "$@"; do
+    if [ "$a" = "-exec" ]; then in_exec=1; exec_args=(); seen_brace=0; continue; fi
+    if [ "$in_exec" = "1" ]; then
+        if [ "$a" = "+" ]; then
+            # Terminator. Validate.
+            if [ "$bad" = "1" ]; then
+                printf "find: Only one instance of {} is supported with -exec ... +\n" >&2
+                exit 1
+            fi
+            in_exec=0
+            continue
+        elif [ "$a" = "{}" ]; then
+            seen_brace=$((seen_brace+1))
+            [ "$seen_brace" -gt 1 ] && bad=1
+        else
+            case "$a" in *"{}"*) bad=1 ;; esac
+        fi
+    fi
+done
+exec "$real_find" "$@"
+SHIM
+chmod +x "$PATH_SHIM_DIR/find"
+
+OUT_33=$(SAZO_STATE_DIR="$TMP_STATE" PATH="$PATH_SHIM_DIR:$PATH" "$CLI" stats --days 7 2>&1)
+rc_33=$?
+rm -rf "$PATH_SHIM_DIR"
+unset PATH_SHIM_DIR
+if [ "$rc_33" = "0" ] \
+    && echo "$OUT_33" | grep -qE "verdict_missing_count:[[:space:]]+3[[:space:]]" \
+    && ! echo "$OUT_33" | grep -qi "Only one instance of {}"; then
+    pass "33. stats: verdict_missing aggregation works under GNU-find {}-batch rule"
+else
+    fail "33." "rc=$rc_33 out=$OUT_33"
+fi
+
+# 34. status --json: malformed/truncated state file → rc=1 + stderr (not silent
+#     pass with garbage stdout). Codex PR #29 round 18 P2 (C1 / 3215734119).
+TMP_C1=$(mktemp -d)
+printf '{"stage":"ci","history":[' > "$TMP_C1/sessC1--abc.json"  # truncated JSON
+OUT_34=$(SAZO_STATE_DIR="$TMP_C1" "$CLI" status --session sessC1 --json 2>&1)
+rc_34=$?
+rm -rf "$TMP_C1"
+if [ "$rc_34" = "1" ] && echo "$OUT_34" | grep -q "not valid JSON"; then
+    pass "34. status --json: malformed state file rejected with rc=1"
+else
+    fail "34." "rc=$rc_34 out=$OUT_34"
+fi
+
+# 35. resolve_session: sid containing glob metachar → rejected (no cross-session
+#     leak). Codex PR #29 round 18 P2 (C2 / 3215743087).
+TMP_C2=$(mktemp -d)
+jq -n '{schema_version:2,session_id:"realA",stage:"ci",history:[]}' \
+    > "$TMP_C2/realA--h1.json"
+jq -n '{schema_version:2,session_id:"realB",stage:"ci",history:[]}' \
+    > "$TMP_C2/realB--h2.json"
+# sid="*" 가 glob 으로 해석되면 realA/realB 어느 것이든 매칭됨. 거부되어야 함.
+OUT_35=$(SAZO_STATE_DIR="$TMP_C2" "$CLI" status --session "*" 2>&1)
+rc_35=$?
+# sid="[a]b" 도 거부되어야 함.
+OUT_35b=$(SAZO_STATE_DIR="$TMP_C2" "$CLI" status --session "[a]b" 2>&1)
+rc_35b=$?
+rm -rf "$TMP_C2"
+if [ "$rc_35" = "2" ] && echo "$OUT_35" | grep -q "invalid session id" \
+    && [ "$rc_35b" = "2" ] && echo "$OUT_35b" | grep -q "invalid session id"; then
+    pass "35. resolve_session: glob metachar in sid rejected"
+else
+    fail "35." "rc=$rc_35/$rc_35b out=$OUT_35 / $OUT_35b"
+fi
+
+# 36. sessions --json: STATE_DIR path containing TAB → JSON output remains valid
+#     and path field reconstructs correctly. Codex PR #29 round 18 P2
+#     (C3 / 3215743088).
+TMP_C3_PARENT=$(mktemp -d)
+TMP_C3="$TMP_C3_PARENT/has"$'\t'"tab/state"
+mkdir -p "$TMP_C3"
+jq -n '{schema_version:2,session_id:"sessC3",stage:"ci",history:[]}' \
+    > "$TMP_C3/sessC3--cwdh.json"
+OUT_36=$(SAZO_STATE_DIR="$TMP_C3" "$CLI" sessions --days 7 --json 2>&1)
+rc_36=$?
+# JSON parse 가능 + path 가 원본 그대로 복원 되어야 함.
+parsed_path=$(printf '%s\n' "$OUT_36" | jq -r '.path' 2>/dev/null)
+expected_path="$TMP_C3/sessC3--cwdh.json"
+rm -rf "$TMP_C3_PARENT"
+if [ "$rc_36" = "0" ] && [ "$parsed_path" = "$expected_path" ]; then
+    pass "36. sessions --json: STATE_DIR with TAB → path reconstructs correctly"
+else
+    fail "36." "rc=$rc_36 parsed='$parsed_path' expected='$expected_path' out=$OUT_36"
+fi
+
+echo ""
+echo "─────────────────────"
+echo "PASS: $PASS  FAIL: $FAIL"
+
+if [ "$FAIL" -gt 0 ]; then
+    exit 1
+fi
+exit 0

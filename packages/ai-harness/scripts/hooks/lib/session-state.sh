@@ -76,8 +76,14 @@ _with_lock() {
     local i=0
     while ! mkdir "$lockdir" 2>/dev/null; do
         # stale lock detection — both stat variants must succeed
+        # Self-review L1 (PR #29): GNU-first probe (`stat -c %Y`) — BSD-first
+        # chain is unsafe on Linux because GNU stat's `-f` means
+        # `--file-system` (multi-line filesystem report, exit 0), so the
+        # chain captures garbage instead of an integer and breaks the
+        # numeric `age` comparison. Same rationale as `_file_mtime` in
+        # sazo-workflow.sh.
         local mtime
-        mtime=$(stat -f %m "$lockdir" 2>/dev/null || stat -c %Y "$lockdir" 2>/dev/null || echo "")
+        mtime=$(stat -c %Y "$lockdir" 2>/dev/null || stat -f %m "$lockdir" 2>/dev/null || echo "")
         if [ -n "$mtime" ]; then
             local age=$(( $(date +%s) - mtime ))
             if [ "$age" -gt 60 ]; then
@@ -497,7 +503,9 @@ read_hook_payload() {
     SAZO_USER_PROMPT=$(echo "$payload" | jq -r '.prompt // ""')
 }
 
-# simple_audit: temporary audit log helper. plan 02 will replace with JSON Lines audit_log.
+# simple_audit: legacy freeform audit log helper. Kept for backward compat;
+# new call sites should prefer audit_log() (JSON Lines) for analyzability.
+# CLI parser handles both formats.
 simple_audit() {
     local event="$1"
     shift
@@ -507,6 +515,34 @@ simple_audit() {
         shift
     done
     printf '[%s] %s%s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$event" "$extras" >> "$AUDIT_LOG" 2>/dev/null || true
+}
+
+# audit_log: append a single JSON Lines entry to AUDIT_LOG.
+# Args: event sid [stage] [status] [by] [reason]
+# All optional fields default to "" for stable JSON shape.
+# Timestamp format MUST match existing freeform entries (%Y-%m-%dT%H:%M:%S%z, local TZ)
+# so legacy and new entries sort consistently lexicographically.
+# Errors are silent — audit log is best-effort and must never abort callers.
+audit_log() {
+    local event="$1"
+    local sid="${2:-}"
+    local stage="${3:-}"
+    local status="${4:-}"
+    local by="${5:-}"
+    local reason="${6:-}"
+    local ts entry
+    ts=$(date +%Y-%m-%dT%H:%M:%S%z)
+    entry=$(jq -nc \
+        --arg ts "$ts" \
+        --arg event "$event" \
+        --arg sid "$sid" \
+        --arg stage "$stage" \
+        --arg status "$status" \
+        --arg by "$by" \
+        --arg reason "$reason" \
+        '{ts:$ts,event:$event,sid:$sid,stage:$stage,status:$status,by:$by,reason:$reason}' 2>/dev/null) \
+        || return 0
+    printf '%s\n' "$entry" >> "$AUDIT_LOG" 2>/dev/null || true
 }
 
 # process_verdict_tracked_post_task: end-to-end handler for verdict-tracked subagent
