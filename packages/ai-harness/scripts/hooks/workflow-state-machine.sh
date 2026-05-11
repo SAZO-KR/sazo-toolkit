@@ -1205,6 +1205,71 @@ EOF_PST
 문서/주석만 수정: /skip review <reason>"
                 fi
             fi
+            # gh pr merge — review stage hard block (Plan 13 follow-up)
+            # PR 생성 후 별도 머지 사이클. review (Step 6)가 verdict aggregation
+            # 통과 상태여야 머지 허용. approval/ci는 PR 생성 시점에 이미 통과돼 있어
+            # normal flow에서 추가 검사 불필요. 우회 경로(approval/ci bypass)로 PR 생성한
+            # 케이스에서도 review만큼은 강제 — 이게 본 fix의 핵심 의도.
+            #
+            # Codex PR#39 P2 회귀 방어: `gh pr merge` substring 매치만 하면
+            # `echo gh pr merge` / `rg 'gh pr merge' docs` 같은 무해 명령도 차단됨.
+            # shell command boundary 강제 — segment 분리 후 각 segment의 첫 토큰이
+            # `gh` 일 때만 매칭. compound 명령 (`a && gh pr merge`) 도 지원.
+            gh_merge_invoked=0
+            # Codex PR#39 round 6/7: gh CLI inherited options (`-R/--repo` 등) 가
+            # `pr`과 `merge` 사이 올 수 있음. 단 `gh pr view merge` 같이 branch name이
+            # `merge` 인 read-only command false-positive 방지 — 중간에 dash-prefix
+            # option(+optional value) 만 허용. positional sub-command(view/checkout 등) 거부.
+            # 패턴: `-flag` 또는 `-flag value` 또는 `--flag` 또는 `--flag value` 또는 `--flag=value`.
+            if echo "$cmd" | grep -qE '\bgh[[:space:]]+pr[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-][^[:space:]]*)?[[:space:]]+)*merge\b'; then
+                # Codex PR#39 round 4: pipe(`|`) 도 command separator로 추가.
+                # `yes | gh pr merge` 같은 pipeline. order 중요 — `\|\|` 먼저 매칭 후 single `\|`.
+                # awk regex alternation은 leftmost match라 `\|\|`를 single `\|`보다 먼저 배치.
+                merge_segments=$(printf '%s' "$cmd" | awk '{gsub(/&&|\|\||;|\|/, "\n"); print}')
+                while IFS= read -r seg; do
+                    seg=$(printf '%s' "$seg" | sed -E 's/^[[:space:]]+//')
+                    [ -z "$seg" ] && continue
+                    # Codex PR#39 round 2 P2: leading shell variable assignments
+                    # (`VAR=value cmd args`, e.g. `GH_TOKEN=xxx gh pr merge`) skip.
+                    # POSIX simple command 문법: `[NAME=word]... command [args]`.
+                    # NAME은 `[a-zA-Z_][a-zA-Z0-9_]*` (POSIX 3.231).
+                    seg=$(printf '%s' "$seg" | sed -E 's/^([a-zA-Z_][a-zA-Z0-9_]*=[^[:space:]]*[[:space:]]+)+//')
+                    # Codex PR#39 round 3/8 P2: `env [-options]... [VAR=val]... cmd` wrapper도 strip.
+                    # `env GH_TOKEN=xxx gh pr merge`, `env -i GH_TOKEN=xxx gh pr merge` 같은 패턴.
+                    # env 옵션 (`-i`/`-S ...`/`-u ...`/`--block-signal`/`--default-signal=...`/
+                    # `--ignore-environment`/`--null`/`--split-string=...`/`-C` 등) 와 NAME=value 둘 다 strip.
+                    if echo "$seg" | grep -qE '^env[[:space:]]+'; then
+                        seg=$(printf '%s' "$seg" | sed -E 's/^env[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-][^[:space:]]*)?[[:space:]]+)*([a-zA-Z_][a-zA-Z0-9_]*=[^[:space:]]*[[:space:]]+)*//')
+                    fi
+                    # Codex PR#39 round 5 P2: `command [-pVv] cmd` Bash builtin wrapper도 strip.
+                    # `command gh pr merge` 같은 alias/function bypass 패턴.
+                    if echo "$seg" | grep -qE '^command[[:space:]]+'; then
+                        seg=$(printf '%s' "$seg" | sed -E 's/^command[[:space:]]+(-[pVv]+[[:space:]]+)?//')
+                    fi
+                    # 첫 토큰이 gh 이고 pr (dash-prefix opt + opt-value)* merge 패턴
+                    if echo "$seg" | grep -qE '^gh[[:space:]]+pr[[:space:]]+(-[^[:space:]]+([[:space:]]+[^-][^[:space:]]*)?[[:space:]]+)*merge\b'; then
+                        gh_merge_invoked=1
+                        break
+                    fi
+                done <<< "$merge_segments"
+            fi
+            if [ "$gh_merge_invoked" = "1" ]; then
+                if ! stage_is_passed "$SAZO_SESSION_ID" "review"; then
+                    if [ "${SAZO_ALLOW_MERGE_BYPASS:-0}" = "1" ]; then
+                        audit_log "merge_bypass_warn" "${SAZO_SESSION_ID:-}" "review" "bypassed" "bypass" \
+                            "SAZO_ALLOW_MERGE_BYPASS=1; tool=gh_pr_merge"
+                        # approval/ci bypass 패턴과 일관 — stage_mark로 영속화하여
+                        # 후속 stage_is_passed review 호출도 통과. idempotency 보장.
+                        stage_mark "$SAZO_SESSION_ID" "review" "skipped" "bypass" "SAZO_ALLOW_MERGE_BYPASS=1"
+                    else
+                        emit_skip_warning_if_needed
+                        hard_block "review" "PR 머지 전 독립 리뷰 완료 필수.
+  Step 6 (code-reviewer / architect-advisor verdict APPROVE) 또는
+  문서/주석만 수정: /skip review <reason>
+극단 예외: SAZO_ALLOW_MERGE_BYPASS=1"
+                    fi
+                fi
+            fi
             ;;
     esac
     exit 0

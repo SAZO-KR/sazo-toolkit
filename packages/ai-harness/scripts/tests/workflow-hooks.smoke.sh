@@ -4,6 +4,10 @@
 
 set -uo pipefail
 
+# 부모 셸 오염 방지: pre-worktree-gate 관련 override env 정규화.
+# 개별 케이스가 명시적으로 설정하는 것은 허용 (e.g. w5: SAZO_SKIP_WORKTREE_GATE=1).
+unset SAZO_SKIP_WORKTREE_GATE
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HARNESS="$(cd "$HERE/../.." && pwd)"
 HOOKS="$HARNESS/scripts/hooks"

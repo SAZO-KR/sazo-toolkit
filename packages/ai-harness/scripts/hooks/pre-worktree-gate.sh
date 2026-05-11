@@ -55,13 +55,47 @@ if [ "$SAZO_TOOL_NAME" = "Bash" ]; then
     if echo "$cmd" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?(commit|add|push|merge|rebase|reset|cherry-pick|stash|restore|worktree[[:space:]]+add)\b'; then
         is_mutating=1
     fi
-    # git branch: <name> (non-dash arg) → create, 옵션 -d/-D/-m/-M/-c/-C → mutating.
-    if echo "$cmd" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?branch[[:space:]]+[^-[:space:]]'; then
-        is_mutating=1
+    # git branch: 다음 중 하나면 mutating
+    #   (1) <name> (non-dash positional) — create
+    #   (2) -d/-D/-m/-M/-c/-C/-f short — delete/rename/copy/force
+    #   (3) --delete/--move/--copy/--force/--track/--no-track/
+    #       --set-upstream-to/--unset-upstream/--edit-description long
+    # Read-only: 단독, -l/-v/-vv/-r/-a/-h, --list, --verbose, --remotes, --all,
+    #            --show-current, --contains/--no-contains, --merged/--no-merged,
+    #            --points-at, --column, --sort, --format.
+    # git branch — segment 분리 후 각 segment 내에서만 검사 (Codex PR#39 round 3 P2).
+    # 기존 cmd 전체에 적용한 regex `([^[:space:]]+[[:space:]]+)*` 는 `&&|||;` 가로질러
+    # 다음 segment의 flag 매칭 (예: `git branch --show-current && echo -f` 가 차단됨).
+    # switch/checkout carve-out 패턴 따라 segment 분리.
+    # Gemini PR#39 medium: clustered short flag `-dr` 미탐지 회귀 → cluster 어디든 매칭.
+    # Codex PR#39 round 2: `-u` short form (`--set-upstream-to`) 추가.
+    if [ "$is_mutating" = "0" ]; then
+        # Codex PR#39 round 5: pipe `|` 도 boundary. order: `\|\|` 먼저 매칭 후 single `\|`.
+        branch_segments=$(printf '%s' "$cmd" | awk '{gsub(/&&|\|\||;|\|/, "\n"); print}')
+        while IFS= read -r bseg; do
+            bseg=$(printf '%s' "$bseg" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
+            [ -z "$bseg" ] && continue
+            # (1) non-dash positional 첫 인자 → create
+            # 옵션 prefix 후의 positional은 검사 안 함 — `--contains HEAD`, `--merged <commit>` 등
+            # 인자 받는 read-only 옵션과 구분 어려움. mutating 옵션은 (2)에서 명시적으로 catch.
+            if echo "$bseg" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?branch[[:space:]]+[^-[:space:]]'; then
+                is_mutating=1
+                break
+            fi
+            # (2) mutating short/long flag — segment 안에서만 검사
+            # short: cluster 어디든 dDmMcCfu 포함
+            # long: --delete/--move/--copy/--force/--track/--no-track/
+            #       --set-upstream-to/--unset-upstream/--edit-description/--create-reflog
+            # Codex PR#39 round 4: `--create-reflog` 추가 (`git branch --create-reflog ...`는 mutating).
+            # Codex PR#39 round 8: `--recurse-submodules` (submodule branch propagation 시 create).
+            if echo "$bseg" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?branch[[:space:]]+([^[:space:]]+[[:space:]]+)*(-[a-zA-Z]*[dDmMcCfu][a-zA-Z]*|--(delete|move|copy|force|track|no-track|set-upstream-to|unset-upstream|edit-description|create-reflog|no-create-reflog|recurse-submodules|no-recurse-submodules))(\b|=)'; then
+                is_mutating=1
+                break
+            fi
+        done <<< "$branch_segments"
     fi
-    if echo "$cmd" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?branch[[:space:]]+-([dDmMcC]|-(delete|move|copy)\b)'; then
-        is_mutating=1
-    fi
+    # Note: 안쪽 `[^[:space:]]+` (1글자 이상) — POSIX ERE backtracking 안전.
+    # `*` (0글자 이상) 사용 시 nested quantifier로 catastrophic backtracking 위험 (critic v2).
     # git tag: `git tag <name>` (non-dash arg → create) 및 `-a`/`-d`/`-f` 옵션은
     # mutating. `git tag` 단독 / `-l` / `--list`는 read-only (Codex V6 P1).
     # `-C <path>` optional prefix 인식.
