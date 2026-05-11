@@ -116,6 +116,12 @@ invoke_hook 0 'git branch --merged' 'T20m git branch --merged → 통과 (read-o
 invoke_hook 0 'git branch --contains HEAD' 'T20n git branch --contains → 통과 (read-only)'
 invoke_hook 0 'git branch --sort=-committerdate' 'T20o git branch --sort → 통과 (read-only)'
 
+# T20p-T20r: Gemini PR#39 medium — clustered short flag
+echo "--- T20p-T20r: clustered short flag (Gemini PR#39) ---"
+invoke_hook 2 'git branch -dr origin/feature' 'T20p git branch -dr (clustered delete remote-tracking) → 차단'
+invoke_hook 2 'git branch -Df name' 'T20q git branch -Df (clustered force delete) → 차단'
+invoke_hook 0 'git branch -av' 'T20r git branch -av (clustered list+verbose) → 통과 (read-only)'
+
 # T21: cwd 변경 trick — non-git dir + git -C ...
 # 현재 hook은 cd "$SAZO_CWD" → not git → stage_mark auto skip → exit 0.
 # 하지만 cmd 안에서 git -C로 다른 repo 조작 시도면 mutating으로 분류돼야 안전.

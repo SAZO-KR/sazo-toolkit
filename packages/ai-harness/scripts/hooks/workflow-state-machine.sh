@@ -1210,7 +1210,25 @@ EOF_PST
             # 통과 상태여야 머지 허용. approval/ci는 PR 생성 시점에 이미 통과돼 있어
             # normal flow에서 추가 검사 불필요. 우회 경로(approval/ci bypass)로 PR 생성한
             # 케이스에서도 review만큼은 강제 — 이게 본 fix의 핵심 의도.
+            #
+            # Codex PR#39 P2 회귀 방어: `gh pr merge` substring 매치만 하면
+            # `echo gh pr merge` / `rg 'gh pr merge' docs` 같은 무해 명령도 차단됨.
+            # shell command boundary 강제 — segment 분리 후 각 segment의 첫 토큰이
+            # `gh` 일 때만 매칭. compound 명령 (`a && gh pr merge`) 도 지원.
+            gh_merge_invoked=0
             if echo "$cmd" | grep -qE '\bgh[[:space:]]+pr[[:space:]]+merge\b'; then
+                merge_segments=$(printf '%s' "$cmd" | awk '{gsub(/&&|\|\||;/, "\n"); print}')
+                while IFS= read -r seg; do
+                    seg=$(printf '%s' "$seg" | sed -E 's/^[[:space:]]+//')
+                    [ -z "$seg" ] && continue
+                    # 첫 토큰이 gh 이고 그 다음이 pr merge 인지 확인
+                    if echo "$seg" | grep -qE '^gh[[:space:]]+pr[[:space:]]+merge\b'; then
+                        gh_merge_invoked=1
+                        break
+                    fi
+                done <<< "$merge_segments"
+            fi
+            if [ "$gh_merge_invoked" = "1" ]; then
                 if ! stage_is_passed "$SAZO_SESSION_ID" "review"; then
                     if [ "${SAZO_ALLOW_MERGE_BYPASS:-0}" = "1" ]; then
                         audit_log "merge_bypass_warn" "${SAZO_SESSION_ID:-}" "review" "bypassed" "bypass" \

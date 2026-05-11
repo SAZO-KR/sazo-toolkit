@@ -174,6 +174,23 @@ rm -rf "$SAZO_STATE_DIR"
 rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m7" "gh pr view 123")")
 assert_exit 0 "$rc" "M7: gh pr view → pass (not matched by merge regex)"
 
+# ─── M8-M10: Codex PR#39 P2 — shell command boundary anchor ───
+# raw substring 매치 회귀 방어 — echo / grep / rg 같이 gh pr merge 문자열을
+# 다루는 무해 명령은 통과해야 함.
+echo "=== M8-M10: shell command boundary (Codex PR#39 P2) ==="
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m8" 'echo gh pr merge')")
+assert_exit 0 "$rc" "M8: echo 'gh pr merge' → pass (echo는 actual invocation 아님)"
+
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m9" "rg 'gh pr merge' docs/")")
+assert_exit 0 "$rc" "M9: rg 'gh pr merge' docs → pass (search, not actual invocation)"
+
+# Compound: 실제 gh pr merge가 chain 안에 있으면 차단
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m10" 'echo prepare && gh pr merge')")
+assert_exit 2 "$rc" "M10: 'echo ... && gh pr merge' → block (segment first-token = gh)"
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"
