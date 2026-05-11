@@ -70,7 +70,8 @@ if [ "$SAZO_TOOL_NAME" = "Bash" ]; then
     # Gemini PR#39 medium: clustered short flag `-dr` 미탐지 회귀 → cluster 어디든 매칭.
     # Codex PR#39 round 2: `-u` short form (`--set-upstream-to`) 추가.
     if [ "$is_mutating" = "0" ]; then
-        branch_segments=$(printf '%s' "$cmd" | awk '{gsub(/&&|\|\||;/, "\n"); print}')
+        # Codex PR#39 round 5: pipe `|` 도 boundary. order: `\|\|` 먼저 매칭 후 single `\|`.
+        branch_segments=$(printf '%s' "$cmd" | awk '{gsub(/&&|\|\||;|\|/, "\n"); print}')
         while IFS= read -r bseg; do
             bseg=$(printf '%s' "$bseg" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
             [ -z "$bseg" ] && continue

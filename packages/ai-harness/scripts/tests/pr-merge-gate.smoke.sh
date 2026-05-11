@@ -218,6 +218,15 @@ rm -rf "$SAZO_STATE_DIR"
 rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m16" 'echo y | gh pr merge --auto')")
 assert_exit 2 "$rc" "M16: 'echo y | gh pr merge --auto' → block (pipe + subflag)"
 
+# Codex PR#39 round 5: command builtin wrapper
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m17" 'command gh pr merge')")
+assert_exit 2 "$rc" "M17: 'command gh pr merge' → block (command builtin wrapper)"
+
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m18" 'command -p gh pr merge')")
+assert_exit 2 "$rc" "M18: 'command -p gh pr merge' → block (command with -p flag)"
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"

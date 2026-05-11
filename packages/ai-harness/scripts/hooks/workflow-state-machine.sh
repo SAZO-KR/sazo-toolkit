@@ -1234,6 +1234,11 @@ EOF_PST
                     if echo "$seg" | grep -qE '^env[[:space:]]+'; then
                         seg=$(printf '%s' "$seg" | sed -E 's/^env[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*=[^[:space:]]*[[:space:]]+)*//')
                     fi
+                    # Codex PR#39 round 5 P2: `command [-pVv] cmd` Bash builtin wrapper도 strip.
+                    # `command gh pr merge` 같은 alias/function bypass 패턴.
+                    if echo "$seg" | grep -qE '^command[[:space:]]+'; then
+                        seg=$(printf '%s' "$seg" | sed -E 's/^command[[:space:]]+(-[pVv]+[[:space:]]+)?//')
+                    fi
                     # 첫 토큰이 gh 이고 그 다음이 pr merge 인지 확인
                     if echo "$seg" | grep -qE '^gh[[:space:]]+pr[[:space:]]+merge\b'; then
                         gh_merge_invoked=1
