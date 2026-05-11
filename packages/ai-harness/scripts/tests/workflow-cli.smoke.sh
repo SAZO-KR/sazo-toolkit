@@ -176,10 +176,14 @@ else
 fi
 
 # 7. sessions --days 7 — multiple sessions sorted by mtime
-# Use explicit `touch -t` timestamps (instantaneous + deterministic, no flaky sleep).
+# Use NOW-relative `touch -t` timestamps so both sessions stay within the
+# default 24h window of `list_active_sessions` (used by test 10) regardless
+# of when this suite runs. Static dates would expire 24h after authoring.
 mock_state_full "sessB" "def456abc789"
-touch -t 202605100900 "$TMP_STATE/sessB--def456abc789.json"
-touch -t 202605101000 "$TMP_STATE/sessA--abc123def456.json"
+TS_OLD=$(date -v-2H +%Y%m%d%H%M 2>/dev/null || date -d '2 hours ago' +%Y%m%d%H%M)
+TS_NEW=$(date -v-1H +%Y%m%d%H%M 2>/dev/null || date -d '1 hour ago' +%Y%m%d%H%M)
+touch -t "$TS_OLD" "$TMP_STATE/sessB--def456abc789.json"
+touch -t "$TS_NEW" "$TMP_STATE/sessA--abc123def456.json"
 run_cli sessions --days 7
 first=$(printf '%s\n' "$OUT" | head -1)
 if [ "$RC" = "0" ] \
