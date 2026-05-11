@@ -26,11 +26,32 @@ LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
 # shellcheck source=lib/session-state.sh
 source "$LIB_DIR/session-state.sh"
 
+# Plan 06: narrow-only explore_count decay path.
+# pre-exploration-gate (narrow, default ON) increments .explore_count on each
+# direct Opus grep. Task delegation to code-searcher/docs-researcher 등은 그
+# 보상(decay)을 받아야 narrow gate가 3회 block을 풀어준다. broad gate
+# (workflow-state-machine 전체)가 비활성이어도 narrow 사용자에게 decay 보장.
+#
+# read_hook_payload는 stdin을 cat 으로 한 번만 읽으므로, broad block 전에
+# 위치시켜 두 번 호출되지 않도록 한다.
+read_hook_payload
+
+if [ "$MODE" = "post" ] && narrow_hooks_enabled \
+   && [ -n "${SAZO_SESSION_ID:-}" ] && [ "$SAZO_TOOL_NAME" = "Task" ]; then
+    decay_subagent=$(echo "$SAZO_TOOL_INPUT" | jq -r '.subagent_type // ""' 2>/dev/null)
+    case "$decay_subagent" in
+        code-searcher|docs-researcher|explore|Explore|\
+        nori-codebase-locator|nori-codebase-analyzer|nori-codebase-pattern-finder|\
+        nori-web-search-researcher|image-analyzer|multimodal-looker)
+            state_init "$SAZO_SESSION_ID" "$SAZO_CWD" "$SAZO_MODEL"
+            state_decrement "$SAZO_SESSION_ID" ".explore_count"
+            ;;
+    esac
+fi
+
 if ! workflow_hooks_enabled || [ "${SAZO_SKIP_STATE_MACHINE:-0}" = "1" ]; then
     exit 0
 fi
-
-read_hook_payload
 
 [ -z "${SAZO_SESSION_ID:-}" ] && exit 0
 
@@ -179,8 +200,7 @@ handle_post() {
                 nori-web-search-researcher|image-analyzer|multimodal-looker)
                     stage_is_passed "$SAZO_SESSION_ID" "research" \
                         || stage_mark "$SAZO_SESSION_ID" "research" "completed" "auto" "subagent=$subagent_type"
-                    # 위임 보상: explore_count decay
-                    state_decrement "$SAZO_SESSION_ID" ".explore_count"
+                    # 위임 보상(explore_count decay)은 narrow path에서 이미 처리됨 (파일 상단 참조).
                     ;;
                 plan-drafter|Plan)
                     # plan-drafter not verdict-tracked (produces plan content, not verdict).

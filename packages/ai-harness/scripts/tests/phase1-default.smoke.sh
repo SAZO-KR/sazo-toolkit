@@ -127,6 +127,72 @@ test_wsm_broad_off_only() {
 test_wsm_broad_off_only "broad OFF, narrow ON (default)" "unset SAZO_WORKFLOW_HOOKS_ENABLED SAZO_DISABLE_NARROW_HOOKS;"
 test_wsm_broad_off_only "broad OFF, narrow OFF" "export SAZO_DISABLE_NARROW_HOOKS=1; unset SAZO_WORKFLOW_HOOKS_ENABLED;"
 
+echo "=== 7. explore_count decay runs under narrow gate (broad OFF) ==="
+# Codex P2 (Plan 06 PR review): pre-exploration-gate (narrow) increments .explore_count;
+# decay must also run on narrow-only path so Task(code-searcher) delegation
+# resets the gate.
+test_decay_narrow_only() {
+    local sid="phase1-decay-$$"
+    local cwd="/tmp/phase1-decay-cwd-$$"
+    local payload
+
+    # Seed state via inline session-state.sh source (current shell, no subshell loss).
+    (
+        export SAZO_STATE_DIR
+        source "$HARNESS/scripts/hooks/lib/session-state.sh"
+        state_init "$sid" "$cwd" "claude-opus-4-7" >/dev/null
+        state_set_json "$sid" ".explore_count" 2 "$cwd"
+    )
+    local before
+    before=$(
+        export SAZO_STATE_DIR
+        source "$HARNESS/scripts/hooks/lib/session-state.sh"
+        state_get "$sid" ".explore_count" "$cwd"
+    )
+    if [ "$before" != "2" ]; then
+        fail "could not seed explore_count (got '$before' expected 2)"
+        return
+    fi
+
+    payload=$(jq -n --arg sid "$sid" --arg cwd "$cwd" \
+        '{session_id:$sid, cwd:$cwd, tool_name:"Task", tool_input:{subagent_type:"code-searcher"}, tool_response:{}, model:"claude-opus-4-7"}')
+    echo "$payload" | SAZO_STATE_DIR="$SAZO_STATE_DIR" \
+        bash "$HOOKS/workflow-state-machine.sh" post >/dev/null 2>&1
+
+    local after
+    after=$(
+        export SAZO_STATE_DIR
+        source "$HARNESS/scripts/hooks/lib/session-state.sh"
+        state_get "$sid" ".explore_count" "$cwd"
+    )
+    if [ "$after" = "1" ]; then
+        pass "explore_count 2→1 under narrow ON + broad OFF"
+    else
+        fail "explore_count decay failed: before=$before after=$after (expected 1)"
+    fi
+
+    # SAZO_DISABLE_NARROW_HOOKS=1 should NOT decay
+    (
+        export SAZO_STATE_DIR
+        source "$HARNESS/scripts/hooks/lib/session-state.sh"
+        state_set_json "$sid" ".explore_count" 5 "$cwd"
+    )
+    echo "$payload" | SAZO_DISABLE_NARROW_HOOKS=1 SAZO_STATE_DIR="$SAZO_STATE_DIR" \
+        bash "$HOOKS/workflow-state-machine.sh" post >/dev/null 2>&1
+    local after2
+    after2=$(
+        export SAZO_STATE_DIR
+        source "$HARNESS/scripts/hooks/lib/session-state.sh"
+        state_get "$sid" ".explore_count" "$cwd"
+    )
+    if [ "$after2" = "5" ]; then
+        pass "explore_count NOT decayed when narrow disabled"
+    else
+        fail "explore_count changed despite narrow disabled: 5→$after2"
+    fi
+}
+test_decay_narrow_only
+
 echo ""
 echo "=== Summary ==="
 echo "  PASS: $PASS"
