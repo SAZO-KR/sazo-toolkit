@@ -40,7 +40,19 @@ case "$STAGE" in
 esac
 
 SID="${CLAUDE_SESSION_ID:-${SAZO_SESSION_ID:-}}"
-[ -z "$SID" ] && { echo "session_id 없음 — Claude Code 환경에서만 작동"; exit 1; }
+if [ -z "$SID" ]; then
+    # Fallback: STATE_DIR 가장 최근 modified state file 의 filename에서 sid 추출.
+    # session-state.sh가 source되어 STATE_DIR 정의됨. naming: <sid>--<cwd_hash>.json.
+    if [ -n "${STATE_DIR:-}" ] && [ -d "$STATE_DIR" ]; then
+        latest=$(ls -t "$STATE_DIR"/*--*.json 2>/dev/null | head -1)
+        if [ -n "$latest" ]; then
+            base=$(basename "$latest" .json)
+            SID="${base%%--*}"
+            echo "[skip] CLAUDE_SESSION_ID/SAZO_SESSION_ID 미설정 — 최근 state file 사용 (sid=$SID)" >&2
+        fi
+    fi
+fi
+[ -z "$SID" ] && { echo "session_id 없음 — Claude Code 환경 또는 state file 필요"; exit 1; }
 
 CWD="${CLAUDE_CWD:-$PWD}"
 state_init "$SID" "$CWD" "${CLAUDE_MODEL:-unknown}"

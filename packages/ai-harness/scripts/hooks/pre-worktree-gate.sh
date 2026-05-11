@@ -47,15 +47,28 @@ if [ "$SAZO_TOOL_NAME" = "Bash" ]; then
     cmd=$(echo "$SAZO_TOOL_INPUT" | jq -r '.command // ""')
     is_mutating=0
     # git mutating subcommands (word-bounded).
-    if echo "$cmd" | grep -qE '\bgit[[:space:]]+(commit|add|push|merge|rebase|reset|cherry-pick|stash|branch|restore|worktree[[:space:]]+(add|remove))'; then
+    # `-C <path>` optional prefix 인식 (git -C path subcmd ... 패턴).
+    # worktree subcommands: `add`만 mutating. `remove`/`prune`/`list`/`lock`/`unlock`/
+    # `move`/`repair`는 cleanup/read-only이므로 차단에서 제외 (cleanup 자체 막힘 방지).
+    # branch는 별도 분기 — `<name>` create / `-d/-D/-m/-M/-c/-C` 옵션만 mutating.
+    # `git branch` 단독/`-l`/`-v`/`-r`/`-a`/`--show-current`는 read-only.
+    if echo "$cmd" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?(commit|add|push|merge|rebase|reset|cherry-pick|stash|restore|worktree[[:space:]]+add)\b'; then
+        is_mutating=1
+    fi
+    # git branch: <name> (non-dash arg) → create, 옵션 -d/-D/-m/-M/-c/-C → mutating.
+    if echo "$cmd" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?branch[[:space:]]+[^-[:space:]]'; then
+        is_mutating=1
+    fi
+    if echo "$cmd" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?branch[[:space:]]+-([dDmMcC]|-(delete|move|copy)\b)'; then
         is_mutating=1
     fi
     # git tag: `git tag <name>` (non-dash arg → create) 및 `-a`/`-d`/`-f` 옵션은
     # mutating. `git tag` 단독 / `-l` / `--list`는 read-only (Codex V6 P1).
-    if echo "$cmd" | grep -qE '\bgit[[:space:]]+tag[[:space:]]+[^-[:space:]]'; then
+    # `-C <path>` optional prefix 인식.
+    if echo "$cmd" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?tag[[:space:]]+[^-[:space:]]'; then
         is_mutating=1
     fi
-    if echo "$cmd" | grep -qE '\bgit[[:space:]]+tag[[:space:]]+-[adf]'; then
+    if echo "$cmd" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?tag[[:space:]]+-[adf]'; then
         is_mutating=1
     fi
     # switch/checkout: compound `&&|||;`로 split, **각 segment 독립 평가**.
@@ -68,8 +81,8 @@ if [ "$SAZO_TOOL_NAME" = "Bash" ]; then
         while IFS= read -r seg; do
             seg=$(printf '%s' "$seg" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
             [ -z "$seg" ] && continue
-            if echo "$seg" | grep -qE '\bgit[[:space:]]+(switch|checkout)\b' \
-               && ! echo "$seg" | grep -qE '\bgit[[:space:]]+(switch|checkout)\b.*--detach(\b|$)'; then
+            if echo "$seg" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?(switch|checkout)\b' \
+               && ! echo "$seg" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?(switch|checkout)\b.*--detach(\b|$)'; then
                 is_mutating=1
                 break
             fi
