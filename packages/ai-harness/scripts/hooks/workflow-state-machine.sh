@@ -1216,7 +1216,10 @@ EOF_PST
             # shell command boundary 강제 — segment 분리 후 각 segment의 첫 토큰이
             # `gh` 일 때만 매칭. compound 명령 (`a && gh pr merge`) 도 지원.
             gh_merge_invoked=0
-            if echo "$cmd" | grep -qE '\bgh[[:space:]]+pr[[:space:]]+merge\b'; then
+            # Codex PR#39 round 6: gh CLI inherited options (`-R/--repo` 등) 가
+            # `pr`과 `merge` 사이 올 수 있음 (e.g., `gh pr -R owner/repo merge --auto`).
+            # `gh[[:space:]]+pr[[:space:]]+(<inherited>[[:space:]]+)*merge\b` — 중간 옵션 허용.
+            if echo "$cmd" | grep -qE '\bgh[[:space:]]+pr[[:space:]]+([^[:space:]]+[[:space:]]+)*merge\b'; then
                 # Codex PR#39 round 4: pipe(`|`) 도 command separator로 추가.
                 # `yes | gh pr merge` 같은 pipeline. order 중요 — `\|\|` 먼저 매칭 후 single `\|`.
                 # awk regex alternation은 leftmost match라 `\|\|`를 single `\|`보다 먼저 배치.
@@ -1239,8 +1242,8 @@ EOF_PST
                     if echo "$seg" | grep -qE '^command[[:space:]]+'; then
                         seg=$(printf '%s' "$seg" | sed -E 's/^command[[:space:]]+(-[pVv]+[[:space:]]+)?//')
                     fi
-                    # 첫 토큰이 gh 이고 그 다음이 pr merge 인지 확인
-                    if echo "$seg" | grep -qE '^gh[[:space:]]+pr[[:space:]]+merge\b'; then
+                    # 첫 토큰이 gh 이고 pr ... merge 패턴 (inherited flags 중간 허용)
+                    if echo "$seg" | grep -qE '^gh[[:space:]]+pr[[:space:]]+([^[:space:]]+[[:space:]]+)*merge\b'; then
                         gh_merge_invoked=1
                         break
                     fi

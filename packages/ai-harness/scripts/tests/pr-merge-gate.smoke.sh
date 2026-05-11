@@ -227,6 +227,15 @@ rm -rf "$SAZO_STATE_DIR"
 rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m18" 'command -p gh pr merge')")
 assert_exit 2 "$rc" "M18: 'command -p gh pr merge' → block (command with -p flag)"
 
+# Codex PR#39 round 6: gh CLI inherited options between pr and merge
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m19" 'gh pr -R owner/repo merge --auto')")
+assert_exit 2 "$rc" "M19: 'gh pr -R owner/repo merge --auto' → block (inherited -R flag)"
+
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m20" 'gh pr --repo owner/repo merge')")
+assert_exit 2 "$rc" "M20: 'gh pr --repo owner/repo merge' → block (inherited --repo flag)"
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"
