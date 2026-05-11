@@ -220,13 +220,14 @@ mark_ci_passed "t9" "/tmp"
 run_hook_post "{\"session_id\":\"t9\",\"cwd\":\"/tmp\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"/tmp/foo.go\"}}" >/dev/null
 val=$(get_ci_passed_at "t9" "/tmp")
 assert_null "$val" "9-pre. invalidated"
-# 재CI: 다시 mark
+# 재CI: 다시 mark (Stage B: approval도 함께 마킹)
 bash -c "
     export SAZO_STATE_DIR='$SAZO_STATE_DIR'
     source '$LIB'
     state_set_str 't9' '.ci_passed_at' '2026-05-09T11:00:00+0900' '/tmp'
     stage_mark 't9' 'ci' 'completed' 'auto' 'mock-rerun' '/tmp'
     stage_mark 't9' 'review' 'completed' 'auto' 'mock' '/tmp'
+    mark_approval_complete 't9' 'user' 'smoke-test' '/tmp'
 "
 rc=$(run_hook_pre "{\"session_id\":\"t9\",\"cwd\":\"/tmp\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"gh pr create --title foo\"}}")
 assert_eq "0" "$rc" "9. gh pr create passes after re-CI"

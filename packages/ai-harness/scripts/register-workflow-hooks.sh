@@ -102,5 +102,23 @@ register_workflow_hooks() {
     _register_one_hook "UserPromptSubmit" "" \
         "$hooks_dir/user-prompt-approval-detect.sh"
 
+    # 6) post-session-end-metrics — SessionEnd (matcher 없음)
+    # SAZO_DISABLE_SESSION_END_HOOK=1 시 등록 skip.
+    if [ "${SAZO_DISABLE_SESSION_END_HOOK:-0}" != "1" ] \
+        && [ -f "$hooks_dir/post-session-end-metrics.sh" ]; then
+        chmod +x "$hooks_dir/post-session-end-metrics.sh" 2>/dev/null || true
+        _register_one_hook "SessionEnd" "" \
+            "$hooks_dir/post-session-end-metrics.sh"
+    fi
+
+    # 7) post-task-output-audit — PostToolUse Task matcher (Stage A')
+    # SAZO_DISABLE_TASK_OUTPUT_AUDIT=1 시 등록 skip.
+    if [ "${SAZO_DISABLE_TASK_OUTPUT_AUDIT:-0}" != "1" ] \
+        && [ -f "$hooks_dir/post-task-output-audit.sh" ]; then
+        chmod +x "$hooks_dir/post-task-output-audit.sh" 2>/dev/null || true
+        _register_one_hook "PostToolUse" "Task" \
+            "$hooks_dir/post-task-output-audit.sh"
+    fi
+
     unset -f _register_one_hook
 }

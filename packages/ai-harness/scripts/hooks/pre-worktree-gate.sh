@@ -107,7 +107,7 @@ cd "${SAZO_CWD:-.}" 2>/dev/null || exit 0
 
 if ! git rev-parse --git-dir >/dev/null 2>&1; then
     # git repo 아님 → passthrough
-    stage_mark "$SAZO_SESSION_ID" "worktree" "skipped" "auto" "not a git repo"
+    mark_skip_with_check "$SAZO_SESSION_ID" "worktree" "auto" "not a git repo"
     exit 0
 fi
 
