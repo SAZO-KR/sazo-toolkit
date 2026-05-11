@@ -1,8 +1,10 @@
-# Spike — SessionEnd Hook Schema (Plan 13 Stage S0)
+# Spike — Stop/SessionEnd Hook Schema (Plan 13 Stage S0)
 
 **조사 일시**: 2026-05-11
 **Plan 13 dependency**: Stage S0 BLOCKING prerequisite
 **조사 방법**: WebFetch + Context7 + GH issue 검색
+
+> **Pivot note**: Plan 13 본문 (Stage A)은 원래 "Stop hook" 기반으로 `post-stop-determinism-log.sh` 명세. 본 spike 결과 **SessionEnd hook이 세션 종료 메트릭에 더 적합** (Stop은 매 turn fire, SessionEnd는 종료 1회). 권장 hook 이름은 `post-session-end-metrics.sh`. Plan 13 본문의 Stage A + acceptance criteria는 **후속 revision PR에서 동기화 예정**. 본 PR은 spike 산출물만 추가.
 
 ## 종합 결론
 
@@ -23,7 +25,7 @@
 
 **Stability tier**: Stable (v1.0.85+ 이후 released)
 
-**Docs**: https://code.claude.com/docs/en/hooks (Context7 쿼리 결과)
+**Docs**: https://docs.anthropic.com/en/docs/claude-code/hooks (canonical) — Context7 쿼리로 확보
 
 **TypeScript signature** (from SDK docs):
 ```typescript
@@ -75,12 +77,14 @@ type SessionEndHookInput = BaseHookInput & {
 |---|---|---|---|
 | **Ctrl+D (EOF)** | ✓ Yes | `other` | Clean exit, documented working case |
 | **/exit command** | ✗ **NO** | — | Known issue #17885, #35892 (open). Hardcoded "Goodbye!" message appears but hook silent |
-| **/clear command** | ✗ **NO** | `clear` | Issue #6428 — docs claim `clear` reason but hook doesn't actually fire |
+| **/clear command** | ✗ **NO** | — [^clear-reason] | Issue #6428 — docs claim `clear` reason value but hook doesn't actually fire |
 | **Ctrl+C (SIGINT)** | ⚠️ Partial | — | Hook fires but **cancelled mid-execution** with "Request interrupted by user" (issue #32712) |
 | **Session error/crash** | ✓ Yes | `other` | Inferred from design |
 | **--continue resume** | ✓ Yes but buggy | stale value | Issue #9188 — hook receives **previous session's** session_id/transcript_path (not current resumed session) |
 
 **Key insight**: SessionEnd is **reliable only for Ctrl+D exit**. CLI/error paths have known gaps.
+
+[^clear-reason]: Hook 자체가 fire 안 하므로 payload `reason` 도달 불가. docs는 `clear` 값이라고 명시하지만 verifiable 아님.
 
 ---
 
