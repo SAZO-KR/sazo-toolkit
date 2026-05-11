@@ -75,9 +75,15 @@ register_workflow_hooks() {
     _register_one_hook "PreToolUse" "Write|Edit|NotebookEdit|Bash" \
         "$hooks_dir/pre-worktree-gate.sh"
 
-    # 2) pre-exploration-gate — Grep/Bash (Opus 세션 내부 필터)
-    _register_one_hook "PreToolUse" "Grep|Bash" \
+    # 2) pre-exploration-gate — Grep/Glob/Bash (Opus 세션 내부 필터)
+    # Plan 14: Glob 추가. 메인 Opus가 Glob으로 직접 파일 탐색 시 카운트.
+    _register_one_hook "PreToolUse" "Grep|Glob|Bash" \
         "$hooks_dir/pre-exploration-gate.sh"
+
+    # 2b) pre-task-general-purpose-gate — Task (Plan 14)
+    # general-purpose subagent 호출 시 soft warn (Opus 부모 inherit 비용 알림).
+    _register_one_hook "PreToolUse" "Task" \
+        "$hooks_dir/pre-task-general-purpose-gate.sh"
 
     # 3) workflow-state-machine pre — Task/Write/Edit/NotebookEdit/Bash
     # Task 추가: Plan 04 §6 (B) GH#34692 fallback — subagent 내부 Edit/Write/Bash가

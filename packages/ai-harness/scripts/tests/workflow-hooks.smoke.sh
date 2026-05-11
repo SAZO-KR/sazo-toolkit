@@ -250,6 +250,35 @@ rc=$(SAZO_ALLOW_GREP_ONCE=1 run_hook "$HOOKS/pre-exploration-gate.sh" "" \
     '{"session_id":"once","cwd":"/tmp","tool_name":"Grep","tool_input":{"pattern":"foo"},"model":"claude-opus-4-7"}')
 assert_exit 2 "$rc" "GREP_ONCE consumed → block (not infinite bypass)"
 
+# Plan 14: Glob tool도 exploration으로 인정
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-exploration-gate.sh" "" \
+    '{"session_id":"eg1","cwd":"/tmp","tool_name":"Glob","tool_input":{"pattern":"**/*.ts"},"model":"claude-sonnet-4-6"}')
+assert_exit 0 "$rc" "sonnet Glob → pass (gate Opus-only)"
+
+rm -rf "$SAZO_STATE_DIR"
+for i in 1 2 3 4; do
+    rc=$(run_hook "$HOOKS/pre-exploration-gate.sh" "" \
+        '{"session_id":"eg2","cwd":"/tmp","tool_name":"Glob","tool_input":{"pattern":"**/*.ts"},"model":"claude-opus-4-7"}')
+    if [ "$i" -le 2 ]; then
+        assert_exit 0 "$rc" "opus Glob #$i → soft pass"
+    else
+        assert_exit 2 "$rc" "opus Glob #$i → block"
+    fi
+done
+
+# Plan 14: Grep + Glob 카운터 공유 검증 — 혼합 패턴도 block 임계 도달
+rm -rf "$SAZO_STATE_DIR"
+rc=$(run_hook "$HOOKS/pre-exploration-gate.sh" "" \
+    '{"session_id":"egmix","cwd":"/tmp","tool_name":"Grep","tool_input":{"pattern":"foo"},"model":"claude-opus-4-7"}')
+assert_exit 0 "$rc" "mix #1 Grep → soft pass (count=1)"
+rc=$(run_hook "$HOOKS/pre-exploration-gate.sh" "" \
+    '{"session_id":"egmix","cwd":"/tmp","tool_name":"Glob","tool_input":{"pattern":"**/*.ts"},"model":"claude-opus-4-7"}')
+assert_exit 0 "$rc" "mix #2 Glob → soft pass (count=2)"
+rc=$(run_hook "$HOOKS/pre-exploration-gate.sh" "" \
+    '{"session_id":"egmix","cwd":"/tmp","tool_name":"Grep","tool_input":{"pattern":"foo"},"model":"claude-opus-4-7"}')
+assert_exit 2 "$rc" "mix #3 Grep → block (Grep+Glob shared counter=3)"
+
 # git grep should also trigger
 rm -rf "$SAZO_STATE_DIR"
 rc=$(run_hook "$HOOKS/pre-exploration-gate.sh" "" \
@@ -801,12 +830,12 @@ PRE2=$(jq '(.hooks.PreToolUse // []) | length' "$TMP_SETTINGS")
 POST2=$(jq '(.hooks.PostToolUse // []) | length' "$TMP_SETTINGS")
 USR2=$(jq '(.hooks.UserPromptSubmit // []) | length' "$TMP_SETTINGS")
 
-if [ "$PRE1" = "$PRE2" ] && [ "$PRE1" = "3" ]; then
+if [ "$PRE1" = "$PRE2" ] && [ "$PRE1" = "4" ]; then
     PASS=$((PASS + 1))
-    echo "  ✓ PreToolUse 3 entries idempotent"
+    echo "  ✓ PreToolUse 4 entries idempotent"
 else
     FAIL=$((FAIL + 1))
-    echo "  ✗ PreToolUse: run1=$PRE1 run2=$PRE2 (expected 3)"
+    echo "  ✗ PreToolUse: run1=$PRE1 run2=$PRE2 (expected 4)"
 fi
 if [ "$POST1" = "$POST2" ] && [ "$POST1" = "1" ]; then
     PASS=$((PASS + 1))

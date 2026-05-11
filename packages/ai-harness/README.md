@@ -43,7 +43,8 @@ Plan 06부터 hook을 narrow(좁은 영향) / broad(광범위)로 분리.
 **Narrow — 기본 활성** (`SAZO_DISABLE_NARROW_HOOKS=1`로 opt-out):
 - `pre-worktree-gate` — 보호 브랜치 mutating 차단
 - `pre-commit-lint` — staged 파일 lint autofix
-- `pre-exploration-gate` — Opus 직접 grep/find 3회 후 block
+- `pre-exploration-gate` — Opus 직접 grep/find/glob 3회 후 block
+- `pre-task-general-purpose-gate` — Opus가 `general-purpose` subagent 호출 시 soft warn (전용 subagent 권장; Plan 14)
 - `user-prompt-approval-detect` — `/approved` nonce 발급
 
 **Broad — opt-in alpha** (`SAZO_WORKFLOW_HOOKS_ENABLED=1`로 활성):
