@@ -67,14 +67,16 @@ capture_stderr() {
 # ============================================================
 echo "=== opt-in flag ==="
 
-# Without SAZO_WORKFLOW_HOOKS_ENABLED, all hooks pass
-rc=$(SAZO_WORKFLOW_HOOKS_ENABLED= run_hook "$HOOKS/pre-worktree-gate.sh" "" \
+# Plan 06: narrow hooks (pre-worktree-gate 등) default ON.
+# 비활성화에는 SAZO_DISABLE_NARROW_HOOKS=1 필요.
+rc=$(SAZO_DISABLE_NARROW_HOOKS=1 run_hook "$HOOKS/pre-worktree-gate.sh" "" \
     "{\"session_id\":\"o1\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/x\"}}")
-assert_exit 0 "$rc" "opt-out: pre-worktree-gate passes"
+assert_exit 0 "$rc" "narrow opt-out: pre-worktree-gate passes"
 
+# Broad hooks (state-machine)는 default OFF — SAZO_WORKFLOW_HOOKS_ENABLED 미설정 시 통과
 rc=$(SAZO_WORKFLOW_HOOKS_ENABLED= run_hook "$HOOKS/workflow-state-machine.sh" "pre" \
     "{\"session_id\":\"o2\",\"cwd\":\"$TMP_REPO\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/x\"}}")
-assert_exit 0 "$rc" "opt-out: state-machine passes"
+assert_exit 0 "$rc" "broad opt-out: state-machine passes"
 
 # ============================================================
 echo ""

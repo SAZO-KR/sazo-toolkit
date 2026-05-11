@@ -14,7 +14,7 @@
 #
 # Schema versioning: state file에 schema_version 필드. 향후 migration 분기.
 #
-# Opt-in: 기본 비활성. 활성화하려면 SAZO_WORKFLOW_HOOKS_ENABLED=1.
+# Hook gate (Plan 06): narrow hooks default ON, broad hooks (workflow-state-machine) opt-in via SAZO_WORKFLOW_HOOKS_ENABLED=1.
 
 set -uo pipefail
 
@@ -24,7 +24,20 @@ SCHEMA_VERSION=3  # v3: added pre_commit_markers (per-repo HEAD baseline dict)
 mkdir -p -m 700 "$STATE_DIR" 2>/dev/null || mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR" 2>/dev/null || true
 
-# ----- opt-in -----
+# ----- hook gate (Plan 06: narrow vs broad split) -----
+#
+# narrow_hooks_enabled — default ON. low-blast-radius hooks:
+#   pre-worktree-gate, pre-commit-lint, pre-exploration-gate,
+#   user-prompt-approval-detect.
+#   Opt-out: SAZO_DISABLE_NARROW_HOOKS=1.
+#
+# workflow_hooks_enabled — default OFF (opt-in alpha). broad hook:
+#   workflow-state-machine. Requires SAZO_WORKFLOW_HOOKS_ENABLED=1.
+#   Opt-out: SAZO_DISABLE_WORKFLOW_HOOKS=1.
+
+narrow_hooks_enabled() {
+    [ "${SAZO_DISABLE_NARROW_HOOKS:-0}" != "1" ]
+}
 
 workflow_hooks_enabled() {
     [ "${SAZO_WORKFLOW_HOOKS_ENABLED:-0}" = "1" ] \

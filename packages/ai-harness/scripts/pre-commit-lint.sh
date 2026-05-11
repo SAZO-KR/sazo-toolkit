@@ -82,6 +82,12 @@ fi
 
 # --- Hook 모드 ---
 
+# Plan 06: narrow hook gate. Default ON, opt-out via SAZO_DISABLE_NARROW_HOOKS=1.
+# Source guard: hook 모드만 게이트, CLI(--set/--unset) 모드는 위에서 이미 처리됨.
+if [ "${SAZO_DISABLE_NARROW_HOOKS:-0}" = "1" ]; then
+    exit 0
+fi
+
 command -v jq >/dev/null 2>&1 || exit 0
 
 INPUT=$(cat)

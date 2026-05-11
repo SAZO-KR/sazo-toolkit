@@ -6,11 +6,12 @@
 # 탐색은 code-searcher/docs-researcher subagent(haiku)에 위임해야 한다.
 #
 # 정책:
-# - Opt-in (SAZO_WORKFLOW_HOOKS_ENABLED=1) + Opus 모델만 적용
+# - Narrow hook (Plan 06부터 default ON) + Opus 모델만 적용
 # - Grep tool + Bash `grep|egrep|fgrep|git grep|rg|ag|fd|xargs grep|find -name` → 카운트
 # - 1-2회는 soft 경고, 3회부터 block
 # - SAZO_ALLOW_GREP_ONCE=1: 1회 override
-# - SAZO_SKIP_EXPLORE_GATE=1: 전체 비활성
+# - SAZO_SKIP_EXPLORE_GATE=1: 본 hook만 비활성
+# - SAZO_DISABLE_NARROW_HOOKS=1: 모든 narrow hook 비활성
 # - explore_count는 Task subagent 호출 시 PostToolUse hook이 decay 처리
 
 set -uo pipefail
@@ -19,7 +20,7 @@ LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
 # shellcheck source=lib/session-state.sh
 source "$LIB_DIR/session-state.sh"
 
-if ! workflow_hooks_enabled || [ "${SAZO_SKIP_EXPLORE_GATE:-0}" = "1" ]; then
+if ! narrow_hooks_enabled || [ "${SAZO_SKIP_EXPLORE_GATE:-0}" = "1" ]; then
     exit 0
 fi
 

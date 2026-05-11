@@ -15,7 +15,7 @@ LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
 # shellcheck source=lib/session-state.sh
 source "$LIB_DIR/session-state.sh"
 
-if ! workflow_hooks_enabled || [ "${SAZO_SKIP_WORKTREE_GATE:-0}" = "1" ]; then
+if ! narrow_hooks_enabled || [ "${SAZO_SKIP_WORKTREE_GATE:-0}" = "1" ]; then
     exit 0
 fi
 
