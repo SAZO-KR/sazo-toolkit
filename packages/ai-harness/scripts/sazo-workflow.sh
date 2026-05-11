@@ -178,6 +178,22 @@ EOF
         | sort -rn -k1,1
 }
 
+# Session ID validation (Codex PR #29 round 18 P2 — C2 / 3215743087):
+# `find -name "${sid}--*.json"` 는 sid 에 glob metachar (`*`/`?`/`[`) 포함 시
+# 다른 세션 state file 매칭 가능 (예: sid="*" → 모든 세션 leak).
+# Claude Code session_id 는 UUID 형식이므로 alnum + dash + underscore 만 허용.
+# 정상 세션 자식은 영향 없음. 무효 입력 거부 → cross-session leak 차단.
+_validate_sid() {
+    local sid="$1"
+    case "$sid" in
+        ''|*[!a-zA-Z0-9_-]*)
+            echo "sazo-workflow: invalid session id '$sid' (allowed: alnum, dash, underscore)" >&2
+            return 1
+            ;;
+    esac
+    return 0
+}
+
 resolve_session() {
     local arg="${1:-}"
     # Self-review L2 (PR #29): use `find -maxdepth 1` instead of shell glob
@@ -186,6 +202,8 @@ resolve_session() {
     # `ls`. `find ... -name` exits 0 with no output on no-match; pipe to head
     # -1 + `[ -n ... ]` for boolean check.
     if [ -n "$arg" ]; then
+        # round 18 P2: sid glob metachar reject 우선.
+        _validate_sid "$arg" || return 2
         if [ -n "$(find "$STATE_DIR" -maxdepth 1 -type f -name "${arg}--*.json" 2>/dev/null | head -1)" ]; then
             printf '%s' "$arg"
             return 0
@@ -193,6 +211,8 @@ resolve_session() {
         return 2
     fi
     if [ -n "${SAZO_SESSION_ID:-}" ]; then
+        # round 18 P2: env 경유 sid 도 동일 검증 (외부 ENV 신뢰 금지).
+        _validate_sid "$SAZO_SESSION_ID" || return 2
         if [ -n "$(find "$STATE_DIR" -maxdepth 1 -type f -name "${SAZO_SESSION_ID}--*.json" 2>/dev/null | head -1)" ]; then
             printf '%s' "$SAZO_SESSION_ID"
             return 0
@@ -222,6 +242,9 @@ resolve_session() {
 
 resolve_state_file() {
     local sid="$1"
+    # round 18 P2 (C2): 한 번 더 검증. resolve_session 우회 진입 경로 (직접 sid 패스)
+    # 가 있어도 glob metachar 가 find -name 에 도달하지 않도록 보호.
+    _validate_sid "$sid" || return 1
     # Codex PR #29 round 16 P2: SAZO_CWD set 시 exact cwd_hash 매칭 우선.
     # 동일 sid 가 여러 worktree 의 state file 을 가질 때, 다른 worktree mtime 이
     # 더 최신이면 SAZO_CWD 로 지정한 worktree 가 아닌 다른 stage/history 가 노출되어
@@ -282,6 +305,14 @@ cmd_status() {
     sf=$(resolve_state_file "$sid") || return 2
 
     if [ "$JSON_MODE" = "1" ]; then
+        # Codex PR #29 round 18 P2 (C1 / 3215734119): state file 가
+        # truncated/malformed 일 때 cat 직출력하면 자동화가 invalid JSON 을 rc=0 과
+        # 함께 받음. jq 로 parse 검증 — 통과 시 원본 cat (whitespace/순서 보존),
+        # 실패 시 stderr + rc=1 로 사용자에게 명확히 알림.
+        if ! jq empty "$sf" >/dev/null 2>&1; then
+            echo "sazo-workflow: state file is not valid JSON: $sf" >&2
+            return 1
+        fi
         cat "$sf"
         return 0
     fi
@@ -386,6 +417,9 @@ cmd_why_blocked() {
     #   - 둘 다 없을 때만 단일 활성 세션 resolve. 실패 시 글로벌 fallback.
     local sid
     if [ -n "$sid_arg" ]; then
+        # round 18 P2 (C2): explicit sid_arg 도 audit log scope 에 사용되므로
+        # metachar 차단. jq --arg 로 안전 전달이지만 사용자 입력 sanitize 일관성.
+        _validate_sid "$sid_arg" || return 1
         sid="$sid_arg"
     elif [ -n "${SAZO_SESSION_ID:-}" ]; then
         # round 15 P2: SAZO_SESSION_ID 가 set 이면 resolve 결과(0/2)와 무관하게
@@ -540,16 +574,27 @@ cmd_sessions() {
         # 위반(파서가 자동 복원도 못 함). jq -R 가 line 을 string 으로 받아 모든 JSON
         # spec escape 를 자동 처리.
         # 입력: TAB 구분 `mtime\tpath` 라인. jq 내부에서 split → base → sid/cwd_hash 분해.
+        # Codex PR #29 round 18 P2 (C3 / 3215743088): `split("\t")` 는 path 안에 TAB
+        # 이 등장하면 3+ element 배열이 되어 `$p[1]` 가 path 첫 chunk만 가지게 됨.
+        # mtime 과 path 의 delimiter 는 첫 TAB 만이며 나머지는 path 의 일부다.
+        # `index("\t")` 로 첫 occurrence 위치를 찾아 mtime / path 를 정확히 분리.
         printf '%s\n' "$rows" | jq -Rc '
             select(length > 0) |
-            split("\t") as $p |
-            ($p[1] | split("/") | last | sub("\\.json$"; "") | split("--")) as $id |
-            {sid: $id[0], cwd_hash: $id[1], mtime: ($p[0] | tonumber), path: $p[1]}
+            (index("\t")) as $i |
+            (.[:$i]) as $mt |
+            (.[$i+1:]) as $path |
+            ($path | split("/") | last | sub("\\.json$"; "") | split("--")) as $id |
+            {sid: $id[0], cwd_hash: $id[1], mtime: ($mt | tonumber), path: $path}
         '
         return 0
     fi
-    printf '%s\n' "$rows" | awk -F'\t' '{
-        mt=$1; path=$2;
+    # round 18 P2 (C3): awk 도 동일하게 첫 TAB 만 delimiter 로 사용.
+    # `-F'\t'` + `$1`/`$2` 는 multi-tab path 에서 path 잘림. index/substr 로 분리.
+    printf '%s\n' "$rows" | awk '{
+        i = index($0, "\t");
+        if (i == 0) next;
+        mt = substr($0, 1, i-1);
+        path = substr($0, i+1);
         n=split(path,parts,"/"); base=parts[n];
         sub(/\.json$/, "", base);
         split(base, sb, "--");

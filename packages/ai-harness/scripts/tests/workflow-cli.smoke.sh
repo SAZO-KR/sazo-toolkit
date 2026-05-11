@@ -865,6 +865,60 @@ else
     fail "33." "rc=$rc_33 out=$OUT_33"
 fi
 
+# 34. status --json: malformed/truncated state file → rc=1 + stderr (not silent
+#     pass with garbage stdout). Codex PR #29 round 18 P2 (C1 / 3215734119).
+TMP_C1=$(mktemp -d)
+printf '{"stage":"ci","history":[' > "$TMP_C1/sessC1--abc.json"  # truncated JSON
+OUT_34=$(SAZO_STATE_DIR="$TMP_C1" "$CLI" status --session sessC1 --json 2>&1)
+rc_34=$?
+rm -rf "$TMP_C1"
+if [ "$rc_34" = "1" ] && echo "$OUT_34" | grep -q "not valid JSON"; then
+    pass "34. status --json: malformed state file rejected with rc=1"
+else
+    fail "34." "rc=$rc_34 out=$OUT_34"
+fi
+
+# 35. resolve_session: sid containing glob metachar → rejected (no cross-session
+#     leak). Codex PR #29 round 18 P2 (C2 / 3215743087).
+TMP_C2=$(mktemp -d)
+jq -n '{schema_version:2,session_id:"realA",stage:"ci",history:[]}' \
+    > "$TMP_C2/realA--h1.json"
+jq -n '{schema_version:2,session_id:"realB",stage:"ci",history:[]}' \
+    > "$TMP_C2/realB--h2.json"
+# sid="*" 가 glob 으로 해석되면 realA/realB 어느 것이든 매칭됨. 거부되어야 함.
+OUT_35=$(SAZO_STATE_DIR="$TMP_C2" "$CLI" status --session "*" 2>&1)
+rc_35=$?
+# sid="[a]b" 도 거부되어야 함.
+OUT_35b=$(SAZO_STATE_DIR="$TMP_C2" "$CLI" status --session "[a]b" 2>&1)
+rc_35b=$?
+rm -rf "$TMP_C2"
+if [ "$rc_35" = "2" ] && echo "$OUT_35" | grep -q "invalid session id" \
+    && [ "$rc_35b" = "2" ] && echo "$OUT_35b" | grep -q "invalid session id"; then
+    pass "35. resolve_session: glob metachar in sid rejected"
+else
+    fail "35." "rc=$rc_35/$rc_35b out=$OUT_35 / $OUT_35b"
+fi
+
+# 36. sessions --json: STATE_DIR path containing TAB → JSON output remains valid
+#     and path field reconstructs correctly. Codex PR #29 round 18 P2
+#     (C3 / 3215743088).
+TMP_C3_PARENT=$(mktemp -d)
+TMP_C3="$TMP_C3_PARENT/has"$'\t'"tab/state"
+mkdir -p "$TMP_C3"
+jq -n '{schema_version:2,session_id:"sessC3",stage:"ci",history:[]}' \
+    > "$TMP_C3/sessC3--cwdh.json"
+OUT_36=$(SAZO_STATE_DIR="$TMP_C3" "$CLI" sessions --days 7 --json 2>&1)
+rc_36=$?
+# JSON parse 가능 + path 가 원본 그대로 복원 되어야 함.
+parsed_path=$(printf '%s\n' "$OUT_36" | jq -r '.path' 2>/dev/null)
+expected_path="$TMP_C3/sessC3--cwdh.json"
+rm -rf "$TMP_C3_PARENT"
+if [ "$rc_36" = "0" ] && [ "$parsed_path" = "$expected_path" ]; then
+    pass "36. sessions --json: STATE_DIR with TAB → path reconstructs correctly"
+else
+    fail "36." "rc=$rc_36 parsed='$parsed_path' expected='$expected_path' out=$OUT_36"
+fi
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"
