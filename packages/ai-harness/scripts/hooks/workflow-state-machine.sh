@@ -38,15 +38,22 @@ read_hook_payload
 
 if [ "$MODE" = "post" ] && narrow_hooks_enabled \
    && [ -n "${SAZO_SESSION_ID:-}" ] && [ "$SAZO_TOOL_NAME" = "Task" ]; then
+    # Codex P2 (round 2): is_error/interrupted Task는 decay 안 함.
+    # 실패한 위임은 "성공적 위임" 보상을 받으면 안 됨 — 3-grep block을
+    # aborted Task로 우회 가능해짐. handle_post의 같은 가드와 일치.
     decay_subagent=$(echo "$SAZO_TOOL_INPUT" | jq -r '.subagent_type // ""' 2>/dev/null)
-    case "$decay_subagent" in
-        code-searcher|docs-researcher|explore|Explore|\
-        nori-codebase-locator|nori-codebase-analyzer|nori-codebase-pattern-finder|\
-        nori-web-search-researcher|image-analyzer|multimodal-looker)
-            state_init "$SAZO_SESSION_ID" "$SAZO_CWD" "$SAZO_MODEL"
-            state_decrement "$SAZO_SESSION_ID" ".explore_count"
-            ;;
-    esac
+    decay_task_error=$(echo "$SAZO_TOOL_RESPONSE" | jq -r '.is_error // false' 2>/dev/null)
+    decay_task_interrupted=$(echo "$SAZO_TOOL_RESPONSE" | jq -r '.interrupted // false' 2>/dev/null)
+    if [ "$decay_task_error" != "true" ] && [ "$decay_task_interrupted" != "true" ]; then
+        case "$decay_subagent" in
+            code-searcher|docs-researcher|explore|Explore|\
+            nori-codebase-locator|nori-codebase-analyzer|nori-codebase-pattern-finder|\
+            nori-web-search-researcher|image-analyzer|multimodal-looker)
+                state_init "$SAZO_SESSION_ID" "$SAZO_CWD" "$SAZO_MODEL"
+                state_decrement "$SAZO_SESSION_ID" ".explore_count"
+                ;;
+        esac
+    fi
 fi
 
 if ! workflow_hooks_enabled || [ "${SAZO_SKIP_STATE_MACHINE:-0}" = "1" ]; then

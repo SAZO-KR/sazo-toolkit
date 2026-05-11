@@ -190,6 +190,46 @@ test_decay_narrow_only() {
     else
         fail "explore_count changed despite narrow disabled: 5→$after2"
     fi
+
+    # Codex P2 (round 2): is_error/interrupted Task → no decay
+    (
+        export SAZO_STATE_DIR
+        source "$HARNESS/scripts/hooks/lib/session-state.sh"
+        state_set_json "$sid" ".explore_count" 3 "$cwd"
+    )
+    local err_payload
+    err_payload=$(jq -n --arg sid "$sid" --arg cwd "$cwd" \
+        '{session_id:$sid, cwd:$cwd, tool_name:"Task", tool_input:{subagent_type:"code-searcher"}, tool_response:{is_error:true}, model:"claude-opus-4-7"}')
+    echo "$err_payload" | SAZO_STATE_DIR="$SAZO_STATE_DIR" \
+        bash "$HOOKS/workflow-state-machine.sh" post >/dev/null 2>&1
+    local after_err
+    after_err=$(
+        export SAZO_STATE_DIR
+        source "$HARNESS/scripts/hooks/lib/session-state.sh"
+        state_get "$sid" ".explore_count" "$cwd"
+    )
+    if [ "$after_err" = "3" ]; then
+        pass "explore_count NOT decayed when Task is_error=true"
+    else
+        fail "explore_count changed on failed Task: 3→$after_err"
+    fi
+
+    local int_payload
+    int_payload=$(jq -n --arg sid "$sid" --arg cwd "$cwd" \
+        '{session_id:$sid, cwd:$cwd, tool_name:"Task", tool_input:{subagent_type:"code-searcher"}, tool_response:{interrupted:true}, model:"claude-opus-4-7"}')
+    echo "$int_payload" | SAZO_STATE_DIR="$SAZO_STATE_DIR" \
+        bash "$HOOKS/workflow-state-machine.sh" post >/dev/null 2>&1
+    local after_int
+    after_int=$(
+        export SAZO_STATE_DIR
+        source "$HARNESS/scripts/hooks/lib/session-state.sh"
+        state_get "$sid" ".explore_count" "$cwd"
+    )
+    if [ "$after_int" = "3" ]; then
+        pass "explore_count NOT decayed when Task interrupted=true"
+    else
+        fail "explore_count changed on interrupted Task: 3→$after_int"
+    fi
 }
 test_decay_narrow_only
 
