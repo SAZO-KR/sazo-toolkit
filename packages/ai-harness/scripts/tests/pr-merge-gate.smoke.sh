@@ -191,6 +191,15 @@ rm -rf "$SAZO_STATE_DIR"
 rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m10" 'echo prepare && gh pr merge')")
 assert_exit 2 "$rc" "M10: 'echo ... && gh pr merge' → block (segment first-token = gh)"
 
+# Codex PR#39 round 2: inline env assignment prefix
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m11" 'GH_TOKEN=xxx gh pr merge')")
+assert_exit 2 "$rc" "M11: 'GH_TOKEN=xxx gh pr merge' → block (inline env assignment skip)"
+
+rm -rf "$SAZO_STATE_DIR"
+rc=$(SAZO_WORKFLOW_HOOKS_ENABLED=1 run_hook "pre" "$(mk_merge_payload "m12" 'FOO=1 BAR=2 gh pr merge')")
+assert_exit 2 "$rc" "M12: 'FOO=1 BAR=2 gh pr merge' → block (multiple inline assignments)"
+
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"

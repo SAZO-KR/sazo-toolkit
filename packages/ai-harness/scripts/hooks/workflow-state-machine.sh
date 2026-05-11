@@ -1221,6 +1221,11 @@ EOF_PST
                 while IFS= read -r seg; do
                     seg=$(printf '%s' "$seg" | sed -E 's/^[[:space:]]+//')
                     [ -z "$seg" ] && continue
+                    # Codex PR#39 round 2 P2: leading shell variable assignments
+                    # (`VAR=value cmd args`, e.g. `GH_TOKEN=xxx gh pr merge`) skip.
+                    # POSIX simple command 문법: `[NAME=word]... command [args]`.
+                    # NAME은 `[a-zA-Z_][a-zA-Z0-9_]*` (POSIX 3.231).
+                    seg=$(printf '%s' "$seg" | sed -E 's/^([a-zA-Z_][a-zA-Z0-9_]*=[^[:space:]]*[[:space:]]+)+//')
                     # 첫 토큰이 gh 이고 그 다음이 pr merge 인지 확인
                     if echo "$seg" | grep -qE '^gh[[:space:]]+pr[[:space:]]+merge\b'; then
                         gh_merge_invoked=1

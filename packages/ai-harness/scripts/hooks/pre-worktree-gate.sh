@@ -68,9 +68,10 @@ if [ "$SAZO_TOOL_NAME" = "Bash" ]; then
     fi
     # Gemini PR#39 medium fix: clustered short flag (`git branch -dr`) 미탐지 회귀 방어.
     # 기존 `-[dDmMcCf]` 는 `\b` anchor 때문에 `-dr` 같이 d 뒤에 다른 글자가 붙으면 매칭 못함.
-    # 대신 `-[a-zA-Z]*[dDmMcCf][a-zA-Z]*` — mutating char가 cluster 어디에 있어도 매칭.
-    # read-only 단축 flag (-l/-v/-a/-r/-h)는 d/D/m/M/c/C/f를 포함 안 하므로 false-positive 없음.
-    if echo "$cmd" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?branch[[:space:]]+([^[:space:]]+[[:space:]]+)*(-[a-zA-Z]*[dDmMcCf][a-zA-Z]*|--(delete|move|copy|force|track|no-track|set-upstream-to|unset-upstream|edit-description))(\b|=)'; then
+    # 대신 `-[a-zA-Z]*[dDmMcCfu][a-zA-Z]*` — mutating char가 cluster 어디에 있어도 매칭.
+    # Codex PR#39 round 2: `-u` short form (`git branch -u <upstream>`) = `--set-upstream-to` 추가.
+    # read-only 단축 flag (-l/-v/-a/-r/-h)는 d/D/m/M/c/C/f/u를 포함 안 하므로 false-positive 없음.
+    if echo "$cmd" | grep -qE '\bgit[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?branch[[:space:]]+([^[:space:]]+[[:space:]]+)*(-[a-zA-Z]*[dDmMcCfu][a-zA-Z]*|--(delete|move|copy|force|track|no-track|set-upstream-to|unset-upstream|edit-description))(\b|=)'; then
         is_mutating=1
     fi
     # Note: 안쪽 `[^[:space:]]+` (1글자 이상) — POSIX ERE backtracking 안전.
