@@ -135,16 +135,21 @@ mk_payload() {
         '{session_id:$sid, transcript_path:$tp, cwd:$cwd, reason:$reason}'
 }
 
+copy_harness_libs() {
+    local dest="$1"
+    mkdir -p "$dest/scripts/hooks/lib"
+    cp "$LIB" "$dest/scripts/hooks/lib/session-state.sh"
+    cp "$LIB_SKIP_CONTROL" "$dest/scripts/hooks/lib/skip-control.sh"
+    cp "$LIB_METRICS" "$dest/scripts/hooks/lib/metrics.sh"
+}
+
 # ---------------------------------------------------------------------------
 echo "=== T1: Ctrl+D path proxy — basic record write ==="
 {
     TMP_HOME=$(mk_tmp_home)
     TMP_HARNESS=$(mktemp -d)
     trap 'rm -rf "$TMP_HOME" "$TMP_HARNESS"' EXIT
-    mkdir -p "$TMP_HARNESS/scripts/hooks/lib"
-    cp "$LIB" "$TMP_HARNESS/scripts/hooks/lib/session-state.sh"
-    cp "$LIB_SKIP_CONTROL" "$TMP_HARNESS/scripts/hooks/lib/skip-control.sh"
-    cp "$LIB_METRICS" "$TMP_HARNESS/scripts/hooks/lib/metrics.sh"
+    copy_harness_libs "$TMP_HARNESS"
     cp "$HOOK" "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
     chmod +x "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
     # Create fake workflow-state-machine.sh so check #6 can succeed if needed
@@ -200,10 +205,7 @@ echo "=== T2: hook_healthy OR-branch ==="
     # fake hook scripts that exist on disk so check #6 passes.
     mk_harness_with_fake_hooks() {
         local d="$1"
-        mkdir -p "$d/scripts/hooks/lib"
-        cp "$LIB" "$d/scripts/hooks/lib/session-state.sh"
-        cp "$LIB_SKIP_CONTROL" "$d/scripts/hooks/lib/skip-control.sh"
-        cp "$LIB_METRICS" "$d/scripts/hooks/lib/metrics.sh"
+        copy_harness_libs "$d"
         # Create fake hook scripts (just need to exist)
         printf '#!/usr/bin/env bash\n' > "$d/scripts/hooks/post-session-end-metrics.sh"
         chmod +x "$d/scripts/hooks/post-session-end-metrics.sh"
@@ -254,10 +256,7 @@ echo "=== T3: concurrent append — lock serialization ==="
     TMP_HOME=$(mktemp -d)
     TMP_HARNESS=$(mktemp -d)
     mkdir -p "$TMP_HOME/.claude/state"
-    mkdir -p "$TMP_HARNESS/scripts/hooks/lib"
-    cp "$LIB" "$TMP_HARNESS/scripts/hooks/lib/session-state.sh"
-    cp "$LIB_SKIP_CONTROL" "$TMP_HARNESS/scripts/hooks/lib/skip-control.sh"
-    cp "$LIB_METRICS" "$TMP_HARNESS/scripts/hooks/lib/metrics.sh"
+    copy_harness_libs "$TMP_HARNESS"
     cp "$HOOK" "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
     chmod +x "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
     printf '#!/usr/bin/env bash\n' > "$TMP_HARNESS/scripts/hooks/workflow-state-machine.sh"
@@ -300,10 +299,7 @@ echo "=== T4: jq missing → metric not written + audit log entry ==="
     TMP_HOME=$(mktemp -d)
     TMP_HARNESS=$(mktemp -d)
     mkdir -p "$TMP_HOME/.claude/state"
-    mkdir -p "$TMP_HARNESS/scripts/hooks/lib"
-    cp "$LIB" "$TMP_HARNESS/scripts/hooks/lib/session-state.sh"
-    cp "$LIB_SKIP_CONTROL" "$TMP_HARNESS/scripts/hooks/lib/skip-control.sh"
-    cp "$LIB_METRICS" "$TMP_HARNESS/scripts/hooks/lib/metrics.sh"
+    copy_harness_libs "$TMP_HARNESS"
     cp "$HOOK" "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
     chmod +x "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
     printf '#!/usr/bin/env bash\n' > "$TMP_HARNESS/scripts/hooks/workflow-state-machine.sh"
@@ -353,10 +349,7 @@ echo "=== T5: 5s timeout portable ==="
     TMP_HOME=$(mktemp -d)
     TMP_HARNESS=$(mktemp -d)
     mkdir -p "$TMP_HOME/.claude/state"
-    mkdir -p "$TMP_HARNESS/scripts/hooks/lib"
-    cp "$LIB" "$TMP_HARNESS/scripts/hooks/lib/session-state.sh"
-    cp "$LIB_SKIP_CONTROL" "$TMP_HARNESS/scripts/hooks/lib/skip-control.sh"
-    cp "$LIB_METRICS" "$TMP_HARNESS/scripts/hooks/lib/metrics.sh"
+    copy_harness_libs "$TMP_HARNESS"
     cp "$HOOK" "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
     chmod +x "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
     printf '#!/usr/bin/env bash\n' > "$TMP_HARNESS/scripts/hooks/workflow-state-machine.sh"
@@ -386,10 +379,7 @@ echo "=== T5: 5s timeout portable ==="
         TMP_HOME=$(mktemp -d)
         TMP_HARNESS=$(mktemp -d)
         mkdir -p "$TMP_HOME/.claude/state"
-        mkdir -p "$TMP_HARNESS/scripts/hooks/lib"
-        cp "$LIB" "$TMP_HARNESS/scripts/hooks/lib/session-state.sh"
-        cp "$LIB_SKIP_CONTROL" "$TMP_HARNESS/scripts/hooks/lib/skip-control.sh"
-        cp "$LIB_METRICS" "$TMP_HARNESS/scripts/hooks/lib/metrics.sh"
+        copy_harness_libs "$TMP_HARNESS"
         cp "$HOOK" "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
         chmod +x "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
         printf '#!/usr/bin/env bash\n' > "$TMP_HARNESS/scripts/hooks/workflow-state-machine.sh"
@@ -443,10 +433,7 @@ EOF
     TMP_HOME=$(mktemp -d)
     TMP_HARNESS=$(mktemp -d)
     mkdir -p "$TMP_HOME/.claude/state"
-    mkdir -p "$TMP_HARNESS/scripts/hooks/lib"
-    cp "$LIB" "$TMP_HARNESS/scripts/hooks/lib/session-state.sh"
-    cp "$LIB_SKIP_CONTROL" "$TMP_HARNESS/scripts/hooks/lib/skip-control.sh"
-    cp "$LIB_METRICS" "$TMP_HARNESS/scripts/hooks/lib/metrics.sh"
+    copy_harness_libs "$TMP_HARNESS"
     cp "$HOOK" "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
     chmod +x "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
     printf '#!/usr/bin/env bash\n' > "$TMP_HARNESS/scripts/hooks/workflow-state-machine.sh"
@@ -516,10 +503,7 @@ echo "=== T7: missing session_id → skip metric + audit log ==="
     TMP_HOME=$(mktemp -d)
     TMP_HARNESS=$(mktemp -d)
     mkdir -p "$TMP_HOME/.claude/state"
-    mkdir -p "$TMP_HARNESS/scripts/hooks/lib"
-    cp "$LIB" "$TMP_HARNESS/scripts/hooks/lib/session-state.sh"
-    cp "$LIB_SKIP_CONTROL" "$TMP_HARNESS/scripts/hooks/lib/skip-control.sh"
-    cp "$LIB_METRICS" "$TMP_HARNESS/scripts/hooks/lib/metrics.sh"
+    copy_harness_libs "$TMP_HARNESS"
     cp "$HOOK" "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
     chmod +x "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
     printf '#!/usr/bin/env bash\n' > "$TMP_HARNESS/scripts/hooks/workflow-state-machine.sh"
@@ -562,13 +546,9 @@ echo "=== T8: hook_healthy check #6 — hook command path ==="
     TMP_HOME=$(mktemp -d)
     TMP_HARNESS=$(mktemp -d)
     mkdir -p "$TMP_HOME/.claude/state"
-    mkdir -p "$TMP_HARNESS/scripts/hooks/lib"
-    cp "$LIB" "$TMP_HARNESS/scripts/hooks/lib/session-state.sh"
-    cp "$LIB_SKIP_CONTROL" "$TMP_HARNESS/scripts/hooks/lib/skip-control.sh"
-    cp "$LIB_METRICS" "$TMP_HARNESS/scripts/hooks/lib/metrics.sh"
+    copy_harness_libs "$TMP_HARNESS"
     # Create a fake hook command that actually exists
     FAKE_HOOK="$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
-    mkdir -p "$(dirname "$FAKE_HOOK")"
     cp "$HOOK" "$FAKE_HOOK"
     chmod +x "$FAKE_HOOK"
     mk_settings_json "$TMP_HOME" "hook_path" "$TMP_HARNESS" "$FAKE_HOOK"
@@ -598,10 +578,7 @@ echo "=== T9: AUDIT_LOG/STATE_DIR exported to timeout subshell ==="
     else
         TMP_CUSTOM=$(mktemp -d)
         TMP_HARNESS=$(mktemp -d)
-        mkdir -p "$TMP_HARNESS/scripts/hooks/lib"
-        cp "$LIB" "$TMP_HARNESS/scripts/hooks/lib/session-state.sh"
-        cp "$LIB_SKIP_CONTROL" "$TMP_HARNESS/scripts/hooks/lib/skip-control.sh"
-        cp "$LIB_METRICS" "$TMP_HARNESS/scripts/hooks/lib/metrics.sh"
+        copy_harness_libs "$TMP_HARNESS"
 
         # Source lib with custom state dir to set AUDIT_LOG / STATE_DIR
         # then test whether audit_log inside `timeout bash -c` subshell writes there.
