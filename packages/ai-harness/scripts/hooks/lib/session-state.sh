@@ -1176,121 +1176,6 @@ ci_invalidate_if_code_changed() {
     simple_audit "ci_invalidated" "src=$src" "path=$path" "sid=$sid"
 }
 
-# ----- Plan 13 Stage B: auto-skip wrapper -----
-
-# Stages where autonomous skip is exempt from the SAZO_ALLOW_AUTO_SKIP gate.
-# worktree has its own policy (gate.sh passthrough on non-git repos) — allow here.
-WRAPPER_EXEMPT_STAGES=("worktree")
-
-is_wrapper_exempt() {
-    local stage="$1" s
-    for s in "${WRAPPER_EXEMPT_STAGES[@]}"; do
-        [ "$s" = "$stage" ] && return 0
-    done
-    return 1
-}
-
-# mark_skip_with_check <sid> <stage> <by> <reason> [cwd]
-# Wrapper around stage_mark for skipped entries.
-# - by="auto" + non-exempt stage + SAZO_ALLOW_AUTO_SKIP != 1 → hard_block (exit 2 via stderr)
-# - by="auto" + non-exempt stage + SAZO_ALLOW_AUTO_SKIP=1 → warn metric + stage_mark
-# - by="auto" + exempt stage → stage_mark directly
-# - by != "auto" → stage_mark directly
-#
-# Callers that are NOT inside workflow-state-machine.sh (no hard_block helper) should
-# source this lib and define hard_block before calling, or set SAZO_ALLOW_AUTO_SKIP.
-mark_skip_with_check() {
-    local sid="$1" stage="$2" by="$3" reason="$4" cwd="${5:-${SAZO_CWD:-}}"
-
-    if [ "$by" = "auto" ] && ! is_wrapper_exempt "$stage"; then
-        if [ "${SAZO_ALLOW_AUTO_SKIP:-0}" = "1" ]; then
-            # Permitted but warn
-            audit_log "auto_skip_warn" "$sid" "$stage" "skipped" "auto" \
-                "SAZO_ALLOW_AUTO_SKIP=1; reason=$reason"
-            stage_mark "$sid" "$stage" "skipped" "auto" "$reason" "$cwd"
-        else
-            # Block — emit to stderr then exit non-zero
-            audit_log "auto_skip_blocked" "$sid" "$stage" "blocked" "auto" \
-                "SAZO_ALLOW_AUTO_SKIP not set; reason=$reason"
-            printf '[auto-skip-block] Autonomous skip of stage "%s" blocked.\n' "$stage" >&2
-            printf 'Provide explicit user skip: /skip %s <reason>\n' "$stage" >&2
-            printf 'Emergency override: SAZO_ALLOW_AUTO_SKIP=1\n' >&2
-            # Use hard_block if available, else exit 2 directly
-            if command -v hard_block >/dev/null 2>&1; then
-                hard_block "skip-auto" "Autonomous skip 차단. /skip $stage <reason> 입력 필요. 극단 예외: SAZO_ALLOW_AUTO_SKIP=1"
-            else
-                exit 2
-            fi
-        fi
-    else
-        stage_mark "$sid" "$stage" "skipped" "$by" "$reason" "$cwd"
-    fi
-}
-
-# ----- Plan 13 Stage A additions -----
-
-# _append_metrics_inner: append a single JSONL line to dest.
-# Called inside _with_lock to ensure atomic append.
-_append_metrics_inner() {
-    local line="$1" dest="$2"
-    printf '%s\n' "$line" >> "$dest"
-}
-
-# hook_healthy 7-check:
-#   1. ~/.claude/settings.json exists
-#   2. .hooks.SessionEnd[] OR .hooks.PreToolUse[] defined (OR branch)
-#   3. state_dir writable
-#   4. jq available
-#   5. _with_lock operable (mkdir simulate)
-#   6. hook command paths all exist
-#   7. SAZO_HARNESS_DIR resolvable
-hook_healthy() {
-    # check 1
-    [ -f "${HOME}/.claude/settings.json" ] || return 1
-    # check 2 — OR branch
-    local has_pre has_end
-    has_pre=$(jq -r '.hooks.PreToolUse // empty | length' "${HOME}/.claude/settings.json" 2>/dev/null)
-    has_end=$(jq -r '.hooks.SessionEnd // empty | length' "${HOME}/.claude/settings.json" 2>/dev/null)
-    { [ -n "$has_pre" ] && [ "$has_pre" -gt 0 ]; } \
-        || { [ -n "$has_end" ] && [ "$has_end" -gt 0 ]; } \
-        || return 1
-    # check 3
-    [ -w "$(state_dir)" ] || return 1
-    # check 4
-    command -v jq >/dev/null 2>&1 || return 1
-    # check 5 — mkdir simulate
-    mkdir -p "${HOME}/.claude/state/.healthcheck-$$" 2>/dev/null || return 1
-    rmdir "${HOME}/.claude/state/.healthcheck-$$" 2>/dev/null || true
-    # check 6 — hook command paths exist
-    # Extract all command values from SessionEnd and PreToolUse hook arrays.
-    # settings.json schema: .hooks.{SessionEnd,PreToolUse}[] can be:
-    #   flat: {"type":"command","command":"<path>"}
-    #   or nested: {"hooks":[{"type":"command","command":"<path>"}]}
-    # We try both shapes with // empty to be safe.
-    local cmd
-    while IFS= read -r cmd; do
-        [ -z "$cmd" ] && continue
-        case "$cmd" in
-            /*) [ -e "$cmd" ] || return 1 ;;
-            *)  [ -e "${HOME}/.claude/${cmd}" ] || return 1 ;;
-        esac
-    done < <(jq -r '
-        [
-            (.hooks.SessionEnd // []),
-            (.hooks.PreToolUse // [])
-        ]
-        | add
-        | .[]?
-        | (
-            (.command // empty),
-            ((.hooks // []) | .[]? | .command // empty)
-        )
-    ' "${HOME}/.claude/settings.json" 2>/dev/null)
-    # check 7
-    [ -n "${SAZO_HARNESS_DIR:-}" ] && [ -d "$SAZO_HARNESS_DIR" ] || return 1
-    return 0
-}
-
 # state_dir: return STATE_DIR value (used by hook_healthy check 3)
 state_dir() {
     echo "$STATE_DIR"
@@ -1309,3 +1194,17 @@ ci_invalidate_unconditional() {
     state_set_json "$sid" ".ci_passed_at" "null" "$cwd" || return 1
     simple_audit "ci_invalidated" "src=$src" "sid=$sid"
 }
+
+# ----- bottom-source: child libs (bottom-source pattern; children never source parent) -----
+# CRITICAL: propagate child lib source failures so callers using
+#   `source session-state.sh || fallback`
+# can detect partial-install / checkout-conflict situations.
+# `unset _SAZO_LIB_DIR` would otherwise swallow a failed source exit code.
+_SAZO_LIB_DIR="${BASH_SOURCE[0]%/*}"; [ "$_SAZO_LIB_DIR" = "${BASH_SOURCE[0]}" ] && _SAZO_LIB_DIR="."
+# shellcheck source=skip-control.sh
+source "$_SAZO_LIB_DIR/skip-control.sh" \
+    || { echo "[session-state] failed to source skip-control.sh" >&2; unset _SAZO_LIB_DIR; return 1 2>/dev/null || exit 1; }
+# shellcheck source=metrics.sh
+source "$_SAZO_LIB_DIR/metrics.sh" \
+    || { echo "[session-state] failed to source metrics.sh" >&2; unset _SAZO_LIB_DIR; return 1 2>/dev/null || exit 1; }
+unset _SAZO_LIB_DIR
