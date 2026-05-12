@@ -58,8 +58,10 @@ Subagent가 headless이므로 사용자가 직접 `/approved` 입력 불가 → 
 
 **권고** (우선순위 순):
 1. (즉시) `plan-executor` agent definition + CLAUDE.md 워크플로우 표에 명시적 경고 추가.
-2. (단기) Broad hook이 `plan-executor` Task 감지 시, main session state에서 approval 통과한 경우 subagent CWD + main session_id로 일시적 "parent approval" 레코드 생성하는 projection 메커니즘 도입.
-3. (장기) subagent lineage 추적 구현 (roadmap 항목).
+2. (단기) Broad hook이 `plan-executor` Task 감지 시 main session state의 approval 통과 여부 확인 + projection. **단 broad hook은 child의 `SAZO_SESSION_ID`로 `stage_is_passed`를 호출하고 `state_file()`은 `sid--cwd_hash`로 keyed**이므로 main sid + child cwd 조합 record는 child가 읽지 않음. 두 가지 구현 방향:
+   - (2a) projection target을 **child session id + child cwd** 조합으로 작성 (child가 fresh state 만들기 전 pre-seed). main이 Task 호출 직전 child의 예상 session_id를 알아야 함 — Claude Code가 미리 알려주지 않으면 불가능.
+   - (2b) `state_file()` lookup을 **parent lineage 추적**하도록 변경. child state file에 `parent_session_id` 필드 추가, `stage_is_passed`가 child 미통과 시 parent state로 fallback. 변경 범위 크지만 일반화 가능.
+3. (장기) subagent lineage 추적 구현 (roadmap 항목, 2b의 일반화).
 
 **Severity**: critical — 설계 충돌로 worktree subagent + broad hook 조합이 불가능한 dead-end를 만든다. CLAUDE.md 워크플로우에서 정식 경로로 기술됨에도 hook이 이를 모름.
 
