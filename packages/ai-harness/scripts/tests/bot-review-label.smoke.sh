@@ -588,6 +588,70 @@ rc=$?
 assert_exit 2 "$rc" "T15b: default 'approved' label with custom-suffix config → timeout (exit 2)"
 
 # ─────────────────────────────────────────────────────────
+# T16: deep-merge repo override — polling.max_iterations + labels.approved.color
+#      Repo override sets max_iterations=5 (poll timeout fast) + color=ff0000.
+#      poll-labels must timeout (exit 2) after ≤5 iterations.
+#      setup-labels must invoke gh with -c ff0000 (merged color) AND bot-review/codex/approved label.
+# ─────────────────────────────────────────────────────────
+echo ""
+echo "=== T16: deep-merge polling.max_iterations + labels.approved.color ==="
+
+T16_SANDBOX="$SANDBOX/t16"
+T16_BIN="$T16_SANDBOX/bin"
+T16_REPO="$T16_SANDBOX/repo"
+T16_LOG="$T16_SANDBOX/setup-gh.log"
+mkdir -p "$T16_BIN" "$T16_REPO/.github"
+
+# Repo override: shrink max_iterations + change approved color
+cat > "$T16_REPO/.github/sazo-bot-review.json" <<'OVEOF'
+{
+  "polling": {"max_iterations": 5},
+  "labels": {
+    "approved": {"color": "ff0000"}
+  }
+}
+OVEOF
+
+# stub gh: pr view always returns no approved label (force timeout)
+export T16_LOG_FILE="$T16_LOG"
+cat > "$T16_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"pr view"* ]]; then
+    echo "bot-review/codex/in-progress"
+    echo "bot-review/gemini/in-progress"
+elif [[ "$*" == *"label create"* ]] || [[ "$*" == *"label list"* ]]; then
+    echo "$@" >> "$T16_LOG_FILE"
+fi
+exit 0
+GHEOF
+chmod +x "$T16_BIN/gh"
+
+# T16a: poll-labels with repo override → should timeout via max_iterations=5 (not env var)
+rc=0
+PATH="$T16_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 \
+    bash "$POLL_LABELS" --pr 1 --config "$CONFIG" --repo-dir "$T16_REPO" 2>/dev/null
+rc=$?
+assert_exit 2 "$rc" "T16a: deep-merge polling.max_iterations=5 → timeout exit 2"
+
+# T16b: setup-labels with repo override → custom color ff0000 used for approved label
+rc=0
+PATH="$T16_BIN:$PATH" bash "$SETUP_LABELS" --config "$CONFIG" --repo-dir "$T16_REPO" 2>/dev/null
+rc=$?
+assert_exit 0 "$rc" "T16b: setup-labels with deep-merge override → exit 0"
+
+if grep -qF "ff0000" "$T16_LOG" 2>/dev/null; then
+    assert_pass "T16c: setup-labels uses merged approved color ff0000"
+else
+    assert_fail "T16c: setup-labels uses merged approved color ff0000"
+fi
+
+if grep -qF "bot-review/codex/approved" "$T16_LOG" 2>/dev/null; then
+    assert_pass "T16d: setup-labels creates bot-review/codex/approved with custom color"
+else
+    assert_fail "T16d: setup-labels creates bot-review/codex/approved with custom color"
+fi
+
+# ─────────────────────────────────────────────────────────
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"
