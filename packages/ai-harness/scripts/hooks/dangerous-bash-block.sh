@@ -42,17 +42,24 @@ _HOME_SUFFIX='(\$HOME(\b|/)|~(\b|/))'
 check_dangerous() {
     local c="$1"
     local segments
-    segments=$(printf '%s' "$c" | awk '{gsub(/&&|\|\||;|\|/, "\n"); print}')
+    # Pre-process: join backslash-continued lines (e.g. "rm -rf \<newline>/")
+    # before splitting on shell operators, to prevent bypass via line continuation.
+    # Uses awk (BSD+GNU portable) to join lines ending with `\`; sed ':a;N;$!ba'
+    # is BSD-incompatible (N fails on last line, silences output).
+    segments=$(printf '%s' "$c" \
+        | awk '{if (/\\$/) {sub(/\\$/, ""); printf "%s", $0} else {print}}' \
+        | awk '{gsub(/&&|\|\||;|\|/, "\n"); print}')
     while IFS= read -r seg; do
         seg=$(printf '%s' "$seg" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
         [ -z "$seg" ] && continue
 
-        # 1. git_push_force (carve-out: --force-with-lease)
+        # 1. git_push_force
+        # The outer ERE already excludes --force-with-lease by requiring --force
+        # to be followed by space/=/EOL — so --force-with-lease (no space after --force)
+        # does not match. The previous inner carve-out was removed because it allowed
+        # `git push --force-with-lease --force` through (lease present → carve-out fired).
         if echo "$seg" | grep -qE "${_ENV_PREFIX}git[[:space:]]+push.*(--force([[:space:]=]|$)|[[:space:]]-f([[:space:]]|$))"; then
-            if ! echo "$seg" | grep -qE '\-\-force-with-lease(\b|=)'; then
-                echo "git_push_force"
-                return 0
-            fi
+            echo "git_push_force"; return 0
         fi
         # 2. git_reset_hard_protected
         if echo "$seg" | grep -qE "${_ENV_PREFIX}git[[:space:]]+reset.*--hard.*\borigin/(main|master|dev|develop|trunk)\b"; then
@@ -62,8 +69,9 @@ check_dangerous() {
         if echo "$seg" | grep -qE "${_ENV_PREFIX}git[[:space:]]+branch[[:space:]]+(-[a-zA-Z]*D[a-zA-Z]*|--delete[[:space:]]+--force)[[:space:]]+(main|master|dev|develop|trunk)\b"; then
             echo "git_branch_force_delete"; return 0
         fi
-        # 4. git_checkout_discard (NEW — 8th pattern, v2 critic 1 fix)
-        if echo "$seg" | grep -qE "${_ENV_PREFIX}git[[:space:]]+checkout[[:space:]]+--[[:space:]]+.+"; then
+        # 4. git_checkout_discard — covers both `git checkout -- .` and `git checkout .`
+        # `--` is optional: LLMs often omit it (e.g. `git checkout .` to discard all changes).
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}git[[:space:]]+checkout[[:space:]]+(--[[:space:]]+)?\\."; then
             echo "git_checkout_discard"; return 0
         fi
         # 5. rm_rf_root — match trailing chars (backgrounding, redirect, extra args)

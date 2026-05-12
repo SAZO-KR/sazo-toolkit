@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Smoke test: dangerous-bash-block hook (Plan 10)
-# 27 cases: 11 spec + T_ESC + R-co + R6 + R7 + R-hs + T_MIG + T4b + T3b + T3c + narrow_off + T_FP1 + T_FP2 + T_REC + T_SUDO + T_REASON + narrow_off
+# 30 cases: 11 spec + T_ESC + R-co + R6 + R7 + R-hs + T_MIG + T4b + T3b + T3c + narrow_off + T_FP1 + T_FP2 + T_REC + T_SUDO + T_REASON + R9a + R9b + R9c
 #
 # Tests the hook directly via simulated payloads and tests lib helpers via sourcing.
 # SAZO_STATE_DIR is isolated per-test to prevent contamination.
@@ -236,6 +236,21 @@ assert_exit 2 "R7 GIT_DIR=x git push --force → exit 2" \
 echo "Test R-hs: here-string TRUNCATE TABLE"
 assert_exit 2 "R-hs psql <<< TRUNCATE TABLE → exit 2" \
     run_hook 'psql <<< "TRUNCATE TABLE x;"'
+
+# ---- R9a: git push --force-with-lease --force → block (carve-out removed) ----
+echo "Test R9a: git push --force-with-lease --force → block"
+assert_exit 2 "R9a git push --force-with-lease --force → exit 2" \
+    run_hook "git push --force-with-lease --force"
+
+# ---- R9b: git checkout . → block (no -- required) ----
+echo "Test R9b: git checkout . → block"
+assert_exit 2 "R9b git checkout . → exit 2" \
+    run_hook "git checkout ."
+
+# ---- R9c: backslash-newline bypass prevention → block ----
+echo "Test R9c: backslash-newline bypass → block"
+assert_exit 2 "R9c rm -rf backslash-newline / → exit 2" \
+    run_hook "$(printf 'rm -rf \\\n/')"
 
 # ---- T_MIG: v3 → v5 schema migration (v3→v4→v5 dispatcher chain) ----
 echo "=== T_MIG: v3 → v5 schema migration ==="
