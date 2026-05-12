@@ -113,6 +113,12 @@ if [[ -z "$ACTIVE_REVIEWERS" ]]; then
     exit 5
 fi
 
+# ── Phase 2 prep: read label_authority (unused in Phase 1) ────────────────
+# label_authority="skill"    → LLM (SKILL.md Step 4-8) attaches labels (Phase 1 default)
+# label_authority="actions"  → GitHub Actions auto-attaches labels (Phase 2)
+# Phase 1 reads this field for forward-compatibility but does NOT branch on it.
+_LABEL_AUTHORITY=$(echo "$MERGED_CONFIG" | jq -r '.active_reviewers | to_entries[0].value.label_authority // "skill"')
+
 # ── polling loop ──────────────────────────────────────────
 iter=0
 while true; do
