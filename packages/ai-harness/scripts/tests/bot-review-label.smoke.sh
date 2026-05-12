@@ -266,11 +266,11 @@ T8_BIN="$T8_DIR/bin"
 T8_REPO="$T8_DIR/repo"
 mkdir -p "$T8_BIN" "$T8_REPO/.github"
 
-# Repo override: disable gemini
+# Repo override: disable gemini (schema v2: enabled=false)
 cat > "$T8_REPO/.github/sazo-bot-review.json" <<'OVEOF'
 {
   "active_reviewers": {
-    "gemini": {"_disabled": true}
+    "gemini": {"enabled": false}
   }
 }
 OVEOF
@@ -490,12 +490,12 @@ T14_LOG="$SANDBOX/t14-gh.log"
 T14_REPO="$SANDBOX/t14-repo"
 mkdir -p "$T14_BIN" "$T14_REPO/.github"
 
-# repo override with custom prefix
+# repo override with custom prefix (schema v2: enabled=false)
 cat > "$T14_REPO/.github/sazo-bot-review.json" <<'EOF'
 {
   "active_reviewers": {
     "codex": { "label_prefix": "custom/codex/" },
-    "gemini": { "_disabled": true }
+    "gemini": { "enabled": false }
   }
 }
 EOF

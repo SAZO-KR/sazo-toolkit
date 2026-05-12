@@ -11,7 +11,7 @@
 #   2 — polling timeout (max_iterations reached)
 #   3 — changes-requested detected (skill: outer while continue)
 #   4 — gh CLI not installed/not authenticated
-#   5 — active_reviewers empty (after _disabled filter)
+#   5 — active_reviewers empty (after enabled filter)
 
 set -euo pipefail
 
@@ -94,7 +94,7 @@ MAX_ITER="${SAZO_BOT_MAX_ITER:-$(echo "$MERGED_CONFIG" | jq -r '.polling.max_ite
 APPROVED_SUFFIX=$(echo "$MERGED_CONFIG" | jq -r '.labels.approved.suffix // "approved"')
 CHANGES_SUFFIX=$(echo "$MERGED_CONFIG" | jq -r '.labels.changes_requested.suffix // "changes-requested"')
 
-# ── build active reviewer list (filter _disabled + runtime skip) ─────────
+# ── build active reviewer list (filter enabled=false + runtime skip) ─────────
 # Build jq expression to exclude runtime-skipped reviewers
 SKIP_JQ_FILTER=""
 for _skip in "${SKIP_REVIEWERS[@]+"${SKIP_REVIEWERS[@]}"}"; do
@@ -103,7 +103,7 @@ done
 ACTIVE_REVIEWERS=$(echo "$MERGED_CONFIG" | jq -r "
     .active_reviewers
     | to_entries[]
-    | select(.value._disabled != true)
+    | select(.value.enabled != false)
     $SKIP_JQ_FILTER
     | .key
 ")
@@ -142,9 +142,9 @@ while true; do
         [[ -z "$reviewer" ]] && continue
         prefix=$(echo "$MERGED_CONFIG" | jq -r --arg k "$reviewer" '.active_reviewers[$k].label_prefix // ""')
         if [[ -z "$prefix" ]]; then
-            disabled=$(echo "$MERGED_CONFIG" | jq -r --arg k "$reviewer" '.active_reviewers[$k]._disabled // "false"')
-            if [[ "$disabled" == "true" ]]; then
-                continue  # intentionally disabled
+            enabled=$(echo "$MERGED_CONFIG" | jq -r --arg k "$reviewer" '.active_reviewers[$k].enabled // "true"')
+            if [[ "$enabled" == "false" ]]; then
+                continue  # intentionally disabled (enabled=false)
             fi
             echo "WARN: reviewer '$reviewer' has empty label_prefix (config error: incomplete repo override?). skipping." >&2
             ALL_APPROVED=false  # missing prefix = not approved; do not silently pass the gate

@@ -9,7 +9,7 @@
 #   label names. Without --repo-dir, only the base config is used.
 #
 # Idempotent via --force (create or update). Safe to call on every ROUND==1.
-# Skips reviewers with _disabled=true.
+# Skips reviewers with enabled=false (schema v2; formerly _disabled=true).
 #
 # Exit codes:
 #   0 — success
@@ -83,8 +83,8 @@ fi
 # Iterate over reviewers
 echo "$MERGED_CONFIG" | jq -c '.active_reviewers | to_entries[]' | while IFS= read -r entry; do
     reviewer_key=$(echo "$entry" | jq -r '.key')
-    disabled=$(echo "$entry" | jq -r '.value._disabled // false')
-    if [[ "$disabled" == "true" ]]; then
+    enabled=$(echo "$entry" | jq -r '.value.enabled // true')
+    if [[ "$enabled" == "false" ]]; then
         continue
     fi
     prefix=$(echo "$entry" | jq -r '.value.label_prefix')
