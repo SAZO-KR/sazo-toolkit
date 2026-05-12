@@ -388,6 +388,8 @@ echo "=== T5: 5s timeout portable ==="
         mkdir -p "$TMP_HOME/.claude/state"
         mkdir -p "$TMP_HARNESS/scripts/hooks/lib"
         cp "$LIB" "$TMP_HARNESS/scripts/hooks/lib/session-state.sh"
+        cp "$LIB_SKIP_CONTROL" "$TMP_HARNESS/scripts/hooks/lib/skip-control.sh"
+        cp "$LIB_METRICS" "$TMP_HARNESS/scripts/hooks/lib/metrics.sh"
         cp "$HOOK" "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
         chmod +x "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
         printf '#!/usr/bin/env bash\n' > "$TMP_HARNESS/scripts/hooks/workflow-state-machine.sh"
@@ -598,6 +600,8 @@ echo "=== T9: AUDIT_LOG/STATE_DIR exported to timeout subshell ==="
         TMP_HARNESS=$(mktemp -d)
         mkdir -p "$TMP_HARNESS/scripts/hooks/lib"
         cp "$LIB" "$TMP_HARNESS/scripts/hooks/lib/session-state.sh"
+        cp "$LIB_SKIP_CONTROL" "$TMP_HARNESS/scripts/hooks/lib/skip-control.sh"
+        cp "$LIB_METRICS" "$TMP_HARNESS/scripts/hooks/lib/metrics.sh"
 
         # Source lib with custom state dir to set AUDIT_LOG / STATE_DIR
         # then test whether audit_log inside `timeout bash -c` subshell writes there.
