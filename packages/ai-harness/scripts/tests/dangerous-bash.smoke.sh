@@ -491,6 +491,48 @@ echo "Test R14b: cat safe.sql | env PGPASS=x psql → pass (no SQL keyword)"
 assert_exit 0 "R14b cat safe.sql | env PGPASS=x psql → exit 0" \
     run_hook "cat safe.sql | env PGPASS=x psql"
 
+# ---- Bug 1 fixes: git branch -D arg-position bypass ----
+# T_BUG1a: git branch -D feature main → block (protected branch not first after flags)
+echo "Test T_BUG1a: git branch -D feature main → block (protected not first)"
+assert_exit 2 "T_BUG1a git branch -D feature main → exit 2" \
+    run_hook "git branch -D feature main"
+
+# T_BUG1b: git branch -D foo bar baz main → block (protected branch last of many)
+echo "Test T_BUG1b: git branch -D foo bar baz main → block (multi-prefix)"
+assert_exit 2 "T_BUG1b git branch -D foo bar baz main → exit 2" \
+    run_hook "git branch -D foo bar baz main"
+
+# T_BUG1c: git branch -D main feature → block (protected first — regression check)
+echo "Test T_BUG1c: git branch -D main feature → block (protected first, regression)"
+assert_exit 2 "T_BUG1c git branch -D main feature → exit 2" \
+    run_hook "git branch -D main feature"
+
+# ---- Bug 2 fixes: rm flag-after-path arg-position bypass ----
+# T_BUG2a: rm /tmp /usr -rf → block (system dir not first path)
+echo "Test T_BUG2a: rm /tmp /usr -rf → block (system dir not first)"
+assert_exit 2 "T_BUG2a rm /tmp /usr -rf → exit 2" \
+    run_hook "rm /tmp /usr -rf"
+
+# T_BUG2b: rm build /usr -rf → block (system dir not first path)
+echo "Test T_BUG2b: rm build /usr -rf → block (non-path first)"
+assert_exit 2 "T_BUG2b rm build /usr -rf → exit 2" \
+    run_hook "rm build /usr -rf"
+
+# T_BUG2c: rm /tmp / -rf → block (root not first path, rm_rf_root variant)
+echo "Test T_BUG2c: rm /tmp / -rf → block (root not first, rm_rf_root)"
+assert_exit 2 "T_BUG2c rm /tmp / -rf → exit 2" \
+    run_hook "rm /tmp / -rf"
+
+# T_BUG2d: rm /tmp \$HOME -rf → block (home not first path, rm_rf_home variant)
+echo "Test T_BUG2d: rm /tmp \$HOME -rf → block (home not first, rm_rf_home)"
+assert_exit 2 "T_BUG2d rm /tmp \$HOME -rf → exit 2" \
+    run_hook 'rm /tmp $HOME -rf'
+
+# T_BUG2e: rm -rf /usr → block (flag-first still works — regression check)
+echo "Test T_BUG2e: rm -rf /usr → block (flag-first, regression)"
+assert_exit 2 "T_BUG2e rm -rf /usr → exit 2" \
+    run_hook "rm -rf /usr"
+
 # ---- Summary ----
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"
