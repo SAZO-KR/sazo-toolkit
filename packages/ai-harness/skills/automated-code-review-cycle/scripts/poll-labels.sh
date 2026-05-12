@@ -170,7 +170,44 @@ while true; do
     fi
 
     if [[ "$ALL_APPROVED" == "true" ]]; then
-        exit 0
+        # ── Pre-termination verification (W5-B6) ──────────────────────────────
+        # Before returning exit 0, fetch gh api .../reviews per active reviewer
+        # and confirm each bot_login's latest review state is APPROVED.
+        # If state is CHANGES_REQUESTED or absent → labels are stale; fall through.
+        # On gh api failure (non-zero exit) → trust label with WARN (not exit 4).
+        _B6_VERIFIED=true
+        while IFS= read -r _reviewer; do
+            [[ -z "$_reviewer" ]] && continue
+            _bot_login=$(echo "$MERGED_CONFIG" | jq -r --arg k "$_reviewer" '.active_reviewers[$k].bot_login // ""')
+            [[ -z "$_bot_login" ]] && continue
+
+            _repo_owner_repo=""
+            if [[ ${#GH_REPO_FLAG[@]} -ge 2 ]]; then
+                _repo_owner_repo="${GH_REPO_FLAG[1]}"
+            fi
+
+            if [[ -n "$_repo_owner_repo" ]]; then
+                _reviews_json=$(gh api "repos/$_repo_owner_repo/pulls/$PR_NUM/reviews" 2>/tmp/poll-labels-b6-err || true)
+            else
+                _reviews_json=$(gh api "repos/{owner}/{repo}/pulls/$PR_NUM/reviews" 2>/tmp/poll-labels-b6-err || true)
+            fi
+
+            if [[ -z "$_reviews_json" ]]; then
+                _b6_err=$(cat /tmp/poll-labels-b6-err 2>/dev/null || true)
+                echo "WARN: B6 pre-termination gh api failed for $_reviewer: $_b6_err — trusting label" >&2
+                continue
+            fi
+
+            _latest_state=$(echo "$_reviews_json" | jq -r --arg login "$_bot_login" \
+                '[.[] | select(.user.login == $login)] | sort_by(.submitted_at) | last | .state // "NONE"')
+            if [[ "$_latest_state" != "APPROVED" ]]; then
+                echo "WARN: B6 pre-termination: $_reviewer ($_bot_login) latest review state=$_latest_state — label stale, continuing poll" >&2
+                _B6_VERIFIED=false
+                break
+            fi
+        done <<< "$ACTIVE_REVIEWERS"
+
+        [[ "$_B6_VERIFIED" == "true" ]] && exit 0
     fi
 
     # timeout check

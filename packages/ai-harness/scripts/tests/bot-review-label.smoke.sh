@@ -121,11 +121,17 @@ T2_BIN="$SANDBOX/t2-bin"
 mkdir -p "$T2_BIN"
 cat > "$T2_BIN/gh" <<'GHEOF'
 #!/usr/bin/env bash
-# mock: return labels with both approved
-if [[ "$*" == *"pr view"* ]]; then
-    echo "bot-review/codex/approved"
-    echo "bot-review/gemini/approved"
-fi
+# mock: return labels with both approved; B6 pre-termination api returns APPROVED
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/approved"
+        echo "bot-review/gemini/approved"
+        ;;
+    *"api"*"reviews"*)
+        # B6 verify: both bots APPROVED
+        printf '[{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"chatgpt-codex-connector[bot]"}},{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"gemini-code-assist[bot]"}}]\n'
+        ;;
+esac
 exit 0
 GHEOF
 chmod +x "$T2_BIN/gh"
@@ -240,10 +246,15 @@ T7_BIN="$SANDBOX/t7-bin"
 mkdir -p "$T7_BIN"
 cat > "$T7_BIN/gh" <<'GHEOF'
 #!/usr/bin/env bash
-if [[ "$*" == *"pr view"* ]]; then
-    echo "bot-review/codex/approved"
-    echo "bot-review/gemini/approved"
-fi
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/approved"
+        echo "bot-review/gemini/approved"
+        ;;
+    *"api"*"reviews"*)
+        printf '[{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"chatgpt-codex-connector[bot]"}},{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"gemini-code-assist[bot]"}}]\n'
+        ;;
+esac
 exit 0
 GHEOF
 chmod +x "$T7_BIN/gh"
@@ -277,9 +288,15 @@ OVEOF
 
 cat > "$T8_BIN/gh" <<'GHEOF'
 #!/usr/bin/env bash
-if [[ "$*" == *"pr view"* ]]; then
-    echo "bot-review/codex/approved"
-fi
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/approved"
+        ;;
+    *"api"*"reviews"*)
+        # B6 verify: codex APPROVED (gemini disabled — not checked)
+        printf '[{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"chatgpt-codex-connector[bot]"}}]\n'
+        ;;
+esac
 exit 0
 GHEOF
 chmod +x "$T8_BIN/gh"
@@ -458,10 +475,16 @@ T13_BIN="$SANDBOX/t13-bin"
 mkdir -p "$T13_BIN"
 cat > "$T13_BIN/gh" <<'GHEOF'
 #!/usr/bin/env bash
-if [[ "$*" == *"pr view"* ]]; then
-    echo "bot-review/codex/approved"
-    # Gemini label intentionally absent
-fi
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/approved"
+        # Gemini label intentionally absent
+        ;;
+    *"api"*"reviews"*)
+        # B6 verify: codex APPROVED (gemini skipped — not checked)
+        printf '[{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"chatgpt-codex-connector[bot]"}}]\n'
+        ;;
+esac
 exit 0
 GHEOF
 chmod +x "$T13_BIN/gh"
@@ -556,12 +579,17 @@ cat > "$T15_CONFIG" <<'EOF'
 }
 EOF
 
-# stub gh: returns custom-suffix approved label
+# stub gh: returns custom-suffix approved label; B6 api returns APPROVED
 cat > "$T15_BIN/gh" <<'GHEOF'
 #!/usr/bin/env bash
-if [[ "$*" == *"pr view"* ]]; then
-    echo "bot-review/codex/ok"
-fi
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/ok"
+        ;;
+    *"api"*"reviews"*)
+        printf '[{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"chatgpt-codex-connector[bot]"}}]\n'
+        ;;
+esac
 exit 0
 GHEOF
 chmod +x "$T15_BIN/gh"
@@ -650,6 +678,99 @@ if grep -qF "bot-review/codex/approved" "$T16_LOG" 2>/dev/null; then
 else
     assert_fail "T16d: setup-labels creates bot-review/codex/approved with custom color"
 fi
+
+# ─────────────────────────────────────────────────────────
+# T17a: B6 pre-termination — labels say approved BUT gh api returns CHANGES_REQUESTED → exit 2
+# T17b: B6 pre-termination — labels say approved BUT gh api returns empty array → exit 2
+# T17c: B6 pre-termination — labels say approved AND gh api returns APPROVED → exit 0
+# ─────────────────────────────────────────────────────────
+echo ""
+echo "=== T17a: labels approved + gh api CHANGES_REQUESTED → exit 2 ==="
+
+T17_SANDBOX="$SANDBOX/t17"
+T17A_BIN="$T17_SANDBOX/t17a-bin"
+mkdir -p "$T17A_BIN"
+
+# stub: pr view returns approved labels; api reviews returns CHANGES_REQUESTED
+cat > "$T17A_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/approved"
+        echo "bot-review/gemini/approved"
+        ;;
+    *"api"*"reviews"*)
+        # B6 verify: codex says CHANGES_REQUESTED (label is stale/wrong)
+        printf '[{"state":"CHANGES_REQUESTED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"chatgpt-codex-connector[bot]"}}]\n'
+        ;;
+esac
+exit 0
+GHEOF
+chmod +x "$T17A_BIN/gh"
+
+rc=0
+PATH="$T17A_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
+    bash "$POLL_LABELS" --pr 1 --config "$CONFIG" 2>/dev/null
+rc=$?
+assert_exit 2 "$rc" "T17a: labels approved + api CHANGES_REQUESTED → stale label → timeout exit 2"
+
+echo ""
+echo "=== T17b: labels approved + gh api empty → exit 2 ==="
+
+T17B_BIN="$T17_SANDBOX/t17b-bin"
+mkdir -p "$T17B_BIN"
+
+# stub: pr view returns approved labels; api reviews returns empty array
+cat > "$T17B_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/approved"
+        echo "bot-review/gemini/approved"
+        ;;
+    *"api"*"reviews"*)
+        # B6 verify: no reviews from bot (empty array → NONE state)
+        printf '[]\n'
+        ;;
+esac
+exit 0
+GHEOF
+chmod +x "$T17B_BIN/gh"
+
+rc=0
+PATH="$T17B_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
+    bash "$POLL_LABELS" --pr 1 --config "$CONFIG" 2>/dev/null
+rc=$?
+assert_exit 2 "$rc" "T17b: labels approved + api empty → NONE state → timeout exit 2"
+
+echo ""
+echo "=== T17c: labels approved + gh api APPROVED → exit 0 ==="
+
+T17C_BIN="$T17_SANDBOX/t17c-bin"
+mkdir -p "$T17C_BIN"
+
+# stub: pr view returns approved labels; api reviews returns APPROVED
+cat > "$T17C_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/approved"
+        echo "bot-review/gemini/approved"
+        ;;
+    *"api"*"reviews"*)
+        # B6 verify: both bots confirmed APPROVED via gh api
+        printf '[{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"chatgpt-codex-connector[bot]"}},{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"gemini-code-assist[bot]"}}]\n'
+        ;;
+esac
+exit 0
+GHEOF
+chmod +x "$T17C_BIN/gh"
+
+rc=0
+PATH="$T17C_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
+    bash "$POLL_LABELS" --pr 1 --config "$CONFIG" 2>/dev/null
+rc=$?
+assert_exit 0 "$rc" "T17c: labels approved + api APPROVED → exit 0"
 
 # ─────────────────────────────────────────────────────────
 echo ""
