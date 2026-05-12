@@ -137,10 +137,9 @@ mk_payload() {
 
 copy_harness_libs() {
     local dest="$1"
-    mkdir -p "$dest/scripts/hooks/lib"
-    cp "$LIB" "$dest/scripts/hooks/lib/session-state.sh"
-    cp "$LIB_SKIP_CONTROL" "$dest/scripts/hooks/lib/skip-control.sh"
-    cp "$LIB_METRICS" "$dest/scripts/hooks/lib/metrics.sh"
+    local lib_dir="$dest/scripts/hooks/lib"
+    mkdir -p "$lib_dir"
+    cp "$LIB" "$LIB_SKIP_CONTROL" "$LIB_METRICS" "$lib_dir/"
 }
 
 # ---------------------------------------------------------------------------
