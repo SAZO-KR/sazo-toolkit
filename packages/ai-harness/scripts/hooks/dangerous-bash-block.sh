@@ -35,7 +35,7 @@ state_init "$SAZO_SESSION_ID" "$SAZO_CWD" "${SAZO_MODEL:-unknown}"
 #
 # _HOME_SUFFIX: single-quoted so `$HOME` is a literal ERE `$HOME` (not shell-expanded).
 # Combining with double-quoted ${_ENV_PREFIX} via "${_ENV_PREFIX}...${_HOME_SUFFIX}".
-_ENV_PREFIX='^([[:alpha:]_][[:alnum:]_]*=[^[:space:]]*[[:space:]]+|sudo[[:space:]]+)*'
+_ENV_PREFIX='^([[:alpha:]_][[:alnum:]_]*=[^[:space:]]*[[:space:]]+|sudo([[:space:]]+-[a-zA-Z0-9-]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+)*'
 # shellcheck disable=SC2016  # intentional: $HOME is not a shell variable here
 _HOME_SUFFIX='(\$HOME(\b|/)|~(\b|/))'
 
@@ -67,15 +67,18 @@ check_dangerous() {
             echo "git_checkout_discard"; return 0
         fi
         # 5. rm_rf_root — match trailing chars (backgrounding, redirect, extra args)
-        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+.*-[a-zA-Z]*[rR].*[[:space:]]+/[[:space:]]*([[:space:]]|&|\|[|>]?|>|$)"; then
+        # Covers short flags (-rf, -r, -R) and GNU long option (--recursive).
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+.*(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive).*[[:space:]]+/[[:space:]]*([[:space:]]|&|\|[|>]?|>|$)"; then
             echo "rm_rf_root"; return 0
         fi
         # 6. rm_rf_home — uses _HOME_SUFFIX (single-quoted var) to keep $HOME as ERE literal
-        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+-[a-zA-Z]*[rRf][a-zA-Z]*[[:space:]]+${_HOME_SUFFIX}"; then
+        # Covers short flags and --recursive.
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+(-[a-zA-Z]*[rRf][a-zA-Z]*|--recursive)[[:space:]]+${_HOME_SUFFIX}"; then
             echo "rm_rf_home"; return 0
         fi
         # 7. rm_rf_abs_system_path — restrict to sensitive system directories only
-        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+.*-[a-zA-Z]*[rR].*[[:space:]]+/(usr|etc|bin|sbin|var|opt|lib|boot|root|dev|proc|sys)([[:space:]]|/|$)"; then
+        # Covers short flags and --recursive.
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+.*(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive).*[[:space:]]+/(usr|etc|bin|sbin|var|opt|lib|boot|root|dev|proc|sys)([[:space:]]|/|$)"; then
             echo "rm_rf_abs_system_path"; return 0
         fi
         # 8. sql_destructive — 패턴은 segment 전체 텍스트 대상 (here-string body 포함)

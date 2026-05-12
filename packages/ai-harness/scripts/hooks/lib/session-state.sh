@@ -168,6 +168,7 @@ _state_init_inner() {
             last_cycle_id: {},
             pre_commit_markers: {},
             dangerous_override_nonce: null,
+            dangerous_override_reason: null,
             dangerous_override_history: [],
             override_skip_streak_at: null,
             override_skip_streak_consumed: false,
@@ -211,6 +212,7 @@ _state_schema_upgrade_v4() {
     tmp=$(mktemp)
     if jq '.schema_version = 4
         | .dangerous_override_nonce //= null
+        | .dangerous_override_reason //= null
         | .dangerous_override_history //= []' "$f" > "$tmp"; then
         mv "$tmp" "$f"
     else
@@ -692,6 +694,7 @@ _dangerous_nonce_set_inner() {
     local tmp; tmp=$(mktemp)
     if jq --arg n "$nonce" --arg r "$reason" --arg ts "$ts" '
         .dangerous_override_nonce = $n
+        | .dangerous_override_reason = $r
     ' "$f" > "$tmp"; then
         mv "$tmp" "$f"
     else
@@ -725,7 +728,8 @@ _dangerous_nonce_consume_inner() {
     out=$(jq --arg n "$nonce" --arg p "$pattern" --arg ts "$ts" '
         select(.dangerous_override_nonce == $n)
         | .dangerous_override_nonce = null
-        | .dangerous_override_history = ((.dangerous_override_history // []) + [{nonce: $n, pattern: $p, consumed_at: $ts}])
+        | .dangerous_override_history = ((.dangerous_override_history // []) + [{nonce: $n, pattern: $p, reason: (.dangerous_override_reason // null), consumed_at: $ts}])
+        | .dangerous_override_reason = null
     ' "$f" 2>/dev/null)
     if [ -n "$out" ]; then
         printf '%s\n' "$out" > "$tmp" && mv "$tmp" "$f" || { rm -f "$tmp"; return 1; }

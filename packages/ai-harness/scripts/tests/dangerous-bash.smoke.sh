@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Smoke test: dangerous-bash-block hook (Plan 10)
-# 23 cases: 11 spec + T_ESC + R-co + R6 + R7 + R-hs + T_MIG + T4b + T3b + T3c + narrow_off + T_FP1 + T_FP2
+# 27 cases: 11 spec + T_ESC + R-co + R6 + R7 + R-hs + T_MIG + T4b + T3b + T3c + narrow_off + T_FP1 + T_FP2 + T_REC + T_SUDO + T_REASON + narrow_off
 #
 # Tests the hook directly via simulated payloads and tests lib helpers via sourcing.
 # SAZO_STATE_DIR is isolated per-test to prevent contamination.
@@ -282,6 +282,53 @@ EOF
 
     rm -rf "$TMP_HOME"
 )
+
+# ---- T_REC: rm --recursive / → block (long option) ----
+echo "Test T_REC: rm --recursive / → block"
+assert_exit 2 "T_REC rm --recursive / → exit 2" \
+    run_hook "rm --recursive /"
+
+# ---- T_SUDO: sudo -u root git push --force → block (sudo with flags) ----
+echo "Test T_SUDO: sudo -u root git push --force → block"
+assert_exit 2 "T_SUDO sudo -u root git push --force → exit 2" \
+    run_hook "sudo -u root git push --force"
+
+# ---- T_REASON: nonce reason stored in history ----
+echo "Test T_REASON: /allow-dangerous reason stored in history"
+TMP_TR=$(mktemp -d)
+APPROVAL_HOOK="$SCRIPT_DIR/../hooks/user-prompt-approval-detect.sh"
+SID_TR="t-reason-$$"
+
+payload_tr=$(jq -nc \
+    --arg sid "$SID_TR" \
+    '{
+        session_id: $sid,
+        cwd: "/tmp/test-cwd",
+        tool_name: "",
+        tool_input: {},
+        tool_response: {},
+        model: "claude-test",
+        prompt: "/allow-dangerous my urgent reason"
+    }')
+SAZO_STATE_DIR="$TMP_TR" bash "$APPROVAL_HOOK" <<< "$payload_tr" 2>/dev/null || true
+
+# Consume via git push --force
+run_hook "git push --force" "$SID_TR" "$TMP_TR" 2>/dev/null || true
+
+# Check history entry has reason field
+reason_in_hist=$(SAZO_STATE_DIR="$TMP_TR" bash -c "
+source \"$LIB_DIR/session-state.sh\"
+f=\$(state_file \"$SID_TR\" '/tmp/test-cwd')
+[ -f \"\$f\" ] && jq -r '.dangerous_override_history[-1].reason // \"null\"' \"\$f\" 2>/dev/null || echo 'no-file'
+" 2>/dev/null)
+if [ "$reason_in_hist" != "null" ] && [ -n "$reason_in_hist" ] && [ "$reason_in_hist" != "no-file" ]; then
+    PASS=$((PASS+1))
+    echo "  PASS T_REASON history has reason: $reason_in_hist"
+else
+    FAIL=$((FAIL+1))
+    echo "  FAIL T_REASON expected reason in history, got='$reason_in_hist'"
+fi
+rm -rf "$TMP_TR"
 
 # ---- T_FP1: echo "git push --force" → pass (false positive guard) ----
 echo "Test T_FP1: echo with dangerous string → pass (anchor guard)"
