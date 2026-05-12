@@ -64,6 +64,21 @@ fi
 # ── extract fields ─────────────────────────────────────────
 OVERRIDE_LABEL=$(echo "$MERGED_CONFIG" | jq -r '.override_label // "bot-review/override"')
 
+# ── resolve -R OWNER/REPO from REPO_DIR (or cwd fallback) ────────────────────
+# CRITICAL: gh label commands resolve the repo from cwd by default. When called
+# from a harness directory that differs from the target checkout (REPO_DIR), labels
+# are created in the wrong repo or gh fails with "not a git repository".
+# Derive the slug explicitly from REPO_DIR so this script is cwd-independent.
+GH_REPO_FLAG=()
+if [[ -n "$REPO_DIR" ]]; then
+    _remote_url=$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null || true)
+    if [[ -n "$_remote_url" ]]; then
+        # Strip protocol/host, trailing .git — keep OWNER/REPO
+        _slug=$(echo "$_remote_url" | sed -E 's|.*github\.com[:/]||; s|\.git$||')
+        [[ -n "$_slug" ]] && GH_REPO_FLAG=(-R "$_slug")
+    fi
+fi
+
 # ── create labels per active reviewer × suffix ────────────
 # Iterate over reviewers
 echo "$MERGED_CONFIG" | jq -c '.active_reviewers | to_entries[]' | while IFS= read -r entry; do
@@ -79,9 +94,9 @@ echo "$MERGED_CONFIG" | jq -c '.active_reviewers | to_entries[]' | while IFS= re
         suffix=$(echo "$lentry" | jq -r '.value.suffix')
         color=$(echo "$lentry" | jq -r '.value.color')
         label_name="${prefix}${suffix}"
-        gh label create "$label_name" -c "$color" -d "Plan 08: bot-review label" --force
+        gh label create "${GH_REPO_FLAG[@]+"${GH_REPO_FLAG[@]}"}" "$label_name" -c "$color" -d "Plan 08: bot-review label" --force
     done
 done
 
 # ── create override label ─────────────────────────────────
-gh label create "$OVERRIDE_LABEL" -c "1d76db" -d "Plan 08: manual override" --force
+gh label create "${GH_REPO_FLAG[@]+"${GH_REPO_FLAG[@]}"}" "$OVERRIDE_LABEL" -c "1d76db" -d "Plan 08: manual override" --force

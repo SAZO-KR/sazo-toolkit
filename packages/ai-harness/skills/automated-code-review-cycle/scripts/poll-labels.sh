@@ -71,6 +71,20 @@ else
     MERGED_CONFIG=$(jq '.' "$CONFIG_PATH")
 fi
 
+# ── resolve -R OWNER/REPO from REPO_DIR (or cwd fallback) ────────────────────
+# CRITICAL: gh pr view resolves the repo from cwd by default. When poll-labels.sh
+# is invoked from a harness/script directory that differs from the PR's checkout,
+# it polls labels on the wrong repo or fails with "not a git repository".
+# Derive the slug explicitly from REPO_DIR so this script is cwd-independent.
+GH_REPO_FLAG=()
+if [[ -n "$REPO_DIR" ]]; then
+    _remote_url=$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null || true)
+    if [[ -n "$_remote_url" ]]; then
+        _slug=$(echo "$_remote_url" | sed -E 's|.*github\.com[:/]||; s|\.git$||')
+        [[ -n "$_slug" ]] && GH_REPO_FLAG=(-R "$_slug")
+    fi
+fi
+
 # ── extract polling params ────────────────────────────────
 OVERRIDE_LABEL=$(echo "$MERGED_CONFIG" | jq -r '.override_label // "bot-review/override"')
 POLL_INTERVAL="${SAZO_BOT_POLL_INTERVAL:-$(echo "$MERGED_CONFIG" | jq -r '.polling.interval_seconds // 30')}"
@@ -103,7 +117,7 @@ fi
 iter=0
 while true; do
     # fetch current labels — exit 4 on auth/access failure (not just "gh not installed")
-    if ! LABELS=$(gh pr view "$PR_NUM" --json labels --jq '.labels[].name' 2>/tmp/poll-labels-gh-err); then
+    if ! LABELS=$(gh pr view "${GH_REPO_FLAG[@]+"${GH_REPO_FLAG[@]}"}" "$PR_NUM" --json labels --jq '.labels[].name' 2>/tmp/poll-labels-gh-err); then
         GH_ERR=$(cat /tmp/poll-labels-gh-err 2>/dev/null || true)
         echo "ERROR: gh pr view failed: $GH_ERR" >&2
         exit 4
