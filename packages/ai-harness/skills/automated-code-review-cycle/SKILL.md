@@ -29,6 +29,18 @@ PR에 대해 Codex(및 Gemini가 설정된 경우)의 코드 리뷰를 자동으
 
 **Announce at start:** "자동 코드 리뷰 사이클을 시작합니다."
 
+## Phase 1 Trust Boundaries
+
+Phase 1은 **dogfood 모델** — Codex/Gemini 봇 리뷰 결과를 LLM(Claude)이 해석하고, 승인 라벨을 직접 부착한다.
+
+| 신뢰 경계 | Phase 1 동작 | 위험 |
+|---|---|---|
+| 라벨 부착 주체 | LLM (SKILL.md Step 4-8) | LLM이 잘못 평가 시 라벨 오염 가능 |
+| 라벨 신뢰도 | LLM 판단과 동급 (human trust ≠ bot trust) | 라벨만으로 머지 게이트 통과 위험 |
+| 봇 identity | `bot_login` 정확 매칭 (substring 금지) | spoofing 방어 |
+
+**Phase 1 → Phase 2 마이그레이션 계획**: Phase 2에서는 GitHub Actions가 봇 리뷰 이벤트를 감지해 라벨을 자동 부착한다. LLM의 라벨 부착 권한(`label_authority: "skill"`)이 Actions(`"label_authority": "actions"`)로 전환되며, LLM은 라벨 읽기/해석만 담당한다. 전환 시점은 `config.json`의 `label_authority` 필드로 추적한다.
+
 ## GitHub Review API 구조 (CRITICAL — 반드시 이해)
 
 Codex와 Gemini는 리뷰를 다음 구조로 남깁니다:
