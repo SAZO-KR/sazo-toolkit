@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # poll-labels.sh — Plan 08: poll GitHub PR labels for bot-review verdict.
 #
-# Usage: poll-labels.sh --pr <num> [--config <path>] [--repo-dir <path>]
+# Usage: poll-labels.sh --pr <num> [--config <path>] [--repo-dir <path>] [--skip-reviewer <name>]
+#
+# --skip-reviewer: reviewer key to exclude at runtime (repeatable).
+#   Used by skill when GEMINI_ENABLED=false (Gemini never reviewed the PR).
 #
 # Exit codes:
 #   0 — all active reviewers approved (or override label present)
@@ -19,11 +22,13 @@ DEFAULT_CONFIG="$(cd "$SCRIPT_DIR/.." && pwd)/config.json"
 PR_NUM=""
 CONFIG_PATH="$DEFAULT_CONFIG"
 REPO_DIR=""
+SKIP_REVIEWERS=()  # reviewer keys to exclude at runtime (GEMINI_ENABLED=false etc.)
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --pr)       PR_NUM="$2";    shift 2 ;;
-        --config)   CONFIG_PATH="$2"; shift 2 ;;
-        --repo-dir) REPO_DIR="$2"; shift 2 ;;
+        --pr)             PR_NUM="$2";    shift 2 ;;
+        --config)         CONFIG_PATH="$2"; shift 2 ;;
+        --repo-dir)       REPO_DIR="$2"; shift 2 ;;
+        --skip-reviewer)  SKIP_REVIEWERS+=("$2"); shift 2 ;;
         *) shift ;;
     esac
 done
@@ -71,13 +76,19 @@ OVERRIDE_LABEL=$(echo "$MERGED_CONFIG" | jq -r '.override_label // "bot-review/o
 POLL_INTERVAL="${SAZO_BOT_POLL_INTERVAL:-$(echo "$MERGED_CONFIG" | jq -r '.polling.interval_seconds // 30')}"
 MAX_ITER="${SAZO_BOT_MAX_ITER:-$(echo "$MERGED_CONFIG" | jq -r '.polling.max_iterations // 60')}"
 
-# ── build active reviewer list (filter _disabled) ─────────
-ACTIVE_REVIEWERS=$(echo "$MERGED_CONFIG" | jq -r '
+# ── build active reviewer list (filter _disabled + runtime skip) ─────────
+# Build jq expression to exclude runtime-skipped reviewers
+SKIP_JQ_FILTER=""
+for _skip in "${SKIP_REVIEWERS[@]+"${SKIP_REVIEWERS[@]}"}"; do
+    SKIP_JQ_FILTER="$SKIP_JQ_FILTER | select(.key != \"$_skip\")"
+done
+ACTIVE_REVIEWERS=$(echo "$MERGED_CONFIG" | jq -r "
     .active_reviewers
     | to_entries[]
     | select(.value._disabled != true)
+    $SKIP_JQ_FILTER
     | .key
-')
+")
 
 if [[ -z "$ACTIVE_REVIEWERS" ]]; then
     echo "WARN: active_reviewers empty — Plan 08 label gate skip" >&2

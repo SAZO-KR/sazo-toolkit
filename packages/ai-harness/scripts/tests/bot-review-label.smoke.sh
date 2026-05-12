@@ -13,6 +13,10 @@
 # T10:  gh missing → exit 4
 # T10b: gh installed but pr view fails (auth/access error) → exit 4
 # T11:  --add-label write capture (Step 4-8 mimic)
+# T12:  Step 4-8 3-branch add-label capture
+# T13:  --skip-reviewer gemini → codex-only approved → exit 0 (GEMINI_ENABLED=false path)
+# T13b: without --skip-reviewer, codex/approved alone → timeout
+# T14:  setup-labels --repo-dir with custom label_prefix override
 
 set -uo pipefail
 
@@ -441,6 +445,86 @@ for status in approved changes-requested in-progress; do
     fi
 done
 rm -f "$T12_LOG_FILE"
+
+# ─────────────────────────────────────────────────────────
+# T13: --skip-reviewer gemini → codex/approved alone → exit 0 (GEMINI_ENABLED=false path)
+# ─────────────────────────────────────────────────────────
+echo ""
+echo "=== T13: --skip-reviewer gemini → codex-only approved → exit 0 ==="
+
+T13_BIN="$SANDBOX/t13-bin"
+mkdir -p "$T13_BIN"
+cat > "$T13_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"pr view"* ]]; then
+    echo "bot-review/codex/approved"
+    # Gemini label intentionally absent
+fi
+exit 0
+GHEOF
+chmod +x "$T13_BIN/gh"
+
+rc=0
+PATH="$T13_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
+    bash "$POLL_LABELS" --pr 1 --config "$CONFIG" --skip-reviewer gemini 2>/dev/null
+rc=$?
+assert_exit 0 "$rc" "T13: --skip-reviewer gemini + codex/approved → exit 0"
+
+# Without --skip-reviewer, same label set should timeout (gemini/approved missing)
+rc=0
+PATH="$T13_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
+    bash "$POLL_LABELS" --pr 1 --config "$CONFIG" 2>/dev/null
+rc=$?
+assert_exit 2 "$rc" "T13b: without --skip-reviewer, codex/approved alone → timeout (exit 2)"
+
+# ─────────────────────────────────────────────────────────
+# T14: setup-labels.sh --repo-dir with custom label_prefix in override
+# ─────────────────────────────────────────────────────────
+echo ""
+echo "=== T14: setup-labels --repo-dir with custom prefix override ==="
+
+T14_BIN="$SANDBOX/t14-bin"
+T14_LOG="$SANDBOX/t14-gh.log"
+T14_REPO="$SANDBOX/t14-repo"
+mkdir -p "$T14_BIN" "$T14_REPO/.github"
+
+# repo override with custom prefix
+cat > "$T14_REPO/.github/sazo-bot-review.json" <<'EOF'
+{
+  "active_reviewers": {
+    "codex": { "label_prefix": "custom/codex/" },
+    "gemini": { "_disabled": true }
+  }
+}
+EOF
+
+# mock gh: log every call
+export T14_LOG_FILE="$T14_LOG"
+cat > "$T14_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+echo "$@" >> "$T14_LOG_FILE"
+exit 0
+GHEOF
+chmod +x "$T14_BIN/gh"
+
+rc=0
+PATH="$T14_BIN:$PATH" bash "$SETUP_LABELS" --config "$CONFIG" --repo-dir "$T14_REPO" 2>/dev/null
+rc=$?
+assert_exit 0 "$rc" "T14: setup-labels --repo-dir exit 0"
+
+# custom prefix labels should be created
+if grep -qF "custom/codex/" "$T14_LOG" 2>/dev/null; then
+    assert_pass "T14: custom prefix labels created (custom/codex/)"
+else
+    assert_fail "T14: custom prefix labels created (custom/codex/)"
+fi
+
+# default prefix should NOT appear (override replaced it)
+if ! grep -qF "bot-review/codex/" "$T14_LOG" 2>/dev/null; then
+    assert_pass "T14: default prefix NOT created (repo override applied)"
+else
+    assert_fail "T14: default prefix NOT created (repo override applied)"
+fi
 
 # ─────────────────────────────────────────────────────────
 echo ""

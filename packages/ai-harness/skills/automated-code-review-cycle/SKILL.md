@@ -755,17 +755,28 @@ while ROUND < MAX_ROUNDS:
   if no_unanswered_feedback:
     # Plan 08: label-based deterministic termination (Phase 1 = Option C)
     HARNESS="${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}"
-    [ "$ROUND" -eq 1 ] && {
-        SETUP_LOG="/tmp/setup-labels-$$.log"
-        bash "$HARNESS/skills/automated-code-review-cycle/scripts/setup-labels.sh" >"$SETUP_LOG" 2>&1 || {
-            echo "WARN: setup-labels.sh failed (see $SETUP_LOG). Polling may produce false timeout." >&2
-        }
-    }
     REPO_DIR=$(git rev-parse --show-toplevel 2>/dev/null) || {
         echo "WARN: git rev-parse failed; using cwd '$PWD' as REPO_DIR. Repo override (.github/sazo-bot-review.json) may not resolve correctly." >&2
         REPO_DIR="$PWD"
     }
-    bash "$HARNESS/skills/automated-code-review-cycle/scripts/poll-labels.sh" --pr "$PR_NUM" --repo-dir "$REPO_DIR"
+    [ "$ROUND" -eq 1 ] && {
+        SETUP_LOG="/tmp/setup-labels-$$.log"
+        # CRITICAL: pass --repo-dir so setup-labels.sh merges repo override and creates
+        # labels with custom label_prefix values — same as poll-labels.sh does at runtime.
+        # Without this, repos with custom prefixes get default labels from setup but the
+        # poller waits for custom-prefix labels that don't exist → gh issue edit fails.
+        bash "$HARNESS/skills/automated-code-review-cycle/scripts/setup-labels.sh" --repo-dir "$REPO_DIR" >"$SETUP_LOG" 2>&1 || {
+            echo "WARN: setup-labels.sh failed (see $SETUP_LOG). Polling may produce false timeout." >&2
+        }
+    }
+    # CRITICAL: pass --skip-reviewer gemini when GEMINI_ENABLED=false.
+    # poll-labels.sh builds its required reviewer list from config, which includes
+    # gemini by default. If the PR has no Gemini review, requiring bot-review/gemini/approved
+    # causes timeout even on Codex-only repos. The --skip-reviewer flag excludes the key
+    # at runtime without mutating config.
+    _SKIP_ARGS=()
+    [ "$GEMINI_ENABLED" = false ] && _SKIP_ARGS+=(--skip-reviewer gemini)
+    bash "$HARNESS/skills/automated-code-review-cycle/scripts/poll-labels.sh" --pr "$PR_NUM" --repo-dir "$REPO_DIR" "${_SKIP_ARGS[@]+"${_SKIP_ARGS[@]}"}"
     case $? in
       0) ALL_PASSED=true; break ;;
       2) notify_user "Bot review polling timeout (${SAZO_BOT_POLL_MAX_ITER:-60} iterations × ${SAZO_BOT_POLL_INTERVAL:-30}s)"; break ;;
