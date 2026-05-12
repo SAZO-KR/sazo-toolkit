@@ -180,9 +180,10 @@ enforce_skip_streak_gate() {
     if skip_streak_override_active "$SAZO_SESSION_ID" "$SAZO_CWD"; then
         local cur_nonce
         cur_nonce=$(state_get "$SAZO_SESSION_ID" ".override_skip_streak_nonce" "$SAZO_CWD")
-        skip_streak_override_consume "$SAZO_SESSION_ID" "$cur_nonce" "$SAZO_CWD"
-        audit_log "skip_streak_override_consumed" "$SAZO_SESSION_ID" "" "" "hook" "streak=$n"
-        return 0
+        if skip_streak_override_consume "$SAZO_SESSION_ID" "$cur_nonce" "$SAZO_CWD"; then
+            audit_log "skip_streak_override_consumed" "$SAZO_SESSION_ID" "" "" "hook" "streak=$n"
+            return 0
+        fi
     fi
     state_increment "$SAZO_SESSION_ID" ".skip_streak_blocked_count"
     audit_log "skip_streak_block" "$SAZO_SESSION_ID" "" "blocked" "hook" \

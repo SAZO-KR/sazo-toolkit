@@ -133,7 +133,7 @@ state_init() {
     f=$(state_file "$sid" "$cwd") || return 1
 
     if [ -f "$f" ]; then
-        _state_schema_upgrade "$f"
+        _state_schema_upgrade "$f" || return 1
         return 0
     fi
     _with_lock "$f" _state_init_inner "$f" "$sid" "$cwd" "$model"
@@ -173,7 +173,7 @@ _state_init_inner() {
             override_skip_streak_consumed: false,
             override_skip_streak_nonce: null,
             skip_streak_blocked_count: 0
-        }' > "$f"
+        }' > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
 # ----- schema migration dispatcher -----
@@ -190,14 +190,14 @@ _state_schema_upgrade() {
 
     # v3 → v4 (W2 Plan 10 dangerous_override_* fields — P09 mirrors these)
     if [ "$cur_ver" -lt 4 ]; then
-        _with_lock "$f" _state_schema_upgrade_v4 "$f"
+        _with_lock "$f" _state_schema_upgrade_v4 "$f" || return 1
     fi
     # v4 → v5 (P09 override_skip_streak_* fields)
     # re-read after v4 upgrade
     local now_ver
     now_ver=$(jq -r '.schema_version // 0' "$f" 2>/dev/null || echo 0)
     if [ "$now_ver" -lt 5 ]; then
-        _with_lock "$f" _state_schema_upgrade_v5 "$f"
+        _with_lock "$f" _state_schema_upgrade_v5 "$f" || return 1
     fi
 }
 
@@ -576,8 +576,6 @@ skip_streak_override_set() {
     [ -f "$f" ] || state_init "$sid" "$cwd" "${SAZO_MODEL:-unknown}"
     local ts
     ts=$(date +%Y-%m-%dT%H:%M:%S%z)
-    local tmp
-    tmp=$(mktemp)
     _with_lock "$f" _skip_streak_override_set_inner "$f" "$nonce" "$ts"
 }
 
