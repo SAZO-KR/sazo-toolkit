@@ -11,7 +11,7 @@
 # is_known_slash: returns 0 if $1 is a recognized slash command token.
 is_known_slash() {
     case "$1" in
-        /approved|/skip|/override-skip-streak) return 0 ;;
+        /approved|/skip|/override-skip-streak|/allow-dangerous) return 0 ;;
     esac
     return 1
 }

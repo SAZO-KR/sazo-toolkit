@@ -61,6 +61,7 @@
 - `pre-exploration-gate` — Opus 직접 grep/find/glob 3회 후 block
 - `pre-task-general-purpose-gate` — Opus가 `general-purpose` subagent 호출 시 soft warn (전용 subagent 권장)
 - `user-prompt-approval-detect` — `/approved` nonce 발급
+- `dangerous-bash-block` — CLAUDE.md `# 금지 사항` 8패턴 hard-block (Plan 10). 우회: `/allow-dangerous <reason>` (1회용 nonce) 또는 `SAZO_DISABLE_DANGEROUS_BLOCK=1`
 
 비활성: `export SAZO_DISABLE_NARROW_HOOKS=1`
 
@@ -168,6 +169,25 @@ Skip은 세 경로:
 - 테스트 없이 "수동 확인했다"고 넘어가기 금지
 - 사용자 확인 없이 중요한 의사결정을 자의적으로 내리기 금지
 - 예상치 못한 에러 발생 시 무시하고 다음 작업으로 넘어가기 금지 — 멈추고, 원인 파악 후 진행
+
+## Hook 강제 (dangerous-bash-block, Plan 10)
+
+아래 8개 패턴은 `dangerous-bash-block` hook이 **자동 차단** (exit 2). LLM 자율 준수 → hook 강제로 결정성 이동.
+
+| 패턴 label | 예시 명령 | 비고 |
+|---|---|---|
+| `git_push_force` | `git push --force` | carve-out: `--force-with-lease` 허용 |
+| `git_reset_hard_protected` | `git reset --hard origin/main` | main/master/dev/develop/trunk 보호 |
+| `git_branch_force_delete` | `git branch -D main` | 보호 브랜치만 차단 |
+| `git_checkout_discard` | `git checkout -- .` | unstaged 변경 폐기 |
+| `rm_rf_root` | `rm -rf /` | 루트 전체 삭제 |
+| `rm_rf_home` | `rm -rf $HOME` 또는 `rm -rf ~/` | 홈 디렉토리 전체 삭제 |
+| `rm_rf_abs_system_path` | `rm -rf /usr` | 절대경로 시스템 디렉토리 |
+| `sql_destructive` | `DROP TABLE users` / `TRUNCATE TABLE x` | here-string 본문 포함 |
+
+**의도적 실행 필요 시**: 사용자가 직접 `/allow-dangerous <reason>` 입력 → 1회용 nonce 발급 → 다음 차단 1회 통과.  
+**긴급 비활성**: `export SAZO_DISABLE_DANGEROUS_BLOCK=1` (세션/`.zshrc` 단위).  
+**Known gaps** (Phase 1 미커버): quoted-arg evasion (`git push '--force'`), abbreviation, env-S parse.
 
 # 톤
 

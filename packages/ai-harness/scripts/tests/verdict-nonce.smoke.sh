@@ -56,7 +56,7 @@ state_jq() {
   jq -r "$path" "$sf"
 }
 
-# --- Test A: schema v5 init (P09 bumped from v3) ---
+# --- Test A: schema v5 init (P09 bumped from v3 — W2 v4 + P09 v5 fields stacked) ---
 echo "Test A: state_init creates schema v5 with verdict fields"
 state_init "$SID" "$CWD" "test-model"
 schema_ver=$(state_get "$SID" '.schema_version' "$CWD")

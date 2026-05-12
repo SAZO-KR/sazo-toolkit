@@ -1491,7 +1491,7 @@ SV=$(bash -c "
     state_get 't25' '.schema_version' '/tmp2'
 ")
 if [ "$SV" = "5" ]; then
-    PASS=$((PASS + 1)); echo "  ✓ 25. schema_version=5 (P09 bumped from v3)"
+    PASS=$((PASS + 1)); echo "  ✓ 25. schema_version=5 (P09 bumped from v3 — W2 v4 + P09 v5 fields)"
 else
     FAIL=$((FAIL + 1)); echo "  ✗ 25. schema_version=$SV (expected 5)"
 fi

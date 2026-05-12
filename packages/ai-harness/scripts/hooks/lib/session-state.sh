@@ -667,6 +667,62 @@ _mark_approval_complete_inner() {
     ' "$f" > "$tmp"; then mv "$tmp" "$f"; else rm -f "$tmp"; return 1; fi
 }
 
+# ----- dangerous override nonce (Plan 10) -----
+# dangerous_nonce_set <sid> <nonce> <reason> [cwd]
+# dangerous_nonce_consume <sid> <matched_pattern> [cwd]
+#   → null/empty이면 return 1 (block 유지)
+#   → 값 있으면 null로 reset, history append, return 0
+
+dangerous_nonce_set() {
+    local sid="$1" nonce="$2" reason="$3" cwd="${4:-${SAZO_CWD:-}}"
+    local f
+    f=$(state_file "$sid" "$cwd") || return 1
+    [ -f "$f" ] || state_init "$sid" "$cwd" "${SAZO_MODEL:-unknown}"
+    _with_lock "$f" _dangerous_nonce_set_inner "$f" "$nonce" "$reason"
+}
+
+_dangerous_nonce_set_inner() {
+    local f="$1" nonce="$2" reason="$3"
+    local ts; ts=$(date +%Y-%m-%dT%H:%M:%S%z)
+    local tmp; tmp=$(mktemp)
+    if jq --arg n "$nonce" --arg r "$reason" --arg ts "$ts" '
+        .dangerous_override_nonce = $n
+    ' "$f" > "$tmp"; then
+        mv "$tmp" "$f"
+    else
+        rm -f "$tmp"
+        return 1
+    fi
+}
+
+dangerous_nonce_consume() {
+    local sid="$1" matched_pattern="$2" cwd="${3:-${SAZO_CWD:-}}"
+    local stored
+    stored=$(state_get "$sid" ".dangerous_override_nonce // \"\"" "$cwd")
+    # null/empty → block
+    [ -z "$stored" ] || [ "$stored" = "null" ] && return 1
+    # has nonce → consume: reset + append history
+    local f
+    f=$(state_file "$sid" "$cwd") || return 1
+    [ -f "$f" ] || return 1
+    _with_lock "$f" _dangerous_nonce_consume_inner "$f" "$stored" "$matched_pattern"
+}
+
+_dangerous_nonce_consume_inner() {
+    local f="$1" nonce="$2" pattern="$3"
+    local ts; ts=$(date +%Y-%m-%dT%H:%M:%S%z)
+    local tmp; tmp=$(mktemp)
+    if jq --arg n "$nonce" --arg p "$pattern" --arg ts "$ts" '
+        .dangerous_override_nonce = null
+        | .dangerous_override_history = ((.dangerous_override_history // []) + [{nonce: $n, pattern: $p, consumed_at: $ts}])
+    ' "$f" > "$tmp"; then
+        mv "$tmp" "$f"
+    else
+        rm -f "$tmp"
+        return 1
+    fi
+}
+
 # ----- hook payload reader -----
 
 read_hook_payload() {

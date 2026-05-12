@@ -92,6 +92,10 @@ register_workflow_hooks() {
         fi
     }
 
+    # 0) dangerous-bash-block — Bash (Plan 10, narrow ON, 가장 먼저 차단)
+    _register_one_hook "PreToolUse" "Bash" \
+        "$hooks_dir/dangerous-bash-block.sh"
+
     # 1) pre-worktree-gate — Write/Edit/NotebookEdit/Bash
     _register_one_hook "PreToolUse" "Write|Edit|NotebookEdit|Bash" \
         "$hooks_dir/pre-worktree-gate.sh"
