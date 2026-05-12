@@ -37,14 +37,14 @@ register_workflow_hooks() {
         stale_count=$(jq --arg b "$script_basename" --arg cur "$cmd" --arg ev "$event" \
             '(.hooks[$ev] // [])
              | map(.hooks // [] | map(.command) | .[])
-             | map(select(endswith("/" + $b) and . != $cur))
+             | map(select(test("/" + $b + "( .+)?$") and . != $cur))
              | length' "$settings_file")
         if [ "$stale_count" -gt 0 ]; then
             local tmp
             tmp=$(mktemp)
             jq --arg b "$script_basename" --arg cur "$cmd" --arg ev "$event" \
                 '.hooks[$ev] = ((.hooks[$ev] // [])
-                    | map(.hooks |= map(select(.command == $cur or (.command | endswith("/" + $b) | not)))))
+                    | map(.hooks |= map(select(.command == $cur or (.command | test("/" + $b + "( .+)?$") | not)))))
                     | .hooks[$ev] |= map(select(.hooks | length > 0))
                 ' "$settings_file" > "$tmp" && mv "$tmp" "$settings_file"
             echo "  Workflow hook ($event $matcher): stale path entries pruned ($stale_count)"

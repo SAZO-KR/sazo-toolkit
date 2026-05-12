@@ -7,7 +7,7 @@
 # T4: different script basename → unaffected by dedup
 # T5: exact same command already registered → matcher migration path unaffected
 
-set -uo pipefail
+set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HARNESS="$(cd "$HERE/../.." && pwd)"
@@ -58,9 +58,8 @@ run_register() {
 # Build a fake harness dir with the hooks we need for the tests
 FAKE_OLD_HARNESS=$(mktemp -d)
 FAKE_NEW_HARNESS=$(mktemp -d)
-FAKE_OTHER_HARNESS=$(mktemp -d)
 
-for h in "$FAKE_OLD_HARNESS" "$FAKE_NEW_HARNESS" "$FAKE_OTHER_HARNESS"; do
+for h in "$FAKE_OLD_HARNESS" "$FAKE_NEW_HARNESS"; do
     mkdir -p "$h/scripts/hooks/lib"
     # Stub all hook scripts register-workflow-hooks.sh references
     for s in pre-worktree-gate.sh pre-exploration-gate.sh pre-task-general-purpose-gate.sh \
@@ -70,13 +69,8 @@ for h in "$FAKE_OLD_HARNESS" "$FAKE_NEW_HARNESS" "$FAKE_OTHER_HARNESS"; do
     done
 done
 
-# For other harness: give it a DIFFERENT basename hook alongside same basename ones
-# (used in T4)
-printf '#!/bin/bash\nexit 0\n' > "$FAKE_OTHER_HARNESS/scripts/hooks/other-hook.sh"
-chmod +x "$FAKE_OTHER_HARNESS/scripts/hooks/other-hook.sh"
-
 cleanup() {
-    rm -rf "$FAKE_OLD_HARNESS" "$FAKE_NEW_HARNESS" "$FAKE_OTHER_HARNESS"
+    rm -rf "$FAKE_OLD_HARNESS" "$FAKE_NEW_HARNESS"
 }
 trap cleanup EXIT
 
@@ -209,6 +203,34 @@ entry_count=$(jq --arg cmd "$NEW_CMD" '
 ' "$T5_SETTINGS")
 assert "T5: no duplicate entry after matcher migration" "1" "$entry_count"
 rm -rf "$T5_DIR"
+
+# ---------------------------------------------------------------------------
+# T6: argumented hook (workflow-state-machine.sh pre) at old path → register at new path → old pruned
+# Verifies the regex fix: "/<basename> <args>" is matched correctly.
+# Pre-populate with old-path "workflow-state-machine.sh pre" command.
+# Run register with new harness. Old entry must be pruned, new entry added.
+
+OLD_WSM_CMD="$FAKE_OLD_HARNESS/scripts/hooks/workflow-state-machine.sh pre"
+NEW_WSM_CMD="$FAKE_NEW_HARNESS/scripts/hooks/workflow-state-machine.sh pre"
+
+WSM_STALE=$(jq -n --arg cmd "$OLD_WSM_CMD" '[
+    {"matcher": "Task|Write|Edit|NotebookEdit|Bash", "hooks": [{"type":"command","command":$cmd}]}
+]')
+T6_DIR=$(make_settings "$WSM_STALE")
+T6_SETTINGS="$T6_DIR/settings.json"
+
+run_register "$T6_SETTINGS" "$FAKE_NEW_HARNESS" >/dev/null 2>&1
+
+old_wsm_count=$(jq --arg cmd "$OLD_WSM_CMD" '
+    [.hooks.PreToolUse // [] | .[] | .hooks // [] | .[] | select(.command == $cmd)] | length
+' "$T6_SETTINGS")
+new_wsm_count=$(jq --arg cmd "$NEW_WSM_CMD" '
+    [.hooks.PreToolUse // [] | .[] | .hooks // [] | .[] | select(.command == $cmd)] | length
+' "$T6_SETTINGS")
+
+assert "T6: argumented hook old (stale) entry removed" "0" "$old_wsm_count"
+assert "T6: argumented hook new entry added" "1" "$new_wsm_count"
+rm -rf "$T6_DIR"
 
 # ---------------------------------------------------------------------------
 echo ""
