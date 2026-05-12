@@ -133,7 +133,12 @@ implementation에는 별도 gate 없음 (approval ~ ci 사이 자유 구간). PR
 
 ### 공통 lib
 
-`scripts/hooks/lib/session-state.sh` — read/write/transition/lock 함수. slash command (`/skip`, `/approved`)도 동일 lib source.
+**`scripts/hooks/lib/session-state.sh`** — core state 진입점 (read/write/transition/lock/nonce/verdict/ci-invalidate). slash command (`/skip`, `/approved`)도 동일 lib source. 하단에서 두 child lib을 자동 source함 (bottom-source 패턴):
+
+- **`scripts/hooks/lib/metrics.sh`** — hook 헬스체크 (`hook_healthy` 7-check) + metrics append 헬퍼.
+- **`scripts/hooks/lib/skip-control.sh`** — 자율 skip 가드 (`mark_skip_with_check`). `by="auto"` + 비면제 stage 시 `SAZO_ALLOW_AUTO_SKIP` 미설정이면 hard block.
+
+> hook 스크립트는 `session-state.sh`만 source하면 세 lib 모두 사용 가능. `metrics.sh`/`skip-control.sh`를 직접 source하지 말 것.
 
 ## gh pr merge gate
 
