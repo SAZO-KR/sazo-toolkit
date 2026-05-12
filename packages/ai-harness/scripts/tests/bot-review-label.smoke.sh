@@ -10,8 +10,9 @@
 # T7:  default config both approved → exit 0
 # T8:  repo override disables gemini → codex/approved alone → exit 0
 # T9:  active_reviewers empty → exit 5
-# T10: gh missing → exit 4
-# T11: --add-label write capture (Step 4-8 mimic)
+# T10:  gh missing → exit 4
+# T10b: gh installed but pr view fails (auth/access error) → exit 4
+# T11:  --add-label write capture (Step 4-8 mimic)
 
 set -uo pipefail
 
@@ -333,6 +334,31 @@ PATH="$T10_BIN:/usr/bin:/bin" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
     bash "$POLL_LABELS" --pr 1 --config "$CONFIG" 2>/dev/null
 rc=$?
 assert_exit 4 "$rc" "T10: gh missing → exit 4"
+
+# ─────────────────────────────────────────────────────────
+# T10b: gh installed but pr view fails (auth/access error) → exit 4
+# ─────────────────────────────────────────────────────────
+echo ""
+echo "=== T10b: gh pr view fails (auth error) → exit 4 ==="
+
+T10B_BIN="$SANDBOX/t10b-bin"
+mkdir -p "$T10B_BIN"
+# stub gh: present but pr view exits non-zero (simulates auth failure)
+cat > "$T10B_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"pr view"* ]]; then
+    echo "error: HTTP 401: Unauthorized" >&2
+    exit 1
+fi
+exit 0
+GHEOF
+chmod +x "$T10B_BIN/gh"
+
+rc=0
+PATH="$T10B_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
+    bash "$POLL_LABELS" --pr 1 --config "$CONFIG" 2>/dev/null
+rc=$?
+assert_exit 4 "$rc" "T10b: gh pr view auth failure → exit 4"
 
 # ─────────────────────────────────────────────────────────
 # T11: --add-label write capture (Step 4-8 mimic)

@@ -87,8 +87,12 @@ fi
 # ── polling loop ──────────────────────────────────────────
 iter=0
 while true; do
-    # fetch current labels
-    LABELS=$(gh pr view "$PR_NUM" --json labels --jq '.labels[].name' 2>/dev/null || true)
+    # fetch current labels — exit 4 on auth/access failure (not just "gh not installed")
+    if ! LABELS=$(gh pr view "$PR_NUM" --json labels --jq '.labels[].name' 2>/tmp/poll-labels-gh-err); then
+        GH_ERR=$(cat /tmp/poll-labels-gh-err 2>/dev/null || true)
+        echo "ERROR: gh pr view failed: $GH_ERR" >&2
+        exit 4
+    fi
 
     # check override label
     if echo "$LABELS" | grep -qxF "$OVERRIDE_LABEL"; then
@@ -108,6 +112,7 @@ while true; do
                 continue  # intentionally disabled
             fi
             echo "WARN: reviewer '$reviewer' has empty label_prefix (config error: incomplete repo override?). skipping." >&2
+            ALL_APPROVED=false  # missing prefix = not approved; do not silently pass the gate
             continue
         fi
 

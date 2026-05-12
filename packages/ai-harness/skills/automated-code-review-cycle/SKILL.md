@@ -781,8 +781,26 @@ while ROUND < MAX_ROUNDS:
   # Step 4-8: review 결과 라벨 부착 (Plan 08 Phase 1 = Option C)
   # 본문 해석 후 LLM이 REVIEW_STATUS 결정. 그 다음 case가 결정적으로 라벨 부착.
 
-  CODEX_PREFIX="bot-review/codex"
-  GEMINI_PREFIX="bot-review/gemini"
+  # CRITICAL: label_prefix는 config.json 및 repo override(.github/sazo-bot-review.json)에서
+  # 읽어야 한다. 하드코딩하면 커스텀 prefix를 사용하는 repo에서 poll-labels.sh가 바라보는
+  # 라벨과 Step 4-8이 기록하는 라벨이 달라져 gate가 영원히 timeout된다.
+  _HARNESS="${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}"
+  _SKILL_CONFIG="$_HARNESS/skills/automated-code-review-cycle/config.json"
+  _REPO_OVERRIDE=""
+  _REPO_DIR_4_8=$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
+  [[ -f "$_REPO_DIR_4_8/.github/sazo-bot-review.json" ]] && _REPO_OVERRIDE="$_REPO_DIR_4_8/.github/sazo-bot-review.json"
+
+  if [[ -n "$_REPO_OVERRIDE" ]]; then
+    _MERGED=$(jq -n \
+      --slurpfile base "$_SKILL_CONFIG" \
+      --slurpfile ovr "$_REPO_OVERRIDE" \
+      '$base[0] | .active_reviewers = (($base[0].active_reviewers // {}) + ($ovr[0].active_reviewers // {}))')
+  else
+    _MERGED=$(jq '.' "$_SKILL_CONFIG")
+  fi
+
+  CODEX_PREFIX=$(echo "$_MERGED" | jq -r '.active_reviewers.codex.label_prefix // "bot-review/codex/"' | sed 's|/$||')
+  GEMINI_PREFIX=$(echo "$_MERGED" | jq -r '.active_reviewers.gemini.label_prefix // "bot-review/gemini/"' | sed 's|/$||')
 
   # LLM determines status per-reviewer based on review evaluation:
   # - approved: 모든 unanswered 댓글 답변 완료 + decline 0건
