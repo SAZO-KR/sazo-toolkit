@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Smoke test: dangerous-bash-block hook (Plan 10)
-# 21 cases: 11 spec + T_ESC + R-co + R6 + R7 + R-hs + T_MIG + T4b + T3b + T3c + narrow_off
+# 23 cases: 11 spec + T_ESC + R-co + R6 + R7 + R-hs + T_MIG + T4b + T3b + T3c + narrow_off + T_FP1 + T_FP2
 #
 # Tests the hook directly via simulated payloads and tests lib helpers via sourcing.
 # SAZO_STATE_DIR is isolated per-test to prevent contamination.
@@ -282,6 +282,16 @@ EOF
 
     rm -rf "$TMP_HOME"
 )
+
+# ---- T_FP1: echo "git push --force" → pass (false positive guard) ----
+echo "Test T_FP1: echo with dangerous string → pass (anchor guard)"
+assert_exit 0 'T_FP1 echo "git push --force" → exit 0' \
+    run_hook 'echo "git push --force"'
+
+# ---- T_FP2: grep "rm -rf /" file → pass (false positive guard) ----
+echo "Test T_FP2: grep with dangerous string → pass (anchor guard)"
+assert_exit 0 'T_FP2 grep "rm -rf /" file → exit 0' \
+    run_hook 'grep "rm -rf /" file'
 
 # ---- Narrow hooks off → passthrough ----
 echo "Test: narrow hooks off → passthrough"

@@ -209,9 +209,14 @@ _state_schema_upgrade_v4() {
     local f="$1"
     local tmp
     tmp=$(mktemp)
-    jq '.schema_version = 4
+    if jq '.schema_version = 4
         | .dangerous_override_nonce //= null
-        | .dangerous_override_history //= []' "$f" > "$tmp" && mv "$tmp" "$f"
+        | .dangerous_override_history //= []' "$f" > "$tmp"; then
+        mv "$tmp" "$f"
+    else
+        rm -f "$tmp"
+        return 1
+    fi
 }
 
 _state_schema_upgrade_v5() {
