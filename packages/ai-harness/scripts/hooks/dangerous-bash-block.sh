@@ -56,11 +56,16 @@ check_dangerous() {
     # but the pipeline as a whole executes destructive SQL. Check the joined command
     # for: SQL keyword present AND a SQL client appears in a pipe-RHS segment.
     # SQL clients: psql, mysql, mysql5, mariadb, sqlite3, cockroach, pgcli, mycli.
-    # Also matches wrapped invocations: `| sudo -u postgres psql` or `| env X=y psql`
-    # (R13: _ENV_PREFIX already covers env-var prefix + sudo; replicate inline here
-    # since we're scanning the whole command, not per-segment with _ENV_PREFIX).
+    # Wrapped invocations supported (R13/R14):
+    #   `| sudo -u postgres psql`    — sudo prefix
+    #   `| PGPASS=x psql`            — bare env-var prefix
+    #   `| env PGPASS=x psql`        — env(1) wrapper (R14: Codex P2 fix)
+    #   `| env -i PGPASS=x psql`     — env with options
+    #   `| env --ignore-environment PGPASS=x psql`  — env long option
     _SQL_CLIENT_RE='(psql|mysql[0-9]*|mariadb|sqlite3|cockroach|pgcli|mycli)'
-    _SQL_CLIENT_WRAPPED='\|[[:space:]]*([[:alpha:]_][[:alnum:]_]*=[^[:space:]]*[[:space:]]+|sudo([[:space:]]+-[a-zA-Z0-9-]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+)*'"${_SQL_CLIENT_RE}"'([[:space:]]|$)'
+    # _SQL_CLIENT_PREFIX: bare-VAR= prefix, sudo prefix, or env(1) prefix (with optional flags and VAR= args)
+    _SQL_CLIENT_PREFIX='([[:alpha:]_][[:alnum:]_]*=[^[:space:]]*[[:space:]]+|sudo([[:space:]]+-[a-zA-Z0-9-]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+|env([[:space:]]+-[a-zA-Z][a-zA-Z0-9-]*([=[:space:]][^[:space:]]*)?)*([[:space:]]+[[:alpha:]_][[:alnum:]_]*=[^[:space:]]*)*[[:space:]]+)*'
+    _SQL_CLIENT_WRAPPED='\|[[:space:]]*'"${_SQL_CLIENT_PREFIX}${_SQL_CLIENT_RE}"'([[:space:]]|$)'
     if printf '%s' "$joined" | grep -qiE '(DROP[[:space:]]+TABLE|DROP[[:space:]]+DATABASE|TRUNCATE[[:space:]]+TABLE)'; then
         if printf '%s' "$joined" | grep -qE "${_SQL_CLIENT_WRAPPED}"; then
             echo "sql_destructive"; return 0

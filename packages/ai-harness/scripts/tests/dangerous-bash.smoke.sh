@@ -6,6 +6,7 @@
 # R12 additions: R12a (printf|psql pipeline) + R12b (echo|mysql pipeline) + R12c (cat|psql no-keyword pass)
 # R13 additions: R13a (rm /* -r flag-after-path) + R13b (git -C /repo push --force global opts)
 #                R13c (printf|sudo psql SQL wrapped client) + R13d (git branch -d -f main split flags)
+# R14 additions: R14a (echo|env psql SQL env(1) wrapper)
 #
 # Tests the hook directly via simulated payloads and tests lib helpers via sourcing.
 # SAZO_STATE_DIR is isolated per-test to prevent contamination.
@@ -479,6 +480,16 @@ assert_exit 2 "R13d2 git branch -d --force main → exit 2" \
 echo "Test R13d3: git branch --delete --force main → block"
 assert_exit 2 "R13d3 git branch --delete --force main → exit 2" \
     run_hook "git branch --delete --force main"
+
+# ---- R14a: echo 'TRUNCATE TABLE;' | env PGPASS=x psql → block (env(1) wrapper) ----
+echo "Test R14a: echo 'TRUNCATE TABLE;' | env PGPASS=x psql → block (env wrapper)"
+assert_exit 2 "R14a echo 'TRUNCATE TABLE x;' | env PGPASS=x psql → exit 2" \
+    run_hook "echo 'TRUNCATE TABLE x;' | env PGPASS=x psql"
+
+# ---- R14b: cat safe.sql | env PGPASS=x psql → pass (no SQL keyword) ----
+echo "Test R14b: cat safe.sql | env PGPASS=x psql → pass (no SQL keyword)"
+assert_exit 0 "R14b cat safe.sql | env PGPASS=x psql → exit 0" \
+    run_hook "cat safe.sql | env PGPASS=x psql"
 
 # ---- Summary ----
 echo "─────────────────────"
