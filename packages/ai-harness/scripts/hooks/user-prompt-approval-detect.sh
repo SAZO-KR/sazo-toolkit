@@ -59,6 +59,31 @@ case "$first_token" in
             fi
         fi
         ;;
+    /override-skip-streak)
+        if [ -n "$parsed" ]; then
+            local_rest="${parsed#override-skip-streak}"
+            local_rest=$(trim_leading "$local_rest")
+            local_rest=$(printf '%s' "$local_rest" | sed -E 's/[[:space:]]+$//')
+
+            # Empty reason → reject (audit + no nonce mint).
+            if [ -z "$local_rest" ]; then
+                state_init "$SAZO_SESSION_ID" "$SAZO_CWD" "${SAZO_MODEL:-unknown}"
+                audit_log "skip_streak_override_rejected" "$SAZO_SESSION_ID" "" "" "user" "reason=empty"
+                echo "[skip-streak] /override-skip-streak requires <reason> argument" >&2
+                exit 0
+            fi
+
+            state_init "$SAZO_SESSION_ID" "$SAZO_CWD" "${SAZO_MODEL:-unknown}"
+            if command -v openssl >/dev/null 2>&1; then
+                nonce=$(openssl rand -hex 16)
+            else
+                nonce=$(LC_ALL=C tr -dc 'a-f0-9' < /dev/urandom | head -c 32)
+            fi
+            skip_streak_override_set "$SAZO_SESSION_ID" "$nonce" "$SAZO_CWD"
+            audit_log "skip_streak_override" "$SAZO_SESSION_ID" "" "" "user" "reason=$local_rest"
+            echo "[skip-streak] override issued. Next mutating tool will pass once." >&2
+        fi
+        ;;
 esac
 
 exit 0

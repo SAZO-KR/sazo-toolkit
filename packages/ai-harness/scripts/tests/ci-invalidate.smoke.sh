@@ -1490,10 +1490,10 @@ SV=$(bash -c "
     state_init 't25' '/tmp2' 'opus'
     state_get 't25' '.schema_version' '/tmp2'
 ")
-if [ "$SV" = "3" ]; then
-    PASS=$((PASS + 1)); echo "  ✓ 25. schema_version bumped to 3 for pre_commit_markers field"
+if [ "$SV" = "5" ]; then
+    PASS=$((PASS + 1)); echo "  ✓ 25. schema_version=5 (P09 bumped from v3)"
 else
-    FAIL=$((FAIL + 1)); echo "  ✗ 25. schema_version=$SV (expected 3)"
+    FAIL=$((FAIL + 1)); echo "  ✗ 25. schema_version=$SV (expected 5)"
 fi
 
 # 26. A2 — state_set_dict_value helper bootstraps null dict + writes value.
