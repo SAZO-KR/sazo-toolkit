@@ -17,7 +17,7 @@ read_hook_payload
 [ -z "${SAZO_SESSION_ID:-}" ] && exit 0
 [ "$SAZO_TOOL_NAME" != "Bash" ] && exit 0
 
-cmd=$(echo "$SAZO_TOOL_INPUT" | jq -r '.command // ""')
+cmd=$(printf '%s\n' "$SAZO_TOOL_INPUT" | jq -r '.command // ""')
 [ -z "$cmd" ] && exit 0
 
 # state init (migration 자동 적용 by _state_schema_upgrade)
@@ -80,13 +80,15 @@ check_dangerous() {
             echo "rm_rf_root"; return 0
         fi
         # 6. rm_rf_home — uses _HOME_SUFFIX (single-quoted var) to keep $HOME as ERE literal
-        # Covers short flags and --recursive.
-        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+(-[a-zA-Z]*[rRf][a-zA-Z]*|--recursive)[[:space:]]+${_HOME_SUFFIX}"; then
+        # Covers short flags and --recursive. Uses .*(-r|--recursive).* to allow
+        # interleaved options (e.g. rm -v -rf ~/) consistent with rm_rf_root/rm_rf_abs_system_path.
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+.*(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive).*[[:space:]]+${_HOME_SUFFIX}"; then
             echo "rm_rf_home"; return 0
         fi
         # 7. rm_rf_abs_system_path — restrict to sensitive system directories only
-        # Covers short flags and --recursive.
-        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+.*(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive).*[[:space:]]+/(usr|etc|bin|sbin|var|opt|lib|boot|root|dev|proc|sys)([[:space:]]|/|$)"; then
+        # Covers short flags and --recursive. Trailing boundary matches space, pipe,
+        # redirect, slash, backgrounding (&) — consistent with rm_rf_root boundary.
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+.*(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive).*[[:space:]]+/(usr|etc|bin|sbin|var|opt|lib|boot|root|dev|proc|sys)([[:space:]]|&|\|[|>]?|>|/|$)"; then
             echo "rm_rf_abs_system_path"; return 0
         fi
         # 8. sql_destructive — 패턴은 segment 전체 텍스트 대상 (here-string body 포함)
