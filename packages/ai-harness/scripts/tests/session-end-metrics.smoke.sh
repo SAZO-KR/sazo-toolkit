@@ -364,6 +364,49 @@ echo "=== T5: 5s timeout portable ==="
     fi
     rm -rf "$TMP_HOME" "$TMP_HARNESS"
 
+    # T5b: gtimeout only (timeout absent) → normal exit + metric written
+    echo "=== T5b: gtimeout only (timeout absent) ==="
+    if ! command -v gtimeout >/dev/null 2>&1; then
+        mark_test_skip "T5b.1 gtimeout not installed (skip — install coreutils to enable)"
+        mark_test_skip "T5b.2 metric written via gtimeout"
+    else
+        TMP_HOME=$(mktemp -d)
+        TMP_HARNESS=$(mktemp -d)
+        mkdir -p "$TMP_HOME/.claude/state"
+        mkdir -p "$TMP_HARNESS/scripts/hooks/lib"
+        cp "$LIB" "$TMP_HARNESS/scripts/hooks/lib/session-state.sh"
+        cp "$HOOK" "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
+        chmod +x "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh"
+        printf '#!/usr/bin/env bash\n' > "$TMP_HARNESS/scripts/hooks/workflow-state-machine.sh"
+        chmod +x "$TMP_HARNESS/scripts/hooks/workflow-state-machine.sh"
+        mk_settings_json "$TMP_HOME" "session_end_only" "$TMP_HARNESS"
+        PAYLOAD=$(mk_payload "ses-t5b" "/tmp/t5b.jsonl" "/tmp" "other")
+
+        FAKE_PATH=$(mktemp -d)
+        # gtimeout is symlinked, timeout is explicitly omitted
+        for bin in bash cat date mkdir rm printf wc grep awk sed tr stat shasum sha1sum md5sum openssl mktemp cp chmod ln sleep jq gtimeout; do
+            if command -v "$bin" >/dev/null 2>&1; then
+                ln -sf "$(command -v "$bin")" "$FAKE_PATH/$bin" 2>/dev/null || true
+            fi
+        done
+        # timeout explicitly not linked — gtimeout only
+
+        RC=0
+        HOME="$TMP_HOME" SAZO_HARNESS_DIR="$TMP_HARNESS" SAZO_STATE_DIR="$TMP_HOME/.claude/state" \
+            PATH="$FAKE_PATH" \
+            bash "$TMP_HARNESS/scripts/hooks/post-session-end-metrics.sh" <<< "$PAYLOAD" || RC=$?
+        assert_eq "0" "$RC" "T5b.1 normal exit with gtimeout only"
+
+        DEST="$TMP_HOME/.claude/state/session-metrics-ses-t5b.jsonl"
+        if [ -f "$DEST" ] && [ -s "$DEST" ]; then
+            assert_pass "T5b.2 metric written via gtimeout"
+        else
+            assert_fail "T5b.2 metric written via gtimeout" "file missing or empty"
+        fi
+
+        rm -rf "$TMP_HOME" "$TMP_HARNESS" "$FAKE_PATH"
+    fi
+
     # T5c: no timeout/gtimeout/perl → audit_log "no timeout binary available" + still runs
     TMP_HOME=$(mktemp -d)
     TMP_HARNESS=$(mktemp -d)
