@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "active_reviewers": {
+    "codex": {
+      "label_prefix": "bot-review/codex/",
+      "comment_pattern": "Codex Review",
+      "bot_login": "chatgpt-codex-connector[bot]"
+    },
+    "gemini": {
+      "label_prefix": "bot-review/gemini/",
+      "comment_pattern": "@gemini-code-review",
+      "bot_login": "gemini-code-assist[bot]"
+    }
+  },
+  "labels": {
+    "approved":          {"suffix": "approved",          "color": "0e8a16"},
+    "changes_requested": {"suffix": "changes-requested", "color": "d93f0b"},
+    "in_progress":       {"suffix": "in-progress",       "color": "fbca04"}
+  },
+  "override_label": "bot-review/override",
+  "polling": {"interval_seconds": 30, "max_iterations": 60}
+}

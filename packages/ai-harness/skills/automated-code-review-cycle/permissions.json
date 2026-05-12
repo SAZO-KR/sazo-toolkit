@@ -3,6 +3,8 @@
     "date:*",
     "sleep:*",
     "echo:*",
-    "seq:*"
+    "seq:*",
+    "gh:*",
+    "jq:*"
   ]
 }

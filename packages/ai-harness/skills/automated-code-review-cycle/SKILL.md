@@ -1,7 +1,7 @@
 ---
 name: Automated-Code-Review-Cycle
 description: PR에 대해 Codex/Gemini 코드 리뷰를 자동으로 받고, 피드백 수정 → 재리뷰 사이클을 사용자 개입 없이 반복. 활성 리뷰어 전부 통과하면 완료. Gemini 미설정 repo는 Codex만으로 판단.
-version: 1.8.0
+version: 1.9.0
 when_to_use: PR 생성 후 코드 리뷰 사이클을 자동화하고 싶을 때
 ---
 
@@ -748,12 +748,184 @@ while ROUND < MAX_ROUNDS:
   fetch_review_feedback()       # Step 3 — review → review comments 구조로 조회
   filter_unanswered()           # in_reply_to_id로 미답변만
 
+  # Plan 08: label-based termination. Exit 3 (changes-requested) falls through
+  # to fix_commit_push_reply — same logic as legacy LLM-based pass-condition fail.
+  # Infinite oscillation prevented by MAX_ROUNDS=10 bound (no per-round flag needed).
+
+  # CRITICAL: resolve HARNESS/REPO_DIR and run label setup BEFORE the
+  # no_unanswered_feedback branch. setup-labels.sh was previously nested inside
+  # `if no_unanswered_feedback`, so ROUND==1 with findings (the common first cycle)
+  # skipped label creation entirely — Step 4-8's `gh issue edit --add-label` then
+  # fails because the repository labels don't exist yet.
+  HARNESS="${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}"
+  REPO_DIR=$(git rev-parse --show-toplevel 2>/dev/null) || {
+      echo "WARN: git rev-parse failed; using cwd '$PWD' as REPO_DIR. Repo override (.github/sazo-bot-review.json) may not resolve correctly." >&2
+      REPO_DIR="$PWD"
+  }
+  [ "$ROUND" -eq 1 ] && {
+      SETUP_LOG="/tmp/setup-labels-$$.log"
+      # CRITICAL: pass --repo-dir so setup-labels.sh merges repo override and creates
+      # labels with custom label_prefix values — same as poll-labels.sh does at runtime.
+      # Without this, repos with custom prefixes get default labels from setup but the
+      # poller waits for custom-prefix labels that don't exist → gh issue edit fails.
+      bash "$HARNESS/skills/automated-code-review-cycle/scripts/setup-labels.sh" --repo-dir "$REPO_DIR" >"$SETUP_LOG" 2>&1 || {
+          echo "WARN: setup-labels.sh failed (see $SETUP_LOG). Label writes may fail silently." >&2
+      }
+  }
+
   if no_unanswered_feedback:
-    check_pass_conditions()     # 👍 / 인라인 0건 (Gemini 미설정 시 Codex만)
-    if all_passed: break        # ALL_PASSED = Codex통과 && (Gemini통과 or 미설정)
+    # Plan 08: label-based deterministic termination (Phase 1 = Option C)
+
+    # CRITICAL: write verdict label BEFORE calling poll-labels.sh, but ONLY when
+    # the verdict is confirmed by the bot's own state — not unconditionally.
+    # Writing approved without checking CODEX_PASSED / GEMINI_PASSED lets the
+    # poller exit 0 on a self-written label even when the bot issued a top-level
+    # changes-requested (or has not yet signalled pass via +1 reaction).
+    _NUF_HARNESS="${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}"
+    _NUF_CONFIG="$_NUF_HARNESS/skills/automated-code-review-cycle/config.json"
+    if [[ -f "$REPO_DIR/.github/sazo-bot-review.json" ]]; then
+      _NUF_MERGED=$(jq -n --slurpfile b "$_NUF_CONFIG" --slurpfile o "$REPO_DIR/.github/sazo-bot-review.json" \
+        '$b[0]
+         | .active_reviewers = (($b[0].active_reviewers // {}) + ($o[0].active_reviewers // {}))
+         | .labels = ($b[0].labels * ($o[0].labels // {}))')
+    else
+      _NUF_MERGED=$(jq '.' "$_NUF_CONFIG")
+    fi
+    _NUF_CODEX_PREFIX=$(echo "$_NUF_MERGED" | jq -r '.active_reviewers.codex.label_prefix // "bot-review/codex/"' | sed 's|/$||')
+    _NUF_APPROVED_SUFFIX=$(echo "$_NUF_MERGED" | jq -r '.labels.approved.suffix // "approved"')
+    _NUF_INPROGRESS_SUFFIX=$(echo "$_NUF_MERGED" | jq -r '.labels.in_progress.suffix // "in-progress"')
+    _NUF_CHANGES_SUFFIX=$(echo "$_NUF_MERGED" | jq -r '.labels.changes_requested.suffix // "changes-requested"')
+    # Gate: write Codex approved only if CODEX_PASSED=true (i.e. CODEX_STATE=="approved").
+    # If Codex has not signalled +1 yet (e.g. top-level changes-requested with all inline
+    # comments answered), write in-progress instead — poll-labels.sh will then wait for
+    # the bot-review/codex/approved label to appear organically.
+    if [ "$CODEX_PASSED" = true ]; then
+      gh issue edit "$PR_NUM" \
+          --add-label "$_NUF_CODEX_PREFIX/$_NUF_APPROVED_SUFFIX" \
+          --remove-label "$_NUF_CODEX_PREFIX/$_NUF_INPROGRESS_SUFFIX,$_NUF_CODEX_PREFIX/$_NUF_CHANGES_SUFFIX" 2>/dev/null || true
+    else
+      gh issue edit "$PR_NUM" \
+          --add-label "$_NUF_CODEX_PREFIX/$_NUF_INPROGRESS_SUFFIX" \
+          --remove-label "$_NUF_CODEX_PREFIX/$_NUF_APPROVED_SUFFIX,$_NUF_CODEX_PREFIX/$_NUF_CHANGES_SUFFIX" 2>/dev/null || true
+    fi
+    # CRITICAL: only write Gemini approved label if Gemini has reviewed the CURRENT
+    # push AND GEMINI_PASSED=true. GEMINI_ENABLED=true means Gemini has reviewed at
+    # some point historically, but its last review may predate the current push.
+    # Writing the approved label for a stale Gemini pass lets poll-labels.sh exit 0
+    # without Gemini ever evaluating the latest changes.
+    # Guard: check whether any Gemini review was submitted after PUSH_TIME.
+    _GEMINI_FRESH=false
+    if [ "$GEMINI_ENABLED" = true ]; then
+      _GEMINI_LATEST_AT=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews --paginate \
+        --jq ".[] | select(.user.login == \"$GEMINI_BOT_LOGIN\") | .submitted_at" \
+        2>/dev/null | sort | tail -1)
+      if [[ -n "$_GEMINI_LATEST_AT" ]] && [[ "$_GEMINI_LATEST_AT" > "$PUSH_TIME" ]]; then
+        _GEMINI_FRESH=true
+      fi
+    fi
+    if [ "$GEMINI_ENABLED" = true ] && [ "$_GEMINI_FRESH" = true ] && [ "$GEMINI_PASSED" = true ]; then
+      _NUF_GEMINI_PREFIX=$(echo "$_NUF_MERGED" | jq -r '.active_reviewers.gemini.label_prefix // "bot-review/gemini/"' | sed 's|/$||')
+      gh issue edit "$PR_NUM" \
+          --add-label "$_NUF_GEMINI_PREFIX/$_NUF_APPROVED_SUFFIX" \
+          --remove-label "$_NUF_GEMINI_PREFIX/$_NUF_INPROGRESS_SUFFIX,$_NUF_GEMINI_PREFIX/$_NUF_CHANGES_SUFFIX" 2>/dev/null || true
+    elif [ "$GEMINI_ENABLED" = true ] && [ "$_GEMINI_FRESH" = false ]; then
+      # Gemini is active but hasn't reviewed this push yet. Trigger a fresh review
+      # and mark in-progress. poll-labels.sh will wait for the actual verdict label.
+      # Do NOT skip Gemini from the gate — that bypasses the "all active reviewers
+      # passed" requirement for a PR Gemini has previously engaged with.
+      gh pr comment "$PR_NUM" --body "/gemini review" 2>/dev/null || true
+      _NUF_GEMINI_PREFIX=$(echo "$_NUF_MERGED" | jq -r '.active_reviewers.gemini.label_prefix // "bot-review/gemini/"' | sed 's|/$||')
+      gh issue edit "$PR_NUM" \
+          --add-label "$_NUF_GEMINI_PREFIX/$_NUF_INPROGRESS_SUFFIX" \
+          --remove-label "$_NUF_GEMINI_PREFIX/$_NUF_APPROVED_SUFFIX,$_NUF_GEMINI_PREFIX/$_NUF_CHANGES_SUFFIX" 2>/dev/null || true
+    fi
+
+    # CRITICAL: pass --skip-reviewer gemini only when GEMINI_ENABLED=false.
+    # When Gemini is enabled but stale (_GEMINI_FRESH=false), we trigger /gemini review
+    # above and let poll-labels.sh wait for the fresh verdict — skipping Gemini from
+    # the gate would bypass the "all active reviewers passed" requirement.
+    _SKIP_ARGS=()
+    [ "$GEMINI_ENABLED" = false ] && _SKIP_ARGS+=(--skip-reviewer gemini)
+    bash "$HARNESS/skills/automated-code-review-cycle/scripts/poll-labels.sh" --pr "$PR_NUM" --repo-dir "$REPO_DIR" "${_SKIP_ARGS[@]+"${_SKIP_ARGS[@]}"}"
+    case $? in
+      0) ALL_PASSED=true; break ;;
+      2) notify_user "Bot review polling timeout (${SAZO_BOT_POLL_MAX_ITER:-60} iterations × ${SAZO_BOT_POLL_INTERVAL:-30}s)"; break ;;
+      3) ;; # changes-requested fallthrough — fix_commit_push_reply will run; oscillation bounded by MAX_ROUNDS=10
+      4) notify_user "gh CLI 미설치/미인증 — Phase 1 라벨 게이트 비활성. 사용자 수동 LLM 판단 필요."; break ;;
+      5) echo "WARN: active reviewers config empty — Phase 1 라벨 게이트 skip. LLM 텍스트 판단 fallback (수동)" >&2
+         continue ;;  # skip fix attempt; next round picks up
+    esac
     # 통과 조건 미충족 + 새 리뷰 없음 → stale로 처리됨 (위 로직)
 
   fix_commit_push_reply()       # Step 4 — 수정 → 테스트 → 커밋 → push → 답변(commit hash)
+
+  # Step 4-8: review 결과 라벨 부착 (Plan 08 Phase 1 = Option C)
+  # 본문 해석 후 LLM이 REVIEW_STATUS 결정. 그 다음 case가 결정적으로 라벨 부착.
+
+  # CRITICAL: label_prefix는 config.json 및 repo override(.github/sazo-bot-review.json)에서
+  # 읽어야 한다. 하드코딩하면 커스텀 prefix를 사용하는 repo에서 poll-labels.sh가 바라보는
+  # 라벨과 Step 4-8이 기록하는 라벨이 달라져 gate가 영원히 timeout된다.
+  _HARNESS="${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}"
+  _SKILL_CONFIG="$_HARNESS/skills/automated-code-review-cycle/config.json"
+  _REPO_OVERRIDE=""
+  _REPO_DIR_4_8=$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
+  [[ -f "$_REPO_DIR_4_8/.github/sazo-bot-review.json" ]] && _REPO_OVERRIDE="$_REPO_DIR_4_8/.github/sazo-bot-review.json"
+
+  if [[ -n "$_REPO_OVERRIDE" ]]; then
+    _MERGED=$(jq -n \
+      --slurpfile base "$_SKILL_CONFIG" \
+      --slurpfile ovr "$_REPO_OVERRIDE" \
+      '$base[0]
+       | .active_reviewers = (($base[0].active_reviewers // {}) + ($ovr[0].active_reviewers // {}))
+       | .labels = ($base[0].labels * ($ovr[0].labels // {}))')
+  else
+    _MERGED=$(jq '.' "$_SKILL_CONFIG")
+  fi
+
+  CODEX_PREFIX=$(echo "$_MERGED" | jq -r '.active_reviewers.codex.label_prefix // "bot-review/codex/"' | sed 's|/$||')
+  GEMINI_PREFIX=$(echo "$_MERGED" | jq -r '.active_reviewers.gemini.label_prefix // "bot-review/gemini/"' | sed 's|/$||')
+  # CRITICAL: read suffixes from config to match what poll-labels.sh and setup-labels.sh create.
+  # Repos with .labels.*.suffix overrides must write matching label names here.
+  _APPROVED_SUFFIX=$(echo "$_MERGED" | jq -r '.labels.approved.suffix // "approved"')
+  _INPROGRESS_SUFFIX=$(echo "$_MERGED" | jq -r '.labels.in_progress.suffix // "in-progress"')
+  _CHANGES_SUFFIX=$(echo "$_MERGED" | jq -r '.labels.changes_requested.suffix // "changes-requested"')
+
+  # LLM determines status per-reviewer based on review evaluation:
+  # - approved: 모든 unanswered 댓글 답변 완료 + decline 0건
+  # - changes-requested: decline 있거나 새 fix 요청 진행 중
+  # - in-progress: 트리거만 보낸 상태 (응답 대기)
+
+  REVIEW_STATUS_CODEX="approved"  # ← LLM이 평가 후 채움 (approved | changes-requested | in-progress)
+  case "$REVIEW_STATUS_CODEX" in
+      approved)
+          gh issue edit "$PR_NUM" \
+              --add-label "$CODEX_PREFIX/$_APPROVED_SUFFIX" \
+              --remove-label "$CODEX_PREFIX/$_INPROGRESS_SUFFIX,$CODEX_PREFIX/$_CHANGES_SUFFIX"
+          ;;
+      changes-requested)
+          gh issue edit "$PR_NUM" \
+              --add-label "$CODEX_PREFIX/$_CHANGES_SUFFIX" \
+              --remove-label "$CODEX_PREFIX/$_INPROGRESS_SUFFIX,$CODEX_PREFIX/$_APPROVED_SUFFIX"
+          ;;
+      in-progress)
+          gh issue edit "$PR_NUM" \
+              --add-label "$CODEX_PREFIX/$_INPROGRESS_SUFFIX" \
+              --remove-label "$CODEX_PREFIX/$_APPROVED_SUFFIX,$CODEX_PREFIX/$_CHANGES_SUFFIX"
+          ;;
+  esac
+
+  # Gemini 활성 시 동일 패턴 (REVIEW_STATUS_GEMINI 평가 후 case)
+  if [ "$GEMINI_ENABLED" = true ]; then
+      REVIEW_STATUS_GEMINI="approved"  # ← LLM 평가
+      case "$REVIEW_STATUS_GEMINI" in
+          approved) gh issue edit "$PR_NUM" --add-label "$GEMINI_PREFIX/$_APPROVED_SUFFIX" --remove-label "$GEMINI_PREFIX/$_INPROGRESS_SUFFIX,$GEMINI_PREFIX/$_CHANGES_SUFFIX" ;;
+          changes-requested) gh issue edit "$PR_NUM" --add-label "$GEMINI_PREFIX/$_CHANGES_SUFFIX" --remove-label "$GEMINI_PREFIX/$_INPROGRESS_SUFFIX,$GEMINI_PREFIX/$_APPROVED_SUFFIX" ;;
+          in-progress) gh issue edit "$PR_NUM" --add-label "$GEMINI_PREFIX/$_INPROGRESS_SUFFIX" --remove-label "$GEMINI_PREFIX/$_APPROVED_SUFFIX,$GEMINI_PREFIX/$_CHANGES_SUFFIX" ;;
+      esac
+  fi
+  # CRITICAL: REVIEW_STATUS는 LLM이 본문 해석 후 결정. approved는 모든 unanswered가 fix됐고
+  # decline 0건일 때만. 무조건 approved 부착 금지 (Anti-Patterns 참조).
+
   gemini_fallback_if_quota()    # Step 5 — Codex quota 초과 시에만
 
   # Wall-clock budget check
@@ -817,6 +989,8 @@ PR이 머지 가능한 상태입니다. / 사용자 확인이 필요합니다.
 | `ALL_*_REVIEW_IDS`를 Step 1의 cycle-start snapshot만 신뢰 | 매 라운드 Step 3-1 진입 시 재조회 — 사이클 도중 submit된 review를 누락하지 않도록 |
 | Step 2 polling에서 PR 작성자의 리뷰 reply도 "새 리뷰"로 카운트 | `gh api .../reviews`에 bot 로그인 **정확 매칭** 필수 (`select(.user.login == $codex or .user.login == $gemini)`). substring `test("codex\|gemini")`는 identity spoofing 위험 있음 — Step 3-3의 가드와 일관되게 exact match 사용 |
 | 봇이 quota 코멘트도 안 남기고 silent하게 멈춘 상태에서 무한 대기/즉시 fallback | polling 1회(≈10분) 무반응 시 stale=1 단계에서 `@codex review`(Codex) / `/gemini review`(Gemini) 코멘트로 **수동 재트리거 1회** 발송 후 다음 polling 대기. fallback/escalation은 그 후에도 무반응일 때만 |
+| 라벨 갱신 안 하고 다음 cycle 대기 | Step 4-8에서 매 round 끝 라벨 부착 — Plan 08 termination gate가 라벨 기반이므로 미부착 시 polling timeout |
+| Step 4-8에서 무조건 approved만 부착 (검증 없이) | LLM이 case A/B/C 명시 분기 — Case A는 모든 댓글 fix 완료 + decline 0 + commit hash 링크 답변 완료 시에만. 그 외 changes-requested(Case B) 또는 in-progress(Case C) |
 
 ## Related Skills
 
