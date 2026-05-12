@@ -34,9 +34,11 @@ _run_with_timeout() {
         if command -v timeout >/dev/null 2>&1; then
             # Export functions for subshell access
             export -f _with_lock _append_metrics_inner audit_log 2>/dev/null || true
+            export AUDIT_LOG STATE_DIR
             timeout "${secs}s" bash -c '"$@"' -- "$@"
         elif command -v gtimeout >/dev/null 2>&1; then
             export -f _with_lock _append_metrics_inner audit_log 2>/dev/null || true
+            export AUDIT_LOG STATE_DIR
             gtimeout "${secs}s" bash -c '"$@"' -- "$@"
         elif command -v perl >/dev/null 2>&1; then
             # perl alarm cannot invoke shell functions — skip lock + warn
