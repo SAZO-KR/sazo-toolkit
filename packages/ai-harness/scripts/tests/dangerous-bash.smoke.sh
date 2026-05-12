@@ -3,6 +3,7 @@
 # 41 cases: 11 spec + T_ESC + R-co + R6 + R7 + R-hs + T_MIG + T4b + T3b + T3c + narrow_off + T_FP1 + T_FP2 + T_REC + T_SUDO + T_REASON + R9a + R9b + R9c
 # R10 additions: R10a + R10b + R10c + R10d + R10e + R10f + R10g + R10h
 # R11 additions: R11a (sql FP grep) + R11b (sql FP echo) + R11c (sql real psql block)
+# R12 additions: R12a (printf|psql pipeline) + R12b (echo|mysql pipeline) + R12c (cat|psql no-keyword pass)
 #
 # Tests the hook directly via simulated payloads and tests lib helpers via sourcing.
 # SAZO_STATE_DIR is isolated per-test to prevent contamination.
@@ -416,6 +417,21 @@ assert_exit 0 'R11b echo "DROP TABLE users" → exit 0' \
 echo 'Test R11c: psql -c "DROP TABLE" → block'
 assert_exit 2 'R11c psql -c "DROP TABLE users" → exit 2' \
     run_hook 'psql -c "DROP TABLE users"'
+
+# ---- R12a: printf 'DROP TABLE;' | psql → block (pipeline bypass) ----
+echo "Test R12a: printf 'DROP TABLE;' | psql → block (pipeline bypass)"
+assert_exit 2 "R12a printf 'DROP TABLE users;' | psql → exit 2" \
+    run_hook "printf 'DROP TABLE users;' | psql"
+
+# ---- R12b: echo 'DROP TABLE;' | mysql → block (pipeline bypass) ----
+echo "Test R12b: echo 'DROP TABLE;' | mysql → block (pipeline bypass)"
+assert_exit 2 "R12b echo 'TRUNCATE TABLE orders;' | mysql → exit 2" \
+    run_hook "echo 'TRUNCATE TABLE orders;' | mysql"
+
+# ---- R12c: cat safe_file.sql | psql → pass (no SQL keyword in command) ----
+echo "Test R12c: cat safe_file.sql | psql → pass (no SQL keyword)"
+assert_exit 0 "R12c cat safe_file.sql | psql → exit 0" \
+    run_hook "cat safe_file.sql | psql"
 
 # ---- Summary ----
 echo "─────────────────────"

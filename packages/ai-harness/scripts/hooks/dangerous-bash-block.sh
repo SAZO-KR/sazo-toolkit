@@ -47,8 +47,22 @@ check_dangerous() {
     # before splitting on shell operators, to prevent bypass via line continuation.
     # Uses awk (BSD+GNU portable) to join lines ending with `\`; sed ':a;N;$!ba'
     # is BSD-incompatible (N fails on last line, silences output).
-    segments=$(printf '%s' "$c" \
-        | awk '{if (/\\$/) {sub(/\\$/, ""); printf "%s", $0} else {print}}' \
+    local joined
+    joined=$(printf '%s' "$c" \
+        | awk '{if (/\\$/) {sub(/\\$/, ""); printf "%s", $0} else {print}}')
+
+    # 8-pre. sql_destructive_pipe — whole-command check for SQL piped into a client.
+    # `printf 'DROP TABLE;' | psql` splits into benign segments per-segment,
+    # but the pipeline as a whole executes destructive SQL. Check the joined command
+    # for: SQL keyword present AND a SQL client appears in a pipe-RHS segment.
+    # SQL clients: psql, mysql, mysql5, mariadb, sqlite3, cockroach, pgcli, mycli.
+    if printf '%s' "$joined" | grep -qiE '(DROP[[:space:]]+TABLE|DROP[[:space:]]+DATABASE|TRUNCATE[[:space:]]+TABLE)'; then
+        if printf '%s' "$joined" | grep -qE '\|[[:space:]]*(psql|mysql[0-9]*|mariadb|sqlite3|cockroach|pgcli|mycli)([[:space:]]|$)'; then
+            echo "sql_destructive"; return 0
+        fi
+    fi
+
+    segments=$(printf '%s' "$joined" \
         | awk '{gsub(/&&|\|\||;|\|/, "\n"); print}')
     while IFS= read -r seg; do
         seg=$(printf '%s' "$seg" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
