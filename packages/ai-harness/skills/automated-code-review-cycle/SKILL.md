@@ -748,52 +748,77 @@ while ROUND < MAX_ROUNDS:
   fetch_review_feedback()       # Step 3 — review → review comments 구조로 조회
   filter_unanswered()           # in_reply_to_id로 미답변만
 
-  LABEL_GATE_REQUESTED_CHANGES=false  # oscillation guard: exit 3 seen this round?
+  # Plan 08: label-based termination. Exit 3 (changes-requested) falls through
+  # to fix_commit_push_reply — same logic as legacy LLM-based pass-condition fail.
+  # Infinite oscillation prevented by MAX_ROUNDS=10 bound (no per-round flag needed).
 
-  if no_unanswered_feedback and not LABEL_GATE_REQUESTED_CHANGES:
+  if no_unanswered_feedback:
     # Plan 08: label-based deterministic termination (Phase 1 = Option C)
     HARNESS="${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}"
-    [ "$ROUND" -eq 1 ] && bash "$HARNESS/skills/automated-code-review-cycle/scripts/setup-labels.sh" >/dev/null 2>&1 || true
-    REPO_DIR=$(git rev-parse --show-toplevel 2>/dev/null || echo .)
+    [ "$ROUND" -eq 1 ] && {
+        SETUP_LOG="/tmp/setup-labels-$$.log"
+        bash "$HARNESS/skills/automated-code-review-cycle/scripts/setup-labels.sh" >"$SETUP_LOG" 2>&1 || {
+            echo "WARN: setup-labels.sh failed (see $SETUP_LOG). Polling may produce false timeout." >&2
+        }
+    }
+    REPO_DIR=$(git rev-parse --show-toplevel 2>/dev/null) || {
+        echo "WARN: git rev-parse failed; using cwd '$PWD' as REPO_DIR. Repo override (.github/sazo-bot-review.json) may not resolve correctly." >&2
+        REPO_DIR="$PWD"
+    }
     bash "$HARNESS/skills/automated-code-review-cycle/scripts/poll-labels.sh" --pr "$PR_NUM" --repo-dir "$REPO_DIR"
     case $? in
       0) ALL_PASSED=true; break ;;
       2) notify_user "Bot review polling timeout (${SAZO_BOT_POLL_MAX_ITER:-60} iterations × ${SAZO_BOT_POLL_INTERVAL:-30}s)"; break ;;
-      3) LABEL_GATE_REQUESTED_CHANGES=true ;;  # fall through to fix_commit_push_reply; no continue (oscillation guard)
+      3) ;; # changes-requested fallthrough — fix_commit_push_reply will run; oscillation bounded by MAX_ROUNDS=10
       4) notify_user "gh CLI 미설치/미인증 — Phase 1 라벨 게이트 비활성. 사용자 수동 LLM 판단 필요."; break ;;
       5) echo "WARN: active reviewers config empty — Phase 1 라벨 게이트 skip. LLM 텍스트 판단 fallback (수동)" >&2
          continue ;;  # skip fix attempt; next round picks up
     esac
     # 통과 조건 미충족 + 새 리뷰 없음 → stale로 처리됨 (위 로직)
-  LABEL_GATE_REQUESTED_CHANGES=false  # reset for next round
 
   fix_commit_push_reply()       # Step 4 — 수정 → 테스트 → 커밋 → push → 답변(commit hash)
 
   # Step 4-8: review 결과 라벨 부착 (Plan 08 Phase 1 = Option C)
-  # LLM이 본문 해석 후 결과 분기 — 반드시 3개 case 중 하나를 명시적으로 선택:
-  #
-  # Case A — 모든 unanswered가 fix됐고 decline 0건 + commit hash 링크 포함 답변 완료:
-  gh issue edit "$PR_NUM" \
-      --add-label "bot-review/codex/approved" \
-      --remove-label "bot-review/codex/in-progress,bot-review/codex/changes-requested"
-  #
-  # Case B — 일부 fix는 끝났지만 추가 사이클 필요 (decline 있거나 새 이슈 fix 진행 중):
-  # gh issue edit "$PR_NUM" \
-  #     --add-label "bot-review/codex/changes-requested" \
-  #     --remove-label "bot-review/codex/in-progress,bot-review/codex/approved"
-  #
-  # Case C — 트리거만 보낸 상태 (응답 대기):
-  # gh issue edit "$PR_NUM" \
-  #     --add-label "bot-review/codex/in-progress" \
-  #     --remove-label "bot-review/codex/approved,bot-review/codex/changes-requested"
-  #
-  # Gemini 활성 시 동일 패턴 (codex → gemini 치환):
-  # gh issue edit "$PR_NUM" \
-  #     --add-label "bot-review/gemini/approved" \
-  #     --remove-label "bot-review/gemini/in-progress,bot-review/gemini/changes-requested"
-  #
-  # CRITICAL: LLM이 case 판단 — Case A는 모든 댓글 답변 완료 + decline 없음 + commit hash
-  # 링크 포함 답변 완료된 상태에서만. 그 외는 Case B(changes-requested) 또는 Case C(in-progress).
+  # 본문 해석 후 LLM이 REVIEW_STATUS 결정. 그 다음 case가 결정적으로 라벨 부착.
+
+  CODEX_PREFIX="bot-review/codex"
+  GEMINI_PREFIX="bot-review/gemini"
+
+  # LLM determines status per-reviewer based on review evaluation:
+  # - approved: 모든 unanswered 댓글 답변 완료 + decline 0건
+  # - changes-requested: decline 있거나 새 fix 요청 진행 중
+  # - in-progress: 트리거만 보낸 상태 (응답 대기)
+
+  REVIEW_STATUS_CODEX="approved"  # ← LLM이 평가 후 채움 (approved | changes-requested | in-progress)
+  case "$REVIEW_STATUS_CODEX" in
+      approved)
+          gh issue edit "$PR_NUM" \
+              --add-label "$CODEX_PREFIX/approved" \
+              --remove-label "$CODEX_PREFIX/in-progress,$CODEX_PREFIX/changes-requested"
+          ;;
+      changes-requested)
+          gh issue edit "$PR_NUM" \
+              --add-label "$CODEX_PREFIX/changes-requested" \
+              --remove-label "$CODEX_PREFIX/in-progress,$CODEX_PREFIX/approved"
+          ;;
+      in-progress)
+          gh issue edit "$PR_NUM" \
+              --add-label "$CODEX_PREFIX/in-progress" \
+              --remove-label "$CODEX_PREFIX/approved,$CODEX_PREFIX/changes-requested"
+          ;;
+  esac
+
+  # Gemini 활성 시 동일 패턴 (REVIEW_STATUS_GEMINI 평가 후 case)
+  if [ "$GEMINI_ENABLED" = true ]; then
+      REVIEW_STATUS_GEMINI="approved"  # ← LLM 평가
+      case "$REVIEW_STATUS_GEMINI" in
+          approved) gh issue edit "$PR_NUM" --add-label "$GEMINI_PREFIX/approved" --remove-label "$GEMINI_PREFIX/in-progress,$GEMINI_PREFIX/changes-requested" ;;
+          changes-requested) gh issue edit "$PR_NUM" --add-label "$GEMINI_PREFIX/changes-requested" --remove-label "$GEMINI_PREFIX/in-progress,$GEMINI_PREFIX/approved" ;;
+          in-progress) gh issue edit "$PR_NUM" --add-label "$GEMINI_PREFIX/in-progress" --remove-label "$GEMINI_PREFIX/approved,$GEMINI_PREFIX/changes-requested" ;;
+      esac
+  fi
+  # CRITICAL: REVIEW_STATUS는 LLM이 본문 해석 후 결정. approved는 모든 unanswered가 fix됐고
+  # decline 0건일 때만. 무조건 approved 부착 금지 (Anti-Patterns 참조).
 
   gemini_fallback_if_quota()    # Step 5 — Codex quota 초과 시에만
 

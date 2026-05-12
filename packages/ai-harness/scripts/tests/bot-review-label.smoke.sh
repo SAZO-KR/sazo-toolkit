@@ -371,6 +371,52 @@ assert_contains "T11: gemini/approved add-label logged" \
     "--add-label bot-review/gemini/approved" "$T11_LOG"
 
 # ─────────────────────────────────────────────────────────
+# T12: Step 4-8 3-branch label tagging
+# ─────────────────────────────────────────────────────────
+echo ""
+echo "=== T12: Step 4-8 3-branch add-label capture ==="
+
+T12_BIN="$SANDBOX/t12-bin"
+T12_LOG_FILE=$(mktemp)
+export T12_LOG_FILE
+mkdir -p "$T12_BIN"
+cat > "$T12_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+echo "$@" >> "$T12_LOG_FILE"
+exit 0
+GHEOF
+chmod +x "$T12_BIN/gh"
+
+assert_pass() {
+    PASS=$((PASS+1))
+    echo "  ✓ $1"
+}
+assert_fail() {
+    FAIL=$((FAIL+1))
+    echo "  ✗ $1"
+}
+
+for status in approved changes-requested in-progress; do
+    : > "$T12_LOG_FILE"  # truncate
+    bash -c "
+        export PATH=\"$T12_BIN:\$PATH\"
+        export T12_LOG_FILE=\"$T12_LOG_FILE\"
+        REVIEW_STATUS_CODEX='$status'
+        case \"\$REVIEW_STATUS_CODEX\" in
+            approved) gh issue edit 999 --add-label bot-review/codex/approved --remove-label bot-review/codex/in-progress,bot-review/codex/changes-requested ;;
+            changes-requested) gh issue edit 999 --add-label bot-review/codex/changes-requested --remove-label bot-review/codex/in-progress,bot-review/codex/approved ;;
+            in-progress) gh issue edit 999 --add-label bot-review/codex/in-progress --remove-label bot-review/codex/approved,bot-review/codex/changes-requested ;;
+        esac
+    "
+    if grep -qF "issue edit 999 --add-label bot-review/codex/$status" "$T12_LOG_FILE"; then
+        assert_pass "T12 status=$status add-label captured"
+    else
+        assert_fail "T12 status=$status add-label captured"
+    fi
+done
+rm -f "$T12_LOG_FILE"
+
+# ─────────────────────────────────────────────────────────
 echo ""
 echo "─────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"
