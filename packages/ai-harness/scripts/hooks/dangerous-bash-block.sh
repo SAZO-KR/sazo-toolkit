@@ -106,8 +106,18 @@ check_dangerous() {
         # 8. sql_destructive — 패턴은 segment 전체 텍스트 대상 (here-string body 포함)
         # Use portable word-boundary simulation: ([^[:alnum:]_]|^) and ([^[:alnum:]_]|$)
         # instead of \b which is not POSIX ERE and fails on BSD grep (macOS).
+        #
+        # False-positive guard: skip segments whose first token is a safe search/output
+        # command (echo, grep, cat, printf, rg, etc.) — these contain SQL keywords as
+        # string arguments, not actual execution. This preserves `psql -c "DROP TABLE"`
+        # and here-string paths while avoiding `grep "DROP TABLE" file.sql` false positives.
         if echo "$seg" | grep -qiE '(^|[^[:alnum:]_])(DROP[[:space:]]+TABLE|DROP[[:space:]]+DATABASE|TRUNCATE[[:space:]]+TABLE)([^[:alnum:]_]|$)'; then
-            echo "sql_destructive"; return 0
+            # Carve-out: first token is a benign search/output command → skip.
+            _first_tok=$(printf '%s' "$seg" | awk '{print $1}')
+            case "$_first_tok" in
+                echo|printf|cat|head|tail|grep|rg|ripgrep|sed|awk|less|more|bat|hexdump) ;;
+                *) echo "sql_destructive"; return 0 ;;
+            esac
         fi
     done <<< "$segments"
     return 1

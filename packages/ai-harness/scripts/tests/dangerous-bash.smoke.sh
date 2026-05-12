@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Smoke test: dangerous-bash-block hook (Plan 10)
-# 38 cases: 11 spec + T_ESC + R-co + R6 + R7 + R-hs + T_MIG + T4b + T3b + T3c + narrow_off + T_FP1 + T_FP2 + T_REC + T_SUDO + T_REASON + R9a + R9b + R9c
+# 41 cases: 11 spec + T_ESC + R-co + R6 + R7 + R-hs + T_MIG + T4b + T3b + T3c + narrow_off + T_FP1 + T_FP2 + T_REC + T_SUDO + T_REASON + R9a + R9b + R9c
 # R10 additions: R10a + R10b + R10c + R10d + R10e + R10f + R10g + R10h
+# R11 additions: R11a (sql FP grep) + R11b (sql FP echo) + R11c (sql real psql block)
 #
 # Tests the hook directly via simulated payloads and tests lib helpers via sourcing.
 # SAZO_STATE_DIR is isolated per-test to prevent contamination.
@@ -400,6 +401,21 @@ assert_exit 2 "R10g rm -rf /usr>/dev/null → exit 2" \
 echo "Test R10h: rm -f -r ~ (split flags) → block"
 assert_exit 2 "R10h rm -f -r ~ → exit 2" \
     run_hook "rm -f -r ~"
+
+# ---- R11a: grep "DROP TABLE" → pass (SQL false positive guard) ----
+echo 'Test R11a: grep "DROP TABLE" → pass (SQL FP guard)'
+assert_exit 0 'R11a grep "DROP TABLE" file.sql → exit 0' \
+    run_hook 'grep "DROP TABLE" file.sql'
+
+# ---- R11b: echo "DROP TABLE" → pass (SQL false positive guard) ----
+echo 'Test R11b: echo "DROP TABLE" → pass (SQL FP guard)'
+assert_exit 0 'R11b echo "DROP TABLE users" → exit 0' \
+    run_hook 'echo "DROP TABLE users"'
+
+# ---- R11c: psql -c "DROP TABLE" → block (real SQL execution) ----
+echo 'Test R11c: psql -c "DROP TABLE" → block'
+assert_exit 2 'R11c psql -c "DROP TABLE users" → exit 2' \
+    run_hook 'psql -c "DROP TABLE users"'
 
 # ---- Summary ----
 echo "─────────────────────"
