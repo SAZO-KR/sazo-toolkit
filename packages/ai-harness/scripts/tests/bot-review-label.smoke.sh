@@ -17,6 +17,8 @@
 # T13:  --skip-reviewer gemini → codex-only approved → exit 0 (GEMINI_ENABLED=false path)
 # T13b: without --skip-reviewer, codex/approved alone → timeout
 # T14:  setup-labels --repo-dir with custom label_prefix override
+# T15:  poll-labels reads label suffix from config (labels.*.suffix override)
+# T15b: default 'approved' suffix rejected when config uses custom suffix
 
 set -uo pipefail
 
@@ -525,6 +527,65 @@ if ! grep -qF "bot-review/codex/" "$T14_LOG" 2>/dev/null; then
 else
     assert_fail "T14: default prefix NOT created (repo override applied)"
 fi
+
+# ─────────────────────────────────────────────────────────
+# T15: poll-labels reads suffix from config (labels.*.suffix override)
+# ─────────────────────────────────────────────────────────
+echo ""
+echo "=== T15: poll-labels reads suffix from config override ==="
+
+T15_SANDBOX="$SANDBOX/t15"
+T15_BIN="$T15_SANDBOX/bin"
+T15_CONFIG="$T15_SANDBOX/config-custom-suffix.json"
+mkdir -p "$T15_BIN"
+
+# Config with custom suffix for approved
+cat > "$T15_CONFIG" <<'EOF'
+{
+  "schema_version": 1,
+  "active_reviewers": {
+    "codex": { "label_prefix": "bot-review/codex/" }
+  },
+  "labels": {
+    "approved": {"suffix": "ok", "color": "0e8a16"},
+    "changes_requested": {"suffix": "needs-work", "color": "d93f0b"},
+    "in_progress": {"suffix": "in-progress", "color": "fbca04"}
+  },
+  "override_label": "bot-review/override",
+  "polling": {"interval_seconds": 30, "max_iterations": 60}
+}
+EOF
+
+# stub gh: returns custom-suffix approved label
+cat > "$T15_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"pr view"* ]]; then
+    echo "bot-review/codex/ok"
+fi
+exit 0
+GHEOF
+chmod +x "$T15_BIN/gh"
+
+rc=0
+PATH="$T15_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
+    bash "$POLL_LABELS" --pr 1 --config "$T15_CONFIG" 2>/dev/null
+rc=$?
+assert_exit 0 "$rc" "T15: custom suffix 'ok' recognized as approved → exit 0"
+
+# Without custom config, default 'approved' suffix not in labels → timeout
+cat > "$T15_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"pr view"* ]]; then
+    echo "bot-review/codex/approved"  # default suffix — not in custom config
+fi
+exit 0
+GHEOF
+
+rc=0
+PATH="$T15_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
+    bash "$POLL_LABELS" --pr 1 --config "$T15_CONFIG" 2>/dev/null
+rc=$?
+assert_exit 2 "$rc" "T15b: default 'approved' label with custom-suffix config → timeout (exit 2)"
 
 # ─────────────────────────────────────────────────────────
 echo ""

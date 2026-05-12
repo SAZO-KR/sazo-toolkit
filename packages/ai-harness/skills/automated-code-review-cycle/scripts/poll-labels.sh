@@ -76,6 +76,10 @@ OVERRIDE_LABEL=$(echo "$MERGED_CONFIG" | jq -r '.override_label // "bot-review/o
 POLL_INTERVAL="${SAZO_BOT_POLL_INTERVAL:-$(echo "$MERGED_CONFIG" | jq -r '.polling.interval_seconds // 30')}"
 MAX_ITER="${SAZO_BOT_MAX_ITER:-$(echo "$MERGED_CONFIG" | jq -r '.polling.max_iterations // 60')}"
 
+# ── extract label suffixes from config (supports .labels.*.suffix overrides) ─
+APPROVED_SUFFIX=$(echo "$MERGED_CONFIG" | jq -r '.labels.approved.suffix // "approved"')
+CHANGES_SUFFIX=$(echo "$MERGED_CONFIG" | jq -r '.labels.changes_requested.suffix // "changes-requested"')
+
 # ── build active reviewer list (filter _disabled + runtime skip) ─────────
 # Build jq expression to exclude runtime-skipped reviewers
 SKIP_JQ_FILTER=""
@@ -127,8 +131,8 @@ while true; do
             continue
         fi
 
-        changes_label="${prefix}changes-requested"
-        approved_label="${prefix}approved"
+        changes_label="${prefix}${CHANGES_SUFFIX}"
+        approved_label="${prefix}${APPROVED_SUFFIX}"
 
         if echo "$LABELS" | grep -qxF "$changes_label"; then
             CHANGES_REQUESTED=true

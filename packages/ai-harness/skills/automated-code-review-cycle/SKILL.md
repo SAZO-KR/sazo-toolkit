@@ -769,6 +769,32 @@ while ROUND < MAX_ROUNDS:
             echo "WARN: setup-labels.sh failed (see $SETUP_LOG). Polling may produce false timeout." >&2
         }
     }
+
+    # CRITICAL: write verdict label BEFORE calling poll-labels.sh.
+    # Step 4-8 (after fix_commit_push_reply) runs only when there IS unanswered feedback.
+    # When no_unanswered_feedback=true (clean review), Step 4-8 is skipped (loop breaks
+    # on poll exit 0). The poller needs the approved label to already exist before it
+    # starts polling — otherwise it times out waiting for a label that was never written.
+    # Apply config-driven prefix (same logic as Step 4-8 below).
+    _NUF_HARNESS="${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}"
+    _NUF_CONFIG="$_NUF_HARNESS/skills/automated-code-review-cycle/config.json"
+    if [[ -f "$REPO_DIR/.github/sazo-bot-review.json" ]]; then
+      _NUF_MERGED=$(jq -n --slurpfile b "$_NUF_CONFIG" --slurpfile o "$REPO_DIR/.github/sazo-bot-review.json" \
+        '$b[0] | .active_reviewers = (($b[0].active_reviewers // {}) + ($o[0].active_reviewers // {}))')
+    else
+      _NUF_MERGED=$(jq '.' "$_NUF_CONFIG")
+    fi
+    _NUF_CODEX_PREFIX=$(echo "$_NUF_MERGED" | jq -r '.active_reviewers.codex.label_prefix // "bot-review/codex/"' | sed 's|/$||')
+    gh issue edit "$PR_NUM" \
+        --add-label "$_NUF_CODEX_PREFIX/approved" \
+        --remove-label "$_NUF_CODEX_PREFIX/in-progress,$_NUF_CODEX_PREFIX/changes-requested" 2>/dev/null || true
+    if [ "$GEMINI_ENABLED" = true ]; then
+      _NUF_GEMINI_PREFIX=$(echo "$_NUF_MERGED" | jq -r '.active_reviewers.gemini.label_prefix // "bot-review/gemini/"' | sed 's|/$||')
+      gh issue edit "$PR_NUM" \
+          --add-label "$_NUF_GEMINI_PREFIX/approved" \
+          --remove-label "$_NUF_GEMINI_PREFIX/in-progress,$_NUF_GEMINI_PREFIX/changes-requested" 2>/dev/null || true
+    fi
+
     # CRITICAL: pass --skip-reviewer gemini when GEMINI_ENABLED=false.
     # poll-labels.sh builds its required reviewer list from config, which includes
     # gemini by default. If the PR has no Gemini review, requiring bot-review/gemini/approved
