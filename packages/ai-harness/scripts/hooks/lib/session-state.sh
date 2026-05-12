@@ -1196,9 +1196,15 @@ ci_invalidate_unconditional() {
 }
 
 # ----- bottom-source: child libs (bottom-source pattern; children never source parent) -----
+# CRITICAL: propagate child lib source failures so callers using
+#   `source session-state.sh || fallback`
+# can detect partial-install / checkout-conflict situations.
+# `unset _SAZO_LIB_DIR` would otherwise swallow a failed source exit code.
 _SAZO_LIB_DIR="${BASH_SOURCE[0]%/*}"
 # shellcheck source=skip-control.sh
-source "$_SAZO_LIB_DIR/skip-control.sh"
+source "$_SAZO_LIB_DIR/skip-control.sh" \
+    || { echo "[session-state] failed to source skip-control.sh" >&2; unset _SAZO_LIB_DIR; return 1 2>/dev/null || exit 1; }
 # shellcheck source=metrics.sh
-source "$_SAZO_LIB_DIR/metrics.sh"
+source "$_SAZO_LIB_DIR/metrics.sh" \
+    || { echo "[session-state] failed to source metrics.sh" >&2; unset _SAZO_LIB_DIR; return 1 2>/dev/null || exit 1; }
 unset _SAZO_LIB_DIR
