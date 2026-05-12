@@ -29,6 +29,27 @@ register_workflow_hooks() {
             cmd="$script"
         fi
 
+        # Stale path dedup: 같은 script basename + 다른 absolute path → 제거.
+        # harness 위치 변경(~/.config → ~/work 등) 시 old entry 누적 방지.
+        local script_basename
+        script_basename=$(basename "$script")
+        local stale_count
+        stale_count=$(jq --arg b "$script_basename" --arg cur "$cmd" --arg ev "$event" \
+            '(.hooks[$ev] // [])
+             | map(.hooks // [] | map(.command) | .[])
+             | map(select(test("/" + $b + "( .+)?$") and . != $cur))
+             | length' "$settings_file")
+        if [ "$stale_count" -gt 0 ]; then
+            local tmp
+            tmp=$(mktemp)
+            jq --arg b "$script_basename" --arg cur "$cmd" --arg ev "$event" \
+                '.hooks[$ev] = ((.hooks[$ev] // [])
+                    | map(.hooks |= map(select(.command == $cur or (.command | test("/" + $b + "( .+)?$") | not)))))
+                    | .hooks[$ev] |= map(select(.hooks | length > 0))
+                ' "$settings_file" > "$tmp" && mv "$tmp" "$settings_file"
+            echo "  Workflow hook ($event $matcher): stale path entries pruned ($stale_count)"
+        fi
+
         local existing
         existing=$(jq --arg cmd "$cmd" --arg ev "$event" \
             '(.hooks[$ev] // []) | map(select(.hooks // [] | any(.command == $cmd))) | length' \
