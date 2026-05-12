@@ -4,7 +4,12 @@
     "sleep:*",
     "echo:*",
     "seq:*",
-    "gh:*",
-    "jq:*"
+    "jq:*",
+    "gh label create:*",
+    "gh issue edit:*",
+    "gh pr view:*",
+    "gh pr comment:*",
+    "gh repo view:*",
+    "gh api:*"
   ]
 }

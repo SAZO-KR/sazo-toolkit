@@ -9,7 +9,7 @@
 #   label names. Without --repo-dir, only the base config is used.
 #
 # Idempotent via --force (create or update). Safe to call on every ROUND==1.
-# Skips reviewers with _disabled=true.
+# Skips reviewers with enabled=false (schema v2; formerly _disabled=true).
 #
 # Exit codes:
 #   0 — success
@@ -51,8 +51,15 @@ if [[ -n "$REPO_OVERRIDE" ]]; then
         --slurpfile base "$CONFIG_PATH" \
         --slurpfile ovr "$REPO_OVERRIDE" \
         '
+        ($base[0].active_reviewers // {}) as $br |
+        ($ovr[0].active_reviewers // {}) as $or |
         $base[0]
-        | .active_reviewers = (($base[0].active_reviewers // {}) + ($ovr[0].active_reviewers // {}))
+        | .active_reviewers = (
+            ($br + $or)
+            | to_entries
+            | map(.value = (($br[.key] // {}) * ($or[.key] // {})))
+            | from_entries
+          )
         | .labels = ($base[0].labels * ($ovr[0].labels // {}))
         | .override_label = ($ovr[0].override_label // $base[0].override_label)
         | .polling = ($base[0].polling * ($ovr[0].polling // {}))
@@ -83,8 +90,8 @@ fi
 # Iterate over reviewers
 echo "$MERGED_CONFIG" | jq -c '.active_reviewers | to_entries[]' | while IFS= read -r entry; do
     reviewer_key=$(echo "$entry" | jq -r '.key')
-    disabled=$(echo "$entry" | jq -r '.value._disabled // false')
-    if [[ "$disabled" == "true" ]]; then
+    enabled=$(echo "$entry" | jq -r '.value.enabled // true')
+    if [[ "$enabled" == "false" ]]; then
         continue
     fi
     prefix=$(echo "$entry" | jq -r '.value.label_prefix')

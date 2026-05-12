@@ -29,6 +29,39 @@ PR에 대해 Codex(및 Gemini가 설정된 경우)의 코드 리뷰를 자동으
 
 **Announce at start:** "자동 코드 리뷰 사이클을 시작합니다."
 
+## Phase 1 Trust Boundaries
+
+Phase 1은 **dogfood 모델** — Codex/Gemini 봇 리뷰 결과를 LLM(Claude)이 해석하고, 승인 라벨을 직접 부착한다.
+
+| 신뢰 경계 | Phase 1 동작 | 위험 |
+|---|---|---|
+| 라벨 부착 주체 | LLM (SKILL.md Step 4-8) | LLM이 잘못 평가 시 라벨 오염 가능 |
+| 라벨 신뢰도 | LLM 판단과 동급 (human trust ≠ bot trust) | 라벨만으로 머지 게이트 통과 위험 |
+| 봇 identity | `bot_login` 정확 매칭 (substring 금지) | spoofing 방어 |
+
+**Phase 1 → Phase 2 마이그레이션 계획**: Phase 2에서는 GitHub Actions가 봇 리뷰 이벤트를 감지해 라벨을 자동 부착한다. LLM의 라벨 부착 권한(`label_authority: "skill"`)이 Actions(`"label_authority": "actions"`)로 전환되며, LLM은 라벨 읽기/해석만 담당한다. 전환 시점은 `config.json`의 `label_authority` 필드로 추적한다.
+
+### label_authority 필드 (Phase 2 준비)
+
+`config.json`의 각 `active_reviewers` 항목에 `label_authority` 필드가 있다:
+
+```json
+{
+  "active_reviewers": {
+    "codex": {
+      "label_authority": "skill"
+    }
+  }
+}
+```
+
+| 값 | 의미 | 활성 단계 |
+|---|---|---|
+| `"skill"` | LLM(SKILL.md Step 4-8)이 라벨 부착 | Phase 1 (현재) |
+| `"actions"` | GitHub Actions가 라벨 자동 부착 | Phase 2 (미래) |
+
+Phase 1에서 `poll-labels.sh`는 이 필드를 읽지만 분기하지 않는다 (forward-compatible 읽기).
+
 ## GitHub Review API 구조 (CRITICAL — 반드시 이해)
 
 Codex와 Gemini는 리뷰를 다음 구조로 남깁니다:
@@ -846,6 +879,12 @@ while ROUND < MAX_ROUNDS:
     # the gate would bypass the "all active reviewers passed" requirement.
     _SKIP_ARGS=()
     [ "$GEMINI_ENABLED" = false ] && _SKIP_ARGS+=(--skip-reviewer gemini)
+    # WALL_CLOCK_BUDGET vs poll-labels timeout interaction:
+    # - WALL_CLOCK_BUDGET (1800s, outer): guards the entire skill run; user-confirm on breach.
+    # - poll-labels.sh inner loop: polling.max_iterations × polling.interval_seconds (default 60×30=1800s).
+    # Both can time out independently. WALL_CLOCK_BUDGET may fire mid-poll if prior rounds used time.
+    # Repo overrides (polling.max_iterations, polling.interval_seconds in .github/sazo-bot-review.json)
+    # shrink the inner budget without affecting WALL_CLOCK_BUDGET — intended for fast-feedback repos.
     bash "$HARNESS/skills/automated-code-review-cycle/scripts/poll-labels.sh" --pr "$PR_NUM" --repo-dir "$REPO_DIR" "${_SKIP_ARGS[@]+"${_SKIP_ARGS[@]}"}"
     case $? in
       0) ALL_PASSED=true; break ;;
@@ -895,6 +934,9 @@ while ROUND < MAX_ROUNDS:
   # - changes-requested: decline 있거나 새 fix 요청 진행 중
   # - in-progress: 트리거만 보낸 상태 (응답 대기)
 
+  # ⚠️ WARNING: "approved" below is a PLACEHOLDER only. LLM MUST evaluate actual review
+  # content and replace with the real verdict before executing the case statement.
+  # Auto-filling "approved" without evaluation is an Anti-Pattern (see Anti-Patterns section).
   REVIEW_STATUS_CODEX="approved"  # ← LLM이 평가 후 채움 (approved | changes-requested | in-progress)
   case "$REVIEW_STATUS_CODEX" in
       approved)
@@ -916,6 +958,9 @@ while ROUND < MAX_ROUNDS:
 
   # Gemini 활성 시 동일 패턴 (REVIEW_STATUS_GEMINI 평가 후 case)
   if [ "$GEMINI_ENABLED" = true ]; then
+      # ⚠️ WARNING: "approved" below is a PLACEHOLDER only. LLM MUST evaluate actual review
+      # content and replace with the real verdict before executing the case statement.
+      # Auto-filling "approved" without evaluation is an Anti-Pattern (see Anti-Patterns section).
       REVIEW_STATUS_GEMINI="approved"  # ← LLM 평가
       case "$REVIEW_STATUS_GEMINI" in
           approved) gh issue edit "$PR_NUM" --add-label "$GEMINI_PREFIX/$_APPROVED_SUFFIX" --remove-label "$GEMINI_PREFIX/$_INPROGRESS_SUFFIX,$GEMINI_PREFIX/$_CHANGES_SUFFIX" ;;

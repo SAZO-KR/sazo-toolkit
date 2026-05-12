@@ -1,15 +1,17 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "active_reviewers": {
     "codex": {
       "label_prefix": "bot-review/codex/",
       "comment_pattern": "Codex Review",
-      "bot_login": "chatgpt-codex-connector[bot]"
+      "bot_login": "chatgpt-codex-connector[bot]",
+      "label_authority": "skill"
     },
     "gemini": {
       "label_prefix": "bot-review/gemini/",
       "comment_pattern": "@gemini-code-review",
-      "bot_login": "gemini-code-assist[bot]"
+      "bot_login": "gemini-code-assist[bot]",
+      "label_authority": "skill"
     }
   },
   "labels": {
@@ -18,5 +20,9 @@
     "in_progress":       {"suffix": "in-progress",       "color": "fbca04"}
   },
   "override_label": "bot-review/override",
-  "polling": {"interval_seconds": 30, "max_iterations": 60}
+  "polling": {
+    "interval_seconds": 30,
+    "max_iterations": 60,
+    "_comment": "Inner budget: interval_seconds × max_iterations = 1800s. Outer budget: WALL_CLOCK_BUDGET=1800s in SKILL.md. Both can expire independently. Repo override (.github/sazo-bot-review.json) can shrink inner budget for fast-feedback repos."
+  }
 }

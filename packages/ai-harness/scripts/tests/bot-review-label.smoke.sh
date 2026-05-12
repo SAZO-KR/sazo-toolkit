@@ -121,11 +121,19 @@ T2_BIN="$SANDBOX/t2-bin"
 mkdir -p "$T2_BIN"
 cat > "$T2_BIN/gh" <<'GHEOF'
 #!/usr/bin/env bash
-# mock: return labels with both approved
-if [[ "$*" == *"pr view"* ]]; then
-    echo "bot-review/codex/approved"
-    echo "bot-review/gemini/approved"
-fi
+# mock: return labels with both approved; B6 pre-termination api returns APPROVED
+# Emits NDJSON objects matching gh api --jq '.[] | {state, submitted_at, user_login: .user.login}'
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/approved"
+        echo "bot-review/gemini/approved"
+        ;;
+    *"api"*"reviews"*)
+        # B6 verify: both bots APPROVED
+        printf '{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user_login":"chatgpt-codex-connector[bot]"}\n'
+        printf '{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user_login":"gemini-code-assist[bot]"}\n'
+        ;;
+esac
 exit 0
 GHEOF
 chmod +x "$T2_BIN/gh"
@@ -240,10 +248,16 @@ T7_BIN="$SANDBOX/t7-bin"
 mkdir -p "$T7_BIN"
 cat > "$T7_BIN/gh" <<'GHEOF'
 #!/usr/bin/env bash
-if [[ "$*" == *"pr view"* ]]; then
-    echo "bot-review/codex/approved"
-    echo "bot-review/gemini/approved"
-fi
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/approved"
+        echo "bot-review/gemini/approved"
+        ;;
+    *"api"*"reviews"*)
+        printf '{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user_login":"chatgpt-codex-connector[bot]"}\n'
+        printf '{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user_login":"gemini-code-assist[bot]"}\n'
+        ;;
+esac
 exit 0
 GHEOF
 chmod +x "$T7_BIN/gh"
@@ -266,20 +280,26 @@ T8_BIN="$T8_DIR/bin"
 T8_REPO="$T8_DIR/repo"
 mkdir -p "$T8_BIN" "$T8_REPO/.github"
 
-# Repo override: disable gemini
+# Repo override: disable gemini (schema v2: enabled=false)
 cat > "$T8_REPO/.github/sazo-bot-review.json" <<'OVEOF'
 {
   "active_reviewers": {
-    "gemini": {"_disabled": true}
+    "gemini": {"enabled": false}
   }
 }
 OVEOF
 
 cat > "$T8_BIN/gh" <<'GHEOF'
 #!/usr/bin/env bash
-if [[ "$*" == *"pr view"* ]]; then
-    echo "bot-review/codex/approved"
-fi
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/approved"
+        ;;
+    *"api"*"reviews"*)
+        # B6 verify: codex APPROVED (gemini disabled — not checked)
+        printf '{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user_login":"chatgpt-codex-connector[bot]"}\n'
+        ;;
+esac
 exit 0
 GHEOF
 chmod +x "$T8_BIN/gh"
@@ -458,10 +478,16 @@ T13_BIN="$SANDBOX/t13-bin"
 mkdir -p "$T13_BIN"
 cat > "$T13_BIN/gh" <<'GHEOF'
 #!/usr/bin/env bash
-if [[ "$*" == *"pr view"* ]]; then
-    echo "bot-review/codex/approved"
-    # Gemini label intentionally absent
-fi
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/approved"
+        # Gemini label intentionally absent
+        ;;
+    *"api"*"reviews"*)
+        # B6 verify: codex APPROVED (gemini skipped — not checked)
+        printf '{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user_login":"chatgpt-codex-connector[bot]"}\n'
+        ;;
+esac
 exit 0
 GHEOF
 chmod +x "$T13_BIN/gh"
@@ -490,12 +516,12 @@ T14_LOG="$SANDBOX/t14-gh.log"
 T14_REPO="$SANDBOX/t14-repo"
 mkdir -p "$T14_BIN" "$T14_REPO/.github"
 
-# repo override with custom prefix
+# repo override with custom prefix (schema v2: enabled=false)
 cat > "$T14_REPO/.github/sazo-bot-review.json" <<'EOF'
 {
   "active_reviewers": {
     "codex": { "label_prefix": "custom/codex/" },
-    "gemini": { "_disabled": true }
+    "gemini": { "enabled": false }
   }
 }
 EOF
@@ -556,12 +582,17 @@ cat > "$T15_CONFIG" <<'EOF'
 }
 EOF
 
-# stub gh: returns custom-suffix approved label
+# stub gh: returns custom-suffix approved label; B6 api returns APPROVED
 cat > "$T15_BIN/gh" <<'GHEOF'
 #!/usr/bin/env bash
-if [[ "$*" == *"pr view"* ]]; then
-    echo "bot-review/codex/ok"
-fi
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/ok"
+        ;;
+    *"api"*"reviews"*)
+        printf '[{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"chatgpt-codex-connector[bot]"}}]\n'
+        ;;
+esac
 exit 0
 GHEOF
 chmod +x "$T15_BIN/gh"
@@ -586,6 +617,250 @@ PATH="$T15_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
     bash "$POLL_LABELS" --pr 1 --config "$T15_CONFIG" 2>/dev/null
 rc=$?
 assert_exit 2 "$rc" "T15b: default 'approved' label with custom-suffix config → timeout (exit 2)"
+
+# ─────────────────────────────────────────────────────────
+# T16: deep-merge repo override — polling.max_iterations + labels.approved.color
+#      Repo override sets max_iterations=5 (poll timeout fast) + color=ff0000.
+#      poll-labels must timeout (exit 2) after ≤5 iterations.
+#      setup-labels must invoke gh with -c ff0000 (merged color) AND bot-review/codex/approved label.
+# ─────────────────────────────────────────────────────────
+echo ""
+echo "=== T16: deep-merge polling.max_iterations + labels.approved.color ==="
+
+T16_SANDBOX="$SANDBOX/t16"
+T16_BIN="$T16_SANDBOX/bin"
+T16_REPO="$T16_SANDBOX/repo"
+T16_LOG="$T16_SANDBOX/setup-gh.log"
+mkdir -p "$T16_BIN" "$T16_REPO/.github"
+
+# Repo override: shrink max_iterations + change approved color
+cat > "$T16_REPO/.github/sazo-bot-review.json" <<'OVEOF'
+{
+  "polling": {"max_iterations": 5},
+  "labels": {
+    "approved": {"color": "ff0000"}
+  }
+}
+OVEOF
+
+# stub gh: pr view always returns no approved label (force timeout)
+export T16_LOG_FILE="$T16_LOG"
+cat > "$T16_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"pr view"* ]]; then
+    echo "bot-review/codex/in-progress"
+    echo "bot-review/gemini/in-progress"
+elif [[ "$*" == *"label create"* ]] || [[ "$*" == *"label list"* ]]; then
+    echo "$@" >> "$T16_LOG_FILE"
+fi
+exit 0
+GHEOF
+chmod +x "$T16_BIN/gh"
+
+# T16a: poll-labels with repo override → should timeout via max_iterations=5 (not env var)
+rc=0
+PATH="$T16_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 \
+    bash "$POLL_LABELS" --pr 1 --config "$CONFIG" --repo-dir "$T16_REPO" 2>/dev/null
+rc=$?
+assert_exit 2 "$rc" "T16a: deep-merge polling.max_iterations=5 → timeout exit 2"
+
+# T16b: setup-labels with repo override → custom color ff0000 used for approved label
+rc=0
+PATH="$T16_BIN:$PATH" bash "$SETUP_LABELS" --config "$CONFIG" --repo-dir "$T16_REPO" 2>/dev/null
+rc=$?
+assert_exit 0 "$rc" "T16b: setup-labels with deep-merge override → exit 0"
+
+if grep -qF "ff0000" "$T16_LOG" 2>/dev/null; then
+    assert_pass "T16c: setup-labels uses merged approved color ff0000"
+else
+    assert_fail "T16c: setup-labels uses merged approved color ff0000"
+fi
+
+if grep -qF "bot-review/codex/approved" "$T16_LOG" 2>/dev/null; then
+    assert_pass "T16d: setup-labels creates bot-review/codex/approved with custom color"
+else
+    assert_fail "T16d: setup-labels creates bot-review/codex/approved with custom color"
+fi
+
+# ─────────────────────────────────────────────────────────
+# T17a: B6 pre-termination — labels say approved BUT gh api returns CHANGES_REQUESTED → exit 2
+# T17b: B6 pre-termination — labels say approved BUT gh api returns empty array → exit 2
+# T17c: B6 pre-termination — labels say approved AND gh api returns APPROVED → exit 0
+# ─────────────────────────────────────────────────────────
+echo ""
+echo "=== T17a: labels approved + gh api CHANGES_REQUESTED → exit 2 ==="
+
+T17_SANDBOX="$SANDBOX/t17"
+T17A_BIN="$T17_SANDBOX/t17a-bin"
+mkdir -p "$T17A_BIN"
+
+# stub: pr view returns approved labels; api reviews returns CHANGES_REQUESTED
+# Mock emits NDJSON objects (one per line) matching what `gh api --jq '.[] | {state, submitted_at, user_login: .user.login}'` produces.
+# The real gh --jq filter is ignored by the stub; we pre-transform the output to the expected shape.
+cat > "$T17A_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/approved"
+        echo "bot-review/gemini/approved"
+        ;;
+    *"api"*"reviews"*)
+        # B6 verify: codex says CHANGES_REQUESTED (label is stale/wrong)
+        printf '{"state":"CHANGES_REQUESTED","submitted_at":"2026-01-01T00:00:00Z","user_login":"chatgpt-codex-connector[bot]"}\n'
+        ;;
+esac
+exit 0
+GHEOF
+chmod +x "$T17A_BIN/gh"
+
+rc=0
+PATH="$T17A_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
+    bash "$POLL_LABELS" --pr 1 --config "$CONFIG" 2>/dev/null
+rc=$?
+assert_exit 2 "$rc" "T17a: labels approved + api CHANGES_REQUESTED → stale label → timeout exit 2"
+
+echo ""
+echo "=== T17b: labels approved + gh api empty → exit 2 ==="
+
+T17B_BIN="$T17_SANDBOX/t17b-bin"
+mkdir -p "$T17B_BIN"
+
+# stub: pr view returns approved labels; api reviews returns empty (no output)
+# Empty output → jq -s '.' → [] → no matching user_login → NONE state → timeout
+cat > "$T17B_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/approved"
+        echo "bot-review/gemini/approved"
+        ;;
+    *"api"*"reviews"*)
+        # B6 verify: no reviews from bot (empty → jq -s '.' → [] → NONE state)
+        ;;
+esac
+exit 0
+GHEOF
+chmod +x "$T17B_BIN/gh"
+
+rc=0
+PATH="$T17B_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
+    bash "$POLL_LABELS" --pr 1 --config "$CONFIG" 2>/dev/null
+rc=$?
+assert_exit 2 "$rc" "T17b: labels approved + api empty → NONE state → timeout exit 2"
+
+echo ""
+echo "=== T17c: labels approved + gh api APPROVED → exit 0 ==="
+
+T17C_BIN="$T17_SANDBOX/t17c-bin"
+mkdir -p "$T17C_BIN"
+
+# stub: pr view returns approved labels; api reviews returns APPROVED
+# Mock emits NDJSON objects matching what `gh api --jq '.[] | {state, submitted_at, user_login: .user.login}'` produces.
+cat > "$T17C_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/approved"
+        echo "bot-review/gemini/approved"
+        ;;
+    *"api"*"reviews"*)
+        # B6 verify: both bots confirmed APPROVED via gh api
+        printf '{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user_login":"chatgpt-codex-connector[bot]"}\n'
+        printf '{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user_login":"gemini-code-assist[bot]"}\n'
+        ;;
+esac
+exit 0
+GHEOF
+chmod +x "$T17C_BIN/gh"
+
+rc=0
+PATH="$T17C_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
+    bash "$POLL_LABELS" --pr 1 --config "$CONFIG" 2>/dev/null
+rc=$?
+assert_exit 0 "$rc" "T17c: labels approved + api APPROVED → exit 0"
+
+# T18: repo override with label_prefix only (no bot_login) — deep-merge preserves bot_login
+# Regression guard for Codex P2: shallow merge silently dropped bot_login, disabling B6.
+# ─────────────────────────────────────────────────────────
+echo ""
+echo "=== T18: deep-merge preserves bot_login when override has label_prefix only ==="
+
+T18_SANDBOX="$SANDBOX/t18"
+T18_BIN="$T18_SANDBOX/bin"
+T18_REPO="$T18_SANDBOX/repo"
+mkdir -p "$T18_BIN" "$T18_REPO/.github"
+
+# repo override: only label_prefix, no bot_login (T14-style partial override)
+cat > "$T18_REPO/.github/sazo-bot-review.json" <<'EOF'
+{
+  "active_reviewers": {
+    "codex":  { "label_prefix": "custom/codex/" },
+    "gemini": { "label_prefix": "custom/gemini/" }
+  }
+}
+EOF
+
+# stub: labels say approved; api returns CHANGES_REQUESTED (B6 should catch this)
+cat > "$T18_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+case "$*" in
+    *"remote get-url origin"*)
+        echo "https://github.com/OWNER/REPO.git"
+        ;;
+    *"pr view"*)
+        echo "custom/codex/approved"
+        echo "custom/gemini/approved"
+        ;;
+    *"api"*"reviews"*)
+        # B6 verify: latest review is CHANGES_REQUESTED (label is stale)
+        # Emit NDJSON matching gh api --jq '.[] | {state, submitted_at, user_login: .user.login}'
+        printf '{"state":"CHANGES_REQUESTED","submitted_at":"2026-01-01T00:00:00Z","user_login":"chatgpt-codex-connector[bot]"}\n'
+        ;;
+esac
+exit 0
+GHEOF
+chmod +x "$T18_BIN/gh"
+
+rc=0
+PATH="$T18_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
+    bash "$POLL_LABELS" --pr 1 --config "$CONFIG" --repo-dir "$T18_REPO" 2>/dev/null
+rc=$?
+assert_exit 2 "$rc" "T18: partial override (label_prefix only) → bot_login preserved → B6 catches stale label → timeout exit 2"
+
+# T19: B6 gh api reviews failure → WARN + trust label → exit 0 (not stuck at timeout)
+# Regression guard for Codex P2: || true masked gh api failure — _reviews_json got []
+# from jq -s on empty input, causing state=NONE and infinite poll until timeout.
+# ─────────────────────────────────────────────────────────
+echo ""
+echo "=== T19: B6 gh api reviews failure → trust label → exit 0 ==="
+
+T19_SANDBOX="$SANDBOX/t19"
+T19_BIN="$T19_SANDBOX/bin"
+mkdir -p "$T19_BIN"
+
+# stub: labels say approved; api reviews exits non-zero (auth failure)
+cat > "$T19_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/approved"
+        echo "bot-review/gemini/approved"
+        ;;
+    *"api"*"reviews"*)
+        # Simulate gh api auth failure (exit non-zero, no output)
+        echo "GraphQL: Could not resolve to a Repository" >&2
+        exit 1
+        ;;
+esac
+exit 0
+GHEOF
+chmod +x "$T19_BIN/gh"
+
+rc=0
+PATH="$T19_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
+    bash "$POLL_LABELS" --pr 1 --config "$CONFIG" 2>/dev/null
+rc=$?
+assert_exit 0 "$rc" "T19: B6 gh api failure → trust approved label → exit 0 (not timeout)"
 
 # ─────────────────────────────────────────────────────────
 echo ""
