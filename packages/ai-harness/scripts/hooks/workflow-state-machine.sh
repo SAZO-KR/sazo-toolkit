@@ -164,6 +164,40 @@ EOF
     exit 2
 }
 
+# ----- skip streak hard block (Plan 09) -----
+#
+# enforce_skip_streak_gate: hard block at SAZO_SKIP_STREAK_MAX (default 5) consecutive skips.
+# Fires BEFORE emit_skip_warning_if_needed + before other stage gates.
+# Override: user types /override-skip-streak <reason> → 1-shot nonce consumed here → exit 0.
+# Env: SAZO_DISABLE_SKIP_STREAK_BLOCK=1 → warn-only fallback.
+#       SAZO_SKIP_STREAK_MAX=N → adjust threshold.
+enforce_skip_streak_gate() {
+    [ "${SAZO_DISABLE_SKIP_STREAK_BLOCK:-0}" = "1" ] && return 0
+    local max="${SAZO_SKIP_STREAK_MAX:-5}"
+    local n
+    n=$(consecutive_skip_count "$SAZO_SESSION_ID")
+    [ "${n:-0}" -lt "$max" ] && return 0
+    if skip_streak_override_active "$SAZO_SESSION_ID" "$SAZO_CWD"; then
+        local cur_nonce
+        cur_nonce=$(state_get "$SAZO_SESSION_ID" ".override_skip_streak_nonce" "$SAZO_CWD")
+        if skip_streak_override_consume "$SAZO_SESSION_ID" "$cur_nonce" "$SAZO_CWD"; then
+            audit_log "skip_streak_override_consumed" "$SAZO_SESSION_ID" "" "" "hook" "streak=$n"
+            return 0
+        fi
+    fi
+    state_increment "$SAZO_SESSION_ID" ".skip_streak_blocked_count"
+    audit_log "skip_streak_block" "$SAZO_SESSION_ID" "" "blocked" "hook" \
+        "streak=$n max=$max tool=$SAZO_TOOL_NAME"
+    cat >&2 <<EOF
+[workflow-block] 연속 ${n} stage skip 감지 — 워크플로우 결정성 회복 필요.
+다음 작업 진행 전 사용자 명시 override 필수:
+  /override-skip-streak <reason>
+강제 비활성: SAZO_DISABLE_SKIP_STREAK_BLOCK=1
+임계값 조정: SAZO_SKIP_STREAK_MAX=N (현재 $max)
+EOF
+    exit 2
+}
+
 # ----- consecutive skip warning -----
 
 emit_skip_warning_if_needed() {
@@ -535,6 +569,8 @@ handle_pre() {
     local rc
     case "$SAZO_TOOL_NAME" in
         Write|Edit|NotebookEdit)
+            # Skip streak hard block (Plan 09) — fires before all other gates.
+            enforce_skip_streak_gate
             # Gate는 **첫 번째 unmet stage만 평가**. research/plan 동시 counter 증가
             # 방지 — research 3회 warn 후 research 완료하면 plan도 이미 소진돼 즉시
             # block되는 staged-recovery 깨짐 (Codex V9 P1).
@@ -1054,6 +1090,8 @@ EOF_PST
             fi
             # gh pr create — hard block
             if echo "$cmd" | grep -qE '\bgh[[:space:]]+pr[[:space:]]+create\b'; then
+                # Skip streak hard block (Plan 09) — fires before all other gates.
+                enforce_skip_streak_gate
                 # Codex PR #30 round 5 P2: chain `... && gh pr create` can stage
                 # newly-created code BEFORE pr create runs (e.g., python -c
                 # 'open(...)write(...)' && git add . && git commit && gh pr create).
@@ -1254,6 +1292,8 @@ EOF_PST
                 done <<< "$merge_segments"
             fi
             if [ "$gh_merge_invoked" = "1" ]; then
+                # Skip streak hard block (Plan 09) — fires before review gate.
+                enforce_skip_streak_gate
                 if ! stage_is_passed "$SAZO_SESSION_ID" "review"; then
                     if [ "${SAZO_ALLOW_MERGE_BYPASS:-0}" = "1" ]; then
                         audit_log "merge_bypass_warn" "${SAZO_SESSION_ID:-}" "review" "bypassed" "bypass" \

@@ -95,6 +95,8 @@ Skip은 세 경로:
 
 연속 3 stage skip 시 hook이 경고. 의도면 사용자 추가 확인 필요.
 
+**연속 5+ stage skip → hard block** (`SAZO_WORKFLOW_HOOKS_ENABLED=1` 시): 다음 Edit/Write/`gh pr create`/`gh pr merge`에서 exit 2. 해제: 사용자가 `/override-skip-streak <reason>` 직접 입력 → 1회 통과. 환경변수: `SAZO_DISABLE_SKIP_STREAK_BLOCK=1`(비활성), `SAZO_SKIP_STREAK_MAX=N`(임계값 조정).
+
 <system-reminder>quick/standard/full 같은 모드명을 사용자에게 강요하지 말 것. 사용자는 모드를 기억할 필요 없다. 복잡도 판단은 에이전트의 몫이고, skip 결정은 사용자의 몫이다 (autonomous skip 표 조건 외).</system-reminder>
 
 ## 3. 플랜 작성 → 승인

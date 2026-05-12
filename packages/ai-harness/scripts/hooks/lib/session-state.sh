@@ -20,7 +20,7 @@ set -uo pipefail
 
 STATE_DIR="${SAZO_STATE_DIR:-$HOME/.claude/session-state}"
 AUDIT_LOG="$STATE_DIR/audit.log"
-SCHEMA_VERSION=3  # v3: added pre_commit_markers (per-repo HEAD baseline dict)
+SCHEMA_VERSION=5  # v5: P09 skip streak fields (v4: W2/Plan10 dangerous_override_*)
 mkdir -p -m 700 "$STATE_DIR" 2>/dev/null || mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR" 2>/dev/null || true
 
@@ -125,10 +125,17 @@ _with_lock() {
 # ----- init -----
 
 state_init() {
-    local sid="$1" cwd="${2:-}" model="${3:-unknown}"
+    local sid="${1:-${SAZO_SESSION_ID:-}}"
+    local cwd="${2:-${SAZO_CWD:-}}"
+    local model="${3:-${SAZO_MODEL:-unknown}}"
+    [ -z "$sid" ] && return 1
     local f
     f=$(state_file "$sid" "$cwd") || return 1
-    [ -f "$f" ] && return 0
+
+    if [ -f "$f" ]; then
+        _state_schema_upgrade "$f" || return 1
+        return 0
+    fi
     _with_lock "$f" _state_init_inner "$f" "$sid" "$cwd" "$model"
 }
 
@@ -159,8 +166,63 @@ _state_init_inner() {
             review_expected_set: [],
             last_cycle_at: {},
             last_cycle_id: {},
-            pre_commit_markers: {}
-        }' > "$f"
+            pre_commit_markers: {},
+            dangerous_override_nonce: null,
+            dangerous_override_history: [],
+            override_skip_streak_at: null,
+            override_skip_streak_consumed: false,
+            override_skip_streak_nonce: null,
+            skip_streak_blocked_count: 0
+        }' > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# ----- schema migration dispatcher -----
+#
+# _state_schema_upgrade: idempotent dispatcher. Runs v3→v4→v5 in order.
+# P09 merges first (standalone). If W2 (Plan 10) merges later, W2's rebase
+# only needs to add dangerous_override_* fields to _state_schema_upgrade_v4
+# (which P09 already defines). See plan-09-execution-v3-patch.md rebase scenarios.
+_state_schema_upgrade() {
+    local f="$1"
+    local cur_ver
+    cur_ver=$(jq -r '.schema_version // 0' "$f" 2>/dev/null || echo 0)
+    [ "$cur_ver" -ge "$SCHEMA_VERSION" ] && return 0
+
+    # v3 → v4 (W2 Plan 10 dangerous_override_* fields — P09 mirrors these)
+    if [ "$cur_ver" -lt 4 ]; then
+        _with_lock "$f" _state_schema_upgrade_v4 "$f" || return 1
+    fi
+    # v4 → v5 (P09 override_skip_streak_* fields)
+    # re-read after v4 upgrade
+    local now_ver
+    now_ver=$(jq -r '.schema_version // 0' "$f" 2>/dev/null || echo 0)
+    if [ "$now_ver" -lt 5 ]; then
+        _with_lock "$f" _state_schema_upgrade_v5 "$f" || return 1
+    fi
+}
+
+# _state_schema_upgrade_v4: P09 mirrors W2 (Plan 10) fields. If W2's final spec
+# differs, this function must be replaced verbatim with W2's version on rebase.
+# See: proposals/harness-determinism/10-dangerous-command-block.md
+#      plan-10-execution-v3-delta.md (W2 worktree)
+_state_schema_upgrade_v4() {
+    local f="$1"
+    local tmp
+    tmp=$(mktemp)
+    jq '.schema_version = 4
+        | .dangerous_override_nonce //= null
+        | .dangerous_override_history //= []' "$f" > "$tmp" && mv "$tmp" "$f"
+}
+
+_state_schema_upgrade_v5() {
+    local f="$1"
+    local tmp
+    tmp=$(mktemp)
+    jq '.schema_version = 5
+        | .override_skip_streak_at //= null
+        | .override_skip_streak_consumed //= false
+        | .override_skip_streak_nonce //= null
+        | .skip_streak_blocked_count //= 0' "$f" > "$tmp" && mv "$tmp" "$f"
 }
 
 # ----- read -----
@@ -321,6 +383,11 @@ _stage_mark_inner() {
         ((.last_cycle_id // {})[$stage] // "") as $cid |
         .history += [{stage: $stage, status: $status, by: $by, reason: $reason, ts: $ts, cycle_id: $cid}]
         | .stage = $stage
+        | if $status == "completed" then
+            .override_skip_streak_at = null
+            | .override_skip_streak_nonce = null
+            | .override_skip_streak_consumed = false
+          else . end
     ' "$f" > "$tmp"; then
         mv "$tmp" "$f"
     else
@@ -496,6 +563,85 @@ approval_nonce_consume() {
     [ -n "$stored" ] && [ "$stored" = "$nonce" ] || return 1
     state_set_json "$sid" ".approval_nonce" "null" "$cwd"
     return 0
+}
+
+# ----- skip streak override nonce primitives (Plan 09) -----
+#
+# skip_streak_override_set: write override state atomically. Idempotent.
+# Called by user-prompt-approval-detect.sh when user types /override-skip-streak <reason>.
+skip_streak_override_set() {
+    local sid="$1" nonce="$2" cwd="${3:-${SAZO_CWD:-}}"
+    local f
+    f=$(state_file "$sid" "$cwd") || return 1
+    [ -f "$f" ] || state_init "$sid" "$cwd" "${SAZO_MODEL:-unknown}"
+    local ts
+    ts=$(date +%Y-%m-%dT%H:%M:%S%z)
+    _with_lock "$f" _skip_streak_override_set_inner "$f" "$nonce" "$ts"
+}
+
+_skip_streak_override_set_inner() {
+    local f="$1" nonce="$2" ts="$3"
+    local tmp
+    tmp=$(mktemp)
+    if jq --arg nonce "$nonce" --arg ts "$ts" '
+        .override_skip_streak_at = $ts
+        | .override_skip_streak_consumed = false
+        | .override_skip_streak_nonce = $nonce
+    ' "$f" > "$tmp"; then
+        mv "$tmp" "$f"
+    else
+        rm -f "$tmp"
+        return 1
+    fi
+}
+
+# skip_streak_override_consume: atomic check-and-flip under _with_lock.
+# Validates: nonce matches AND consumed == false → set consumed = true.
+# Returns 0 on success, 1 on rejection (wrong nonce, already consumed, or no override).
+skip_streak_override_consume() {
+    local sid="$1" nonce="$2" cwd="${3:-${SAZO_CWD:-}}"
+    local f
+    f=$(state_file "$sid" "$cwd") || return 1
+    [ -f "$f" ] || return 1
+    _with_lock "$f" _skip_streak_override_consume_inner "$f" "$nonce"
+}
+
+_skip_streak_override_consume_inner() {
+    local f="$1" nonce="$2"
+    local check
+    check=$(jq -r --arg nonce "$nonce" '
+        if .override_skip_streak_at == null then "no_override"
+        elif .override_skip_streak_nonce != $nonce then "wrong_nonce"
+        elif .override_skip_streak_consumed != false then "already_consumed"
+        else "ok"
+        end
+    ' "$f" 2>/dev/null)
+    case "$check" in
+        ok) ;;
+        *) return 1 ;;
+    esac
+    local tmp
+    tmp=$(mktemp)
+    if jq '.override_skip_streak_consumed = true' "$f" > "$tmp"; then
+        mv "$tmp" "$f"
+        return 0
+    else
+        rm -f "$tmp"
+        return 1
+    fi
+}
+
+# skip_streak_override_active: returns 0 (active) iff override_skip_streak_at != null
+# AND override_skip_streak_consumed == false. No lock needed (read-only).
+skip_streak_override_active() {
+    local sid="$1" cwd="${2:-${SAZO_CWD:-}}"
+    local f
+    f=$(state_file "$sid" "$cwd") || return 1
+    [ -f "$f" ] || return 1
+    jq -e '
+        .override_skip_streak_at != null
+        and .override_skip_streak_consumed == false
+    ' "$f" >/dev/null 2>&1
 }
 
 # ----- mark_approval_complete (Plan 13 Stage A0a) -----
