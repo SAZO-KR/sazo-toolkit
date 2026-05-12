@@ -858,6 +858,12 @@ while ROUND < MAX_ROUNDS:
     # the gate would bypass the "all active reviewers passed" requirement.
     _SKIP_ARGS=()
     [ "$GEMINI_ENABLED" = false ] && _SKIP_ARGS+=(--skip-reviewer gemini)
+    # WALL_CLOCK_BUDGET vs poll-labels timeout interaction:
+    # - WALL_CLOCK_BUDGET (1800s, outer): guards the entire skill run; user-confirm on breach.
+    # - poll-labels.sh inner loop: polling.max_iterations × polling.interval_seconds (default 60×30=1800s).
+    # Both can time out independently. WALL_CLOCK_BUDGET may fire mid-poll if prior rounds used time.
+    # Repo overrides (polling.max_iterations, polling.interval_seconds in .github/sazo-bot-review.json)
+    # shrink the inner budget without affecting WALL_CLOCK_BUDGET — intended for fast-feedback repos.
     bash "$HARNESS/skills/automated-code-review-cycle/scripts/poll-labels.sh" --pr "$PR_NUM" --repo-dir "$REPO_DIR" "${_SKIP_ARGS[@]+"${_SKIP_ARGS[@]}"}"
     case $? in
       0) ALL_PASSED=true; break ;;
