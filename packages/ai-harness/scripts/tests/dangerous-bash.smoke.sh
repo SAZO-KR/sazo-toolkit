@@ -4,6 +4,8 @@
 # R10 additions: R10a + R10b + R10c + R10d + R10e + R10f + R10g + R10h
 # R11 additions: R11a (sql FP grep) + R11b (sql FP echo) + R11c (sql real psql block)
 # R12 additions: R12a (printf|psql pipeline) + R12b (echo|mysql pipeline) + R12c (cat|psql no-keyword pass)
+# R13 additions: R13a (rm /* -r flag-after-path) + R13b (git -C /repo push --force global opts)
+#                R13c (printf|sudo psql SQL wrapped client) + R13d (git branch -d -f main split flags)
 #
 # Tests the hook directly via simulated payloads and tests lib helpers via sourcing.
 # SAZO_STATE_DIR is isolated per-test to prevent contamination.
@@ -432,6 +434,51 @@ assert_exit 2 "R12b echo 'TRUNCATE TABLE orders;' | mysql → exit 2" \
 echo "Test R12c: cat safe_file.sql | psql → pass (no SQL keyword)"
 assert_exit 0 "R12c cat safe_file.sql | psql → exit 0" \
     run_hook "cat safe_file.sql | psql"
+
+# ---- R13a: rm /* -r (flag-after-path) → block ----
+echo "Test R13a: rm /* -r (recursive flag after path) → block"
+assert_exit 2 "R13a rm /* -r → exit 2" \
+    run_hook "rm /* -r"
+
+# ---- R13a2: rm /usr -rf (flag-after-path on system dir) → block ----
+echo "Test R13a2: rm /usr -rf (flag-after-path, system dir) → block"
+assert_exit 2 "R13a2 rm /usr -rf → exit 2" \
+    run_hook "rm /usr -rf"
+
+# ---- R13b: git -C /repo push --force (git global opts) → block ----
+echo "Test R13b: git -C /repo push --force (git global opts) → block"
+assert_exit 2 "R13b git -C /repo push --force → exit 2" \
+    run_hook "git -C /repo push --force"
+
+# ---- R13b2: git -c color.ui=always push --force → block ----
+echo "Test R13b2: git -c color.ui=always push --force → block"
+assert_exit 2 "R13b2 git -c color.ui=always push --force → exit 2" \
+    run_hook "git -c color.ui=always push --force"
+
+# ---- R13c: printf 'DROP TABLE;' | sudo -u postgres psql → block (wrapped SQL client) ----
+echo "Test R13c: printf 'DROP TABLE;' | sudo -u postgres psql → block"
+assert_exit 2 "R13c printf 'DROP TABLE users;' | sudo -u postgres psql → exit 2" \
+    run_hook "printf 'DROP TABLE users;' | sudo -u postgres psql"
+
+# ---- R13c2: echo 'TRUNCATE TABLE x;' | env PGPASS=x psql → block ----
+echo "Test R13c2: echo 'TRUNCATE TABLE;' | env var psql → block"
+assert_exit 2 "R13c2 echo 'TRUNCATE TABLE x;' | PGPASS=x psql → exit 2" \
+    run_hook "echo 'TRUNCATE TABLE x;' | PGPASS=x psql"
+
+# ---- R13d: git branch -d -f main (split force-delete flags) → block ----
+echo "Test R13d: git branch -d -f main (split flags) → block"
+assert_exit 2 "R13d git branch -d -f main → exit 2" \
+    run_hook "git branch -d -f main"
+
+# ---- R13d2: git branch -d --force main → block ----
+echo "Test R13d2: git branch -d --force main → block"
+assert_exit 2 "R13d2 git branch -d --force main → exit 2" \
+    run_hook "git branch -d --force main"
+
+# ---- R13d3: git branch --delete --force main → block ----
+echo "Test R13d3: git branch --delete --force main → block"
+assert_exit 2 "R13d3 git branch --delete --force main → exit 2" \
+    run_hook "git branch --delete --force main"
 
 # ---- Summary ----
 echo "─────────────────────"

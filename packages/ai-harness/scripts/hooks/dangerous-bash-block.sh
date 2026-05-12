@@ -56,8 +56,13 @@ check_dangerous() {
     # but the pipeline as a whole executes destructive SQL. Check the joined command
     # for: SQL keyword present AND a SQL client appears in a pipe-RHS segment.
     # SQL clients: psql, mysql, mysql5, mariadb, sqlite3, cockroach, pgcli, mycli.
+    # Also matches wrapped invocations: `| sudo -u postgres psql` or `| env X=y psql`
+    # (R13: _ENV_PREFIX already covers env-var prefix + sudo; replicate inline here
+    # since we're scanning the whole command, not per-segment with _ENV_PREFIX).
+    _SQL_CLIENT_RE='(psql|mysql[0-9]*|mariadb|sqlite3|cockroach|pgcli|mycli)'
+    _SQL_CLIENT_WRAPPED='\|[[:space:]]*([[:alpha:]_][[:alnum:]_]*=[^[:space:]]*[[:space:]]+|sudo([[:space:]]+-[a-zA-Z0-9-]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+)*'"${_SQL_CLIENT_RE}"'([[:space:]]|$)'
     if printf '%s' "$joined" | grep -qiE '(DROP[[:space:]]+TABLE|DROP[[:space:]]+DATABASE|TRUNCATE[[:space:]]+TABLE)'; then
-        if printf '%s' "$joined" | grep -qE '\|[[:space:]]*(psql|mysql[0-9]*|mariadb|sqlite3|cockroach|pgcli|mycli)([[:space:]]|$)'; then
+        if printf '%s' "$joined" | grep -qE "${_SQL_CLIENT_WRAPPED}"; then
             echo "sql_destructive"; return 0
         fi
     fi
@@ -68,38 +73,60 @@ check_dangerous() {
         seg=$(printf '%s' "$seg" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
         [ -z "$seg" ] && continue
 
+        # _GIT_GLOBAL_OPTS: optional git global options between `git` and the subcommand.
+        # Covers `git -C <path> push --force`, `git -c key=val push`, `git --no-pager push`,
+        # etc. Each option group: single-char flag with optional arg, or long flag.
+        # R13: added to cover `git -C /repo push --force` and similar bypass attempts.
+        _GIT_GLOBAL_OPTS='([[:space:]]+(-[a-zA-Z]([[:space:]]+[^-[:space:]][^[:space:]]*)?|--[a-zA-Z][a-zA-Z0-9-]*(=[^[:space:]]*|[[:space:]]+[^-[:space:]][^[:space:]]*)?))*'
+
         # 1. git_push_force
         # The outer ERE already excludes --force-with-lease by requiring --force
         # to be followed by space/=/EOL/redirect/background — so --force-with-lease
         # (no space after --force) does not match. The previous inner carve-out was
         # removed because it allowed `git push --force-with-lease --force` through.
-        if echo "$seg" | grep -qE "${_ENV_PREFIX}git[[:space:]]+push.*(--force([[:space:]=]|&|>|$)|[[:space:]]-f([[:space:]]|&|>|$))"; then
+        # R13: _GIT_GLOBAL_OPTS allows global flags between `git` and `push`.
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}git${_GIT_GLOBAL_OPTS}[[:space:]]+push.*(--force([[:space:]=]|&|>|$)|[[:space:]]-f([[:space:]]|&|>|$))"; then
             echo "git_push_force"; return 0
         fi
         # 2. git_reset_hard_protected
         # Use explicit terminators instead of \b to avoid false positives on branch
         # names like origin/main-feature (\b matches between 'n' and '-').
-        if echo "$seg" | grep -qE "${_ENV_PREFIX}git[[:space:]]+reset.*--hard.*[[:space:]]origin/(main|master|dev|develop|trunk)([[:space:]]|&|>|$)"; then
+        # R13: _GIT_GLOBAL_OPTS allows global flags between `git` and `reset`.
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}git${_GIT_GLOBAL_OPTS}[[:space:]]+reset.*--hard.*[[:space:]]origin/(main|master|dev|develop|trunk)([[:space:]]|&|>|$)"; then
             echo "git_reset_hard_protected"; return 0
         fi
         # 3. git_branch_force_delete_protected
         # Use explicit terminators instead of \b (same false-positive risk as pattern 2).
-        if echo "$seg" | grep -qE "${_ENV_PREFIX}git[[:space:]]+branch[[:space:]]+(-[a-zA-Z]*D[a-zA-Z]*|--delete[[:space:]]+--force)[[:space:]]+(main|master|dev|develop|trunk)([[:space:]]|&|>|$)"; then
+        # R13: added split-flag forms: `-d -f`, `-d --force`, `--delete --force`, `-Df` etc.
+        # `git branch -d -f main` is equivalent to `git branch -D main` (git documents this).
+        # Pattern covers both combined (-D) and split (-d + -f or --force) flag forms.
+        _GBD_FLAGS='(-[a-zA-Z]*D[a-zA-Z]*|(-[a-zA-Z]*d[a-zA-Z]*[[:space:]].*(--force|-[a-zA-Z]*f)|(-[a-zA-Z]*f[a-zA-Z]*[[:space:]].*|--force[[:space:]].*)-[a-zA-Z]*d|(--delete[[:space:]].*--force|--force[[:space:]].*--delete)))'
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}git${_GIT_GLOBAL_OPTS}[[:space:]]+branch[[:space:]]+${_GBD_FLAGS}[[:space:]]+(main|master|dev|develop|trunk)([[:space:]]|&|>|$)"; then
             echo "git_branch_force_delete"; return 0
         fi
         # 4. git_checkout_discard — covers `git checkout -- .` and `git checkout .`
         # `--` is optional: LLMs often omit it (e.g. `git checkout .` to discard all).
         # Boundary ([[:space:]]|&|>|/|$) ensures only literal `.` (cwd) is matched,
         # not arbitrary dotfiles like `git checkout .gitignore` or `git checkout file.txt`.
-        if echo "$seg" | grep -qE "${_ENV_PREFIX}git[[:space:]]+checkout[[:space:]]+(--[[:space:]]+)?\\.([[:space:]]|&|>|/|$)"; then
+        # R13: _GIT_GLOBAL_OPTS allows global flags between `git` and `checkout`.
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}git${_GIT_GLOBAL_OPTS}[[:space:]]+checkout[[:space:]]+(--[[:space:]]+)?\\.([[:space:]]|&|>|/|$)"; then
             echo "git_checkout_discard"; return 0
         fi
+        # _RM_RECURSIVE_FLAG: matches short or long recursive flag, usable standalone.
+        _RM_RECURSIVE_FLAG='(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)'
+
         # 5. rm_rf_root — match root `/` and root globs (`/*`, `/**`).
         # Covers short flags (-rf, -r, -R) and GNU long option (--recursive).
         # Trailing group includes `&`, `>`, `/`, `*` to catch:
         #   rm -rf / /tmp  (multi-path), rm -rf />file (redirect),
         #   rm -rf /*      (root glob contents).
-        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+.*(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive).*[[:space:]]+/[[:space:]]*([[:space:]]|&|>|/|\*|$)"; then
+        # R13: also matches flag-after-path form (rm /* -r, rm / -rf).
+        # Form A: recursive flag before path (original):  rm .* -r .* /
+        # Form B: path directly after rm, recursive flag after: rm[space]/<boundary> .* -r
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+.*${_RM_RECURSIVE_FLAG}.*[[:space:]]+/[[:space:]]*([[:space:]]|&|>|/|\*|$)"; then
+            echo "rm_rf_root"; return 0
+        fi
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+/[[:space:]]*([[:space:]]|&|>|/|\*|$).*${_RM_RECURSIVE_FLAG}"; then
             echo "rm_rf_root"; return 0
         fi
         # 6. rm_rf_home — uses _HOME_SUFFIX (single-quoted var) to keep $HOME as ERE literal
@@ -108,13 +135,21 @@ check_dangerous() {
         # rm_rf_root/rm_rf_abs_system_path. The `.*` before the recursive flag spans
         # interleaved flags like `-f` so `rm -f -r ~` and `rm --force --recursive $HOME`
         # are both caught.
-        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+.*(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive).*[[:space:]]+${_HOME_SUFFIX}"; then
+        # R13: also matches flag-after-path form (rm $HOME -r, rm ~ -rf).
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+.*${_RM_RECURSIVE_FLAG}.*[[:space:]]+${_HOME_SUFFIX}"; then
+            echo "rm_rf_home"; return 0
+        fi
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+${_HOME_SUFFIX}.*${_RM_RECURSIVE_FLAG}"; then
             echo "rm_rf_home"; return 0
         fi
         # 7. rm_rf_abs_system_path — restrict to sensitive system directories only.
         # Covers short flags and --recursive. Trailing boundary includes `&` and `>`
         # to catch redirection/backgrounding bypasses (`rm -rf /usr>file`, `rm -rf /usr&`).
-        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+.*(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive).*[[:space:]]+/(usr|etc|bin|sbin|var|opt|lib|boot|root|dev|proc|sys)([[:space:]]|&|>|/|$)"; then
+        # R13: also matches flag-after-path form (rm /usr -r, rm /etc -rf).
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+.*${_RM_RECURSIVE_FLAG}.*[[:space:]]+/(usr|etc|bin|sbin|var|opt|lib|boot|root|dev|proc|sys)([[:space:]]|&|>|/|$)"; then
+            echo "rm_rf_abs_system_path"; return 0
+        fi
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+/(usr|etc|bin|sbin|var|opt|lib|boot|root|dev|proc|sys)([[:space:]]|&|>|/|$).*${_RM_RECURSIVE_FLAG}"; then
             echo "rm_rf_abs_system_path"; return 0
         fi
         # 8. sql_destructive — 패턴은 segment 전체 텍스트 대상 (here-string body 포함)
