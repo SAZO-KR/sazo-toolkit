@@ -895,6 +895,9 @@ while ROUND < MAX_ROUNDS:
   # - changes-requested: decline 있거나 새 fix 요청 진행 중
   # - in-progress: 트리거만 보낸 상태 (응답 대기)
 
+  # ⚠️ WARNING: "approved" below is a PLACEHOLDER only. LLM MUST evaluate actual review
+  # content and replace with the real verdict before executing the case statement.
+  # Auto-filling "approved" without evaluation is an Anti-Pattern (see Anti-Patterns section).
   REVIEW_STATUS_CODEX="approved"  # ← LLM이 평가 후 채움 (approved | changes-requested | in-progress)
   case "$REVIEW_STATUS_CODEX" in
       approved)
@@ -916,6 +919,9 @@ while ROUND < MAX_ROUNDS:
 
   # Gemini 활성 시 동일 패턴 (REVIEW_STATUS_GEMINI 평가 후 case)
   if [ "$GEMINI_ENABLED" = true ]; then
+      # ⚠️ WARNING: "approved" below is a PLACEHOLDER only. LLM MUST evaluate actual review
+      # content and replace with the real verdict before executing the case statement.
+      # Auto-filling "approved" without evaluation is an Anti-Pattern (see Anti-Patterns section).
       REVIEW_STATUS_GEMINI="approved"  # ← LLM 평가
       case "$REVIEW_STATUS_GEMINI" in
           approved) gh issue edit "$PR_NUM" --add-label "$GEMINI_PREFIX/$_APPROVED_SUFFIX" --remove-label "$GEMINI_PREFIX/$_INPROGRESS_SUFFIX,$GEMINI_PREFIX/$_CHANGES_SUFFIX" ;;
