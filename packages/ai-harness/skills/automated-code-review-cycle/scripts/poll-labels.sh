@@ -113,18 +113,24 @@ if [[ -z "$ACTIVE_REVIEWERS" ]]; then
     exit 5
 fi
 
-# ── Phase 2 prep: read label_authority (unused in Phase 1) ────────────────
+# ── Phase 2 prep: read label_authority (Phase 1 informational only) ─────────
 # label_authority="skill"    → LLM (SKILL.md Step 4-8) attaches labels (Phase 1 default)
 # label_authority="actions"  → GitHub Actions auto-attaches labels (Phase 2)
-# Phase 1 reads this field for forward-compatibility but does NOT branch on it.
-_LABEL_AUTHORITY=$(echo "$MERGED_CONFIG" | jq -r '.active_reviewers | to_entries[0].value.label_authority // "skill"')
+# Phase 1 logs this value for observability but does NOT branch on it.
+# Evaluated per-reviewer inside the polling loop to support per-reviewer config.
+while IFS= read -r _ar; do
+    [[ -z "$_ar" ]] && continue
+    _la=$(echo "$MERGED_CONFIG" | jq -r --arg k "$_ar" '.active_reviewers[$k].label_authority // "skill"')
+    echo "INFO: reviewer=$_ar label_authority=$_la" >&2
+done <<< "$ACTIVE_REVIEWERS"
 
 # ── polling loop ──────────────────────────────────────────
 iter=0
 while true; do
     # fetch current labels — exit 4 on auth/access failure (not just "gh not installed")
-    if ! LABELS=$(gh pr view "${GH_REPO_FLAG[@]+"${GH_REPO_FLAG[@]}"}" "$PR_NUM" --json labels --jq '.labels[].name' 2>/tmp/poll-labels-gh-err); then
-        GH_ERR=$(cat /tmp/poll-labels-gh-err 2>/dev/null || true)
+    _gh_err_file="/tmp/poll-labels-gh-err-${PR_NUM}"
+    if ! LABELS=$(gh pr view "${GH_REPO_FLAG[@]+"${GH_REPO_FLAG[@]}"}" "$PR_NUM" --json labels --jq '.labels[].name' 2>"$_gh_err_file"); then
+        GH_ERR=$(cat "$_gh_err_file" 2>/dev/null || true)
         echo "ERROR: gh pr view failed: $GH_ERR" >&2
         exit 4
     fi
@@ -182,18 +188,19 @@ while true; do
             [[ -z "$_bot_login" ]] && continue
 
             _repo_owner_repo=""
-            if [[ ${#GH_REPO_FLAG[@]} -ge 2 ]]; then
+            if [[ ${#GH_REPO_FLAG[@]} -gt 0 ]]; then
                 _repo_owner_repo="${GH_REPO_FLAG[1]}"
             fi
 
+            _b6_err_file="/tmp/poll-labels-b6-err-${PR_NUM}-${_bot_login//[^a-zA-Z0-9_-]/_}"
             if [[ -n "$_repo_owner_repo" ]]; then
-                _reviews_json=$(gh api "repos/$_repo_owner_repo/pulls/$PR_NUM/reviews" 2>/tmp/poll-labels-b6-err || true)
+                _reviews_json=$(gh api "repos/$_repo_owner_repo/pulls/$PR_NUM/reviews" 2>"$_b6_err_file" || true)
             else
-                _reviews_json=$(gh api "repos/{owner}/{repo}/pulls/$PR_NUM/reviews" 2>/tmp/poll-labels-b6-err || true)
+                _reviews_json=$(gh api "repos/{owner}/{repo}/pulls/$PR_NUM/reviews" 2>"$_b6_err_file" || true)
             fi
 
             if [[ -z "$_reviews_json" ]]; then
-                _b6_err=$(cat /tmp/poll-labels-b6-err 2>/dev/null || true)
+                _b6_err=$(cat "$_b6_err_file" 2>/dev/null || true)
                 echo "WARN: B6 pre-termination gh api failed for $_reviewer: $_b6_err — trusting label" >&2
                 continue
             fi
