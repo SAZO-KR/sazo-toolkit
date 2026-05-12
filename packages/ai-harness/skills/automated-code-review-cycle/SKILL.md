@@ -793,20 +793,37 @@ while ROUND < MAX_ROUNDS:
     gh issue edit "$PR_NUM" \
         --add-label "$_NUF_CODEX_PREFIX/$_NUF_APPROVED_SUFFIX" \
         --remove-label "$_NUF_CODEX_PREFIX/$_NUF_INPROGRESS_SUFFIX,$_NUF_CODEX_PREFIX/$_NUF_CHANGES_SUFFIX" 2>/dev/null || true
+    # CRITICAL: only write Gemini approved label if Gemini has reviewed the
+    # CURRENT push. GEMINI_ENABLED=true means Gemini has reviewed at some point
+    # historically, but its last review may predate the current push (stale cached
+    # pass). Writing the approved label for a stale Gemini pass lets poll-labels.sh
+    # exit 0 immediately even though Gemini never evaluated the latest changes.
+    # Guard: check whether any Gemini review was submitted after PUSH_TIME.
+    _GEMINI_FRESH=false
     if [ "$GEMINI_ENABLED" = true ]; then
+      _GEMINI_LATEST_AT=$(gh api repos/$OWNER/$REPO/pulls/$PR_NUM/reviews --paginate \
+        --jq ".[] | select(.user.login == \"$GEMINI_BOT_LOGIN\") | .submitted_at" \
+        2>/dev/null | sort | tail -1)
+      if [[ -n "$_GEMINI_LATEST_AT" ]] && [[ "$_GEMINI_LATEST_AT" > "$PUSH_TIME" ]]; then
+        _GEMINI_FRESH=true
+      fi
+    fi
+    if [ "$_GEMINI_FRESH" = true ]; then
       _NUF_GEMINI_PREFIX=$(echo "$_NUF_MERGED" | jq -r '.active_reviewers.gemini.label_prefix // "bot-review/gemini/"' | sed 's|/$||')
       gh issue edit "$PR_NUM" \
           --add-label "$_NUF_GEMINI_PREFIX/$_NUF_APPROVED_SUFFIX" \
           --remove-label "$_NUF_GEMINI_PREFIX/$_NUF_INPROGRESS_SUFFIX,$_NUF_GEMINI_PREFIX/$_NUF_CHANGES_SUFFIX" 2>/dev/null || true
     fi
 
-    # CRITICAL: pass --skip-reviewer gemini when GEMINI_ENABLED=false.
-    # poll-labels.sh builds its required reviewer list from config, which includes
-    # gemini by default. If the PR has no Gemini review, requiring bot-review/gemini/approved
-    # causes timeout even on Codex-only repos. The --skip-reviewer flag excludes the key
-    # at runtime without mutating config.
+    # CRITICAL: pass --skip-reviewer gemini when:
+    # (a) GEMINI_ENABLED=false — Gemini has never reviewed this PR, OR
+    # (b) _GEMINI_FRESH=false — Gemini is enabled but hasn't reviewed the current push.
+    # In both cases, requiring bot-review/gemini/approved would cause poll-labels.sh
+    # to timeout waiting for a label that will never appear.
+    # The --skip-reviewer flag excludes the key at runtime without mutating config.
     _SKIP_ARGS=()
     [ "$GEMINI_ENABLED" = false ] && _SKIP_ARGS+=(--skip-reviewer gemini)
+    [ "$_GEMINI_FRESH" = false ] && [ "$GEMINI_ENABLED" = true ] && _SKIP_ARGS+=(--skip-reviewer gemini)
     bash "$HARNESS/skills/automated-code-review-cycle/scripts/poll-labels.sh" --pr "$PR_NUM" --repo-dir "$REPO_DIR" "${_SKIP_ARGS[@]+"${_SKIP_ARGS[@]}"}"
     case $? in
       0) ALL_PASSED=true; break ;;
