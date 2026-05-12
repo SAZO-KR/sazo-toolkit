@@ -748,34 +748,52 @@ while ROUND < MAX_ROUNDS:
   fetch_review_feedback()       # Step 3 — review → review comments 구조로 조회
   filter_unanswered()           # in_reply_to_id로 미답변만
 
-  if no_unanswered_feedback:
+  LABEL_GATE_REQUESTED_CHANGES=false  # oscillation guard: exit 3 seen this round?
+
+  if no_unanswered_feedback and not LABEL_GATE_REQUESTED_CHANGES:
     # Plan 08: label-based deterministic termination (Phase 1 = Option C)
     HARNESS="${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}"
     [ "$ROUND" -eq 1 ] && bash "$HARNESS/skills/automated-code-review-cycle/scripts/setup-labels.sh" >/dev/null 2>&1 || true
-    bash "$HARNESS/skills/automated-code-review-cycle/scripts/poll-labels.sh" --pr "$PR_NUM"
+    REPO_DIR=$(git rev-parse --show-toplevel 2>/dev/null || echo .)
+    bash "$HARNESS/skills/automated-code-review-cycle/scripts/poll-labels.sh" --pr "$PR_NUM" --repo-dir "$REPO_DIR"
     case $? in
-      0) ALL_PASSED=true; break ;;            # 활성 reviewer 전부 approved
-      2) notify_user "Bot review polling timeout"; break ;;
-      3) continue ;;                          # changes-requested → 다음 iteration unanswered fetch
-      4) echo "WARN: gh CLI 미설치/미인증 — Phase 1 라벨 게이트 skip" >&2 ;;
-      5) echo "WARN: active reviewers empty — Phase 1 라벨 게이트 skip" >&2 ;;
+      0) ALL_PASSED=true; break ;;
+      2) notify_user "Bot review polling timeout (${SAZO_BOT_POLL_MAX_ITER:-60} iterations × ${SAZO_BOT_POLL_INTERVAL:-30}s)"; break ;;
+      3) LABEL_GATE_REQUESTED_CHANGES=true ;;  # fall through to fix_commit_push_reply; no continue (oscillation guard)
+      4) notify_user "gh CLI 미설치/미인증 — Phase 1 라벨 게이트 비활성. 사용자 수동 LLM 판단 필요."; break ;;
+      5) echo "WARN: active reviewers config empty — Phase 1 라벨 게이트 skip. LLM 텍스트 판단 fallback (수동)" >&2
+         continue ;;  # skip fix attempt; next round picks up
     esac
     # 통과 조건 미충족 + 새 리뷰 없음 → stale로 처리됨 (위 로직)
+  LABEL_GATE_REQUESTED_CHANGES=false  # reset for next round
 
   fix_commit_push_reply()       # Step 4 — 수정 → 테스트 → 커밋 → push → 답변(commit hash)
 
-  # Step 4-8: review 결과 라벨 부착 (Plan 08)
-  # LLM이 본문 해석 후 결정 → 라벨로 결정적 기록.
-  # - 모든 unanswered가 fix됐고 decline 없으면: <reviewer>/approved
-  # - decline 있거나 fix 진행 중: <reviewer>/changes-requested
-  # - 트리거만 보낸 상태: <reviewer>/in-progress (선택)
+  # Step 4-8: review 결과 라벨 부착 (Plan 08 Phase 1 = Option C)
+  # LLM이 본문 해석 후 결과 분기 — 반드시 3개 case 중 하나를 명시적으로 선택:
+  #
+  # Case A — 모든 unanswered가 fix됐고 decline 0건 + commit hash 링크 포함 답변 완료:
   gh issue edit "$PR_NUM" \
       --add-label "bot-review/codex/approved" \
       --remove-label "bot-review/codex/in-progress,bot-review/codex/changes-requested"
-  # Gemini도 동일 (활성 시)
+  #
+  # Case B — 일부 fix는 끝났지만 추가 사이클 필요 (decline 있거나 새 이슈 fix 진행 중):
+  # gh issue edit "$PR_NUM" \
+  #     --add-label "bot-review/codex/changes-requested" \
+  #     --remove-label "bot-review/codex/in-progress,bot-review/codex/approved"
+  #
+  # Case C — 트리거만 보낸 상태 (응답 대기):
+  # gh issue edit "$PR_NUM" \
+  #     --add-label "bot-review/codex/in-progress" \
+  #     --remove-label "bot-review/codex/approved,bot-review/codex/changes-requested"
+  #
+  # Gemini 활성 시 동일 패턴 (codex → gemini 치환):
   # gh issue edit "$PR_NUM" \
   #     --add-label "bot-review/gemini/approved" \
   #     --remove-label "bot-review/gemini/in-progress,bot-review/gemini/changes-requested"
+  #
+  # CRITICAL: LLM이 case 판단 — Case A는 모든 댓글 답변 완료 + decline 없음 + commit hash
+  # 링크 포함 답변 완료된 상태에서만. 그 외는 Case B(changes-requested) 또는 Case C(in-progress).
 
   gemini_fallback_if_quota()    # Step 5 — Codex quota 초과 시에만
 
@@ -841,6 +859,7 @@ PR이 머지 가능한 상태입니다. / 사용자 확인이 필요합니다.
 | Step 2 polling에서 PR 작성자의 리뷰 reply도 "새 리뷰"로 카운트 | `gh api .../reviews`에 bot 로그인 **정확 매칭** 필수 (`select(.user.login == $codex or .user.login == $gemini)`). substring `test("codex\|gemini")`는 identity spoofing 위험 있음 — Step 3-3의 가드와 일관되게 exact match 사용 |
 | 봇이 quota 코멘트도 안 남기고 silent하게 멈춘 상태에서 무한 대기/즉시 fallback | polling 1회(≈10분) 무반응 시 stale=1 단계에서 `@codex review`(Codex) / `/gemini review`(Gemini) 코멘트로 **수동 재트리거 1회** 발송 후 다음 polling 대기. fallback/escalation은 그 후에도 무반응일 때만 |
 | 라벨 갱신 안 하고 다음 cycle 대기 | Step 4-8에서 매 round 끝 라벨 부착 — Plan 08 termination gate가 라벨 기반이므로 미부착 시 polling timeout |
+| Step 4-8에서 무조건 approved만 부착 (검증 없이) | LLM이 case A/B/C 명시 분기 — Case A는 모든 댓글 fix 완료 + decline 0 + commit hash 링크 답변 완료 시에만. 그 외 changes-requested(Case B) 또는 in-progress(Case C) |
 
 ## Related Skills
 

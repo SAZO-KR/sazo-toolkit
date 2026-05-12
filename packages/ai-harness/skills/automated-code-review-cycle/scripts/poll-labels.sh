@@ -10,7 +10,7 @@
 #   4 — gh CLI not installed/not authenticated
 #   5 — active_reviewers empty (after _disabled filter)
 
-set -uo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_CONFIG="$(cd "$SCRIPT_DIR/.." && pwd)/config.json"
@@ -102,7 +102,14 @@ while true; do
     while IFS= read -r reviewer; do
         [[ -z "$reviewer" ]] && continue
         prefix=$(echo "$MERGED_CONFIG" | jq -r --arg k "$reviewer" '.active_reviewers[$k].label_prefix // ""')
-        [[ -z "$prefix" ]] && continue
+        if [[ -z "$prefix" ]]; then
+            disabled=$(echo "$MERGED_CONFIG" | jq -r --arg k "$reviewer" '.active_reviewers[$k]._disabled // "false"')
+            if [[ "$disabled" == "true" ]]; then
+                continue  # intentionally disabled
+            fi
+            echo "WARN: reviewer '$reviewer' has empty label_prefix (config error: incomplete repo override?). skipping." >&2
+            continue
+        fi
 
         changes_label="${prefix}changes-requested"
         approved_label="${prefix}approved"
