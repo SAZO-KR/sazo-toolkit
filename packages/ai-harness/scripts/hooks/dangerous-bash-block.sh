@@ -106,7 +106,7 @@ check_dangerous() {
         # `git branch -d -f main` is equivalent to `git branch -D main` (git documents this).
         # Pattern covers both combined (-D) and split (-d + -f or --force) flag forms.
         _GBD_FLAGS='(-[a-zA-Z]*D[a-zA-Z]*|(-[a-zA-Z]*d[a-zA-Z]*[[:space:]].*(--force|-[a-zA-Z]*f)|(-[a-zA-Z]*f[a-zA-Z]*[[:space:]].*|--force[[:space:]].*)-[a-zA-Z]*d|(--delete[[:space:]].*--force|--force[[:space:]].*--delete)))'
-        if echo "$seg" | grep -qE "${_ENV_PREFIX}git${_GIT_GLOBAL_OPTS}[[:space:]]+branch[[:space:]]+${_GBD_FLAGS}[[:space:]]+(main|master|dev|develop|trunk)([[:space:]]|&|>|$)"; then
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}git${_GIT_GLOBAL_OPTS}[[:space:]]+branch[[:space:]]+${_GBD_FLAGS}[[:space:]]+(.*[[:space:]]+)?(main|master|dev|develop|trunk)([[:space:]]|&|>|$)"; then
             echo "git_branch_force_delete"; return 0
         fi
         # 4. git_checkout_discard — covers `git checkout -- .` and `git checkout .`
@@ -131,7 +131,7 @@ check_dangerous() {
         if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+.*${_RM_RECURSIVE_FLAG}.*[[:space:]]+/[[:space:]]*([[:space:]]|&|>|/|\*|$)"; then
             echo "rm_rf_root"; return 0
         fi
-        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+/[[:space:]]*([[:space:]]|&|>|/|\*|$).*${_RM_RECURSIVE_FLAG}"; then
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+(.*[[:space:]]+)?/[[:space:]]*([[:space:]]|&|>|/|\*|$).*${_RM_RECURSIVE_FLAG}"; then
             echo "rm_rf_root"; return 0
         fi
         # 6. rm_rf_home — uses _HOME_SUFFIX (single-quoted var) to keep $HOME as ERE literal
@@ -144,7 +144,7 @@ check_dangerous() {
         if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+.*${_RM_RECURSIVE_FLAG}.*[[:space:]]+${_HOME_SUFFIX}"; then
             echo "rm_rf_home"; return 0
         fi
-        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+${_HOME_SUFFIX}.*${_RM_RECURSIVE_FLAG}"; then
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+(.*[[:space:]]+)?${_HOME_SUFFIX}.*${_RM_RECURSIVE_FLAG}"; then
             echo "rm_rf_home"; return 0
         fi
         # 7. rm_rf_abs_system_path — restrict to sensitive system directories only.
@@ -154,7 +154,7 @@ check_dangerous() {
         if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+.*${_RM_RECURSIVE_FLAG}.*[[:space:]]+/(usr|etc|bin|sbin|var|opt|lib|boot|root|dev|proc|sys)([[:space:]]|&|>|/|$)"; then
             echo "rm_rf_abs_system_path"; return 0
         fi
-        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+/(usr|etc|bin|sbin|var|opt|lib|boot|root|dev|proc|sys)([[:space:]]|&|>|/|$).*${_RM_RECURSIVE_FLAG}"; then
+        if echo "$seg" | grep -qE "${_ENV_PREFIX}rm[[:space:]]+(.*[[:space:]]+)?/(usr|etc|bin|sbin|var|opt|lib|boot|root|dev|proc|sys)([[:space:]]|&|>|/|$).*${_RM_RECURSIVE_FLAG}"; then
             echo "rm_rf_abs_system_path"; return 0
         fi
         # 8. sql_destructive — 패턴은 segment 전체 텍스트 대상 (here-string body 포함)
