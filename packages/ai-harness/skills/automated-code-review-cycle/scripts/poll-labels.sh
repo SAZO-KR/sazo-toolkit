@@ -206,21 +206,28 @@ while true; do
             _b6_err_file="/tmp/poll-labels-b6-err-${PR_NUM}-${_bot_login//[^a-zA-Z0-9_-]/_}"
             # CRITICAL: --paginate required — PRs with >30 reviews only return first page without it.
             # 2-stage pattern: raw emit per page → jq -s to slurp all pages into one array.
+            # CRITICAL: detect gh api failure before piping to jq. When gh api fails, the pipe
+            # still produces output from jq (e.g. `[]` on empty input), so -z check on _reviews_json
+            # is never true and the WARN+trust-label path is unreachable. Capture exit code via a
+            # temp file to distinguish API failure from empty result.
+            _b6_gh_ok=true
             if [[ -n "$_repo_owner_repo" ]]; then
-                _reviews_json=$(gh api --paginate "repos/$_repo_owner_repo/pulls/$PR_NUM/reviews" \
-                    --jq '.[] | {state, submitted_at, user_login: .user.login}' 2>"$_b6_err_file" \
-                    | jq -s '.' || true)
+                _reviews_raw=$(gh api --paginate "repos/$_repo_owner_repo/pulls/$PR_NUM/reviews" \
+                    --jq '.[] | {state, submitted_at, user_login: .user.login}' 2>"$_b6_err_file") \
+                    || _b6_gh_ok=false
             else
-                _reviews_json=$(gh api --paginate "repos/{owner}/{repo}/pulls/$PR_NUM/reviews" \
-                    --jq '.[] | {state, submitted_at, user_login: .user.login}' 2>"$_b6_err_file" \
-                    | jq -s '.' || true)
+                _reviews_raw=$(gh api --paginate "repos/{owner}/{repo}/pulls/$PR_NUM/reviews" \
+                    --jq '.[] | {state, submitted_at, user_login: .user.login}' 2>"$_b6_err_file") \
+                    || _b6_gh_ok=false
             fi
 
-            if [[ -z "$_reviews_json" ]] || [[ "$_reviews_json" == "null" ]]; then
+            if [[ "$_b6_gh_ok" == "false" ]]; then
                 _b6_err=$(cat "$_b6_err_file" 2>/dev/null || true)
                 echo "WARN: B6 pre-termination gh api failed for $_reviewer: $_b6_err — trusting label" >&2
                 continue
             fi
+
+            _reviews_json=$(echo "$_reviews_raw" | jq -s '.' 2>/dev/null || echo "[]")
 
             _latest_state=$(echo "$_reviews_json" | jq -r --arg login "$_bot_login" \
                 '[.[] | select(.user_login == $login)] | sort_by(.submitted_at) | last | .state // "NONE"' 2>/dev/null || echo "NONE")

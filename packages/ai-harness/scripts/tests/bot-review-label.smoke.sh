@@ -827,6 +827,41 @@ PATH="$T18_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
 rc=$?
 assert_exit 2 "$rc" "T18: partial override (label_prefix only) → bot_login preserved → B6 catches stale label → timeout exit 2"
 
+# T19: B6 gh api reviews failure → WARN + trust label → exit 0 (not stuck at timeout)
+# Regression guard for Codex P2: || true masked gh api failure — _reviews_json got []
+# from jq -s on empty input, causing state=NONE and infinite poll until timeout.
+# ─────────────────────────────────────────────────────────
+echo ""
+echo "=== T19: B6 gh api reviews failure → trust label → exit 0 ==="
+
+T19_SANDBOX="$SANDBOX/t19"
+T19_BIN="$T19_SANDBOX/bin"
+mkdir -p "$T19_BIN"
+
+# stub: labels say approved; api reviews exits non-zero (auth failure)
+cat > "$T19_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+case "$*" in
+    *"pr view"*)
+        echo "bot-review/codex/approved"
+        echo "bot-review/gemini/approved"
+        ;;
+    *"api"*"reviews"*)
+        # Simulate gh api auth failure (exit non-zero, no output)
+        echo "GraphQL: Could not resolve to a Repository" >&2
+        exit 1
+        ;;
+esac
+exit 0
+GHEOF
+chmod +x "$T19_BIN/gh"
+
+rc=0
+PATH="$T19_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
+    bash "$POLL_LABELS" --pr 1 --config "$CONFIG" 2>/dev/null
+rc=$?
+assert_exit 0 "$rc" "T19: B6 gh api failure → trust approved label → exit 0 (not timeout)"
+
 # ─────────────────────────────────────────────────────────
 echo ""
 echo "─────────────────────"
