@@ -752,30 +752,35 @@ while ROUND < MAX_ROUNDS:
   # to fix_commit_push_reply — same logic as legacy LLM-based pass-condition fail.
   # Infinite oscillation prevented by MAX_ROUNDS=10 bound (no per-round flag needed).
 
+  # CRITICAL: resolve HARNESS/REPO_DIR and run label setup BEFORE the
+  # no_unanswered_feedback branch. setup-labels.sh was previously nested inside
+  # `if no_unanswered_feedback`, so ROUND==1 with findings (the common first cycle)
+  # skipped label creation entirely — Step 4-8's `gh issue edit --add-label` then
+  # fails because the repository labels don't exist yet.
+  HARNESS="${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}"
+  REPO_DIR=$(git rev-parse --show-toplevel 2>/dev/null) || {
+      echo "WARN: git rev-parse failed; using cwd '$PWD' as REPO_DIR. Repo override (.github/sazo-bot-review.json) may not resolve correctly." >&2
+      REPO_DIR="$PWD"
+  }
+  [ "$ROUND" -eq 1 ] && {
+      SETUP_LOG="/tmp/setup-labels-$$.log"
+      # CRITICAL: pass --repo-dir so setup-labels.sh merges repo override and creates
+      # labels with custom label_prefix values — same as poll-labels.sh does at runtime.
+      # Without this, repos with custom prefixes get default labels from setup but the
+      # poller waits for custom-prefix labels that don't exist → gh issue edit fails.
+      bash "$HARNESS/skills/automated-code-review-cycle/scripts/setup-labels.sh" --repo-dir "$REPO_DIR" >"$SETUP_LOG" 2>&1 || {
+          echo "WARN: setup-labels.sh failed (see $SETUP_LOG). Label writes may fail silently." >&2
+      }
+  }
+
   if no_unanswered_feedback:
     # Plan 08: label-based deterministic termination (Phase 1 = Option C)
-    HARNESS="${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}"
-    REPO_DIR=$(git rev-parse --show-toplevel 2>/dev/null) || {
-        echo "WARN: git rev-parse failed; using cwd '$PWD' as REPO_DIR. Repo override (.github/sazo-bot-review.json) may not resolve correctly." >&2
-        REPO_DIR="$PWD"
-    }
-    [ "$ROUND" -eq 1 ] && {
-        SETUP_LOG="/tmp/setup-labels-$$.log"
-        # CRITICAL: pass --repo-dir so setup-labels.sh merges repo override and creates
-        # labels with custom label_prefix values — same as poll-labels.sh does at runtime.
-        # Without this, repos with custom prefixes get default labels from setup but the
-        # poller waits for custom-prefix labels that don't exist → gh issue edit fails.
-        bash "$HARNESS/skills/automated-code-review-cycle/scripts/setup-labels.sh" --repo-dir "$REPO_DIR" >"$SETUP_LOG" 2>&1 || {
-            echo "WARN: setup-labels.sh failed (see $SETUP_LOG). Polling may produce false timeout." >&2
-        }
-    }
 
-    # CRITICAL: write verdict label BEFORE calling poll-labels.sh.
-    # Step 4-8 (after fix_commit_push_reply) runs only when there IS unanswered feedback.
-    # When no_unanswered_feedback=true (clean review), Step 4-8 is skipped (loop breaks
-    # on poll exit 0). The poller needs the approved label to already exist before it
-    # starts polling — otherwise it times out waiting for a label that was never written.
-    # Apply config-driven prefix (same logic as Step 4-8 below).
+    # CRITICAL: write verdict label BEFORE calling poll-labels.sh, but ONLY when
+    # the verdict is confirmed by the bot's own state — not unconditionally.
+    # Writing approved without checking CODEX_PASSED / GEMINI_PASSED lets the
+    # poller exit 0 on a self-written label even when the bot issued a top-level
+    # changes-requested (or has not yet signalled pass via +1 reaction).
     _NUF_HARNESS="${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}"
     _NUF_CONFIG="$_NUF_HARNESS/skills/automated-code-review-cycle/config.json"
     if [[ -f "$REPO_DIR/.github/sazo-bot-review.json" ]]; then
@@ -790,14 +795,24 @@ while ROUND < MAX_ROUNDS:
     _NUF_APPROVED_SUFFIX=$(echo "$_NUF_MERGED" | jq -r '.labels.approved.suffix // "approved"')
     _NUF_INPROGRESS_SUFFIX=$(echo "$_NUF_MERGED" | jq -r '.labels.in_progress.suffix // "in-progress"')
     _NUF_CHANGES_SUFFIX=$(echo "$_NUF_MERGED" | jq -r '.labels.changes_requested.suffix // "changes-requested"')
-    gh issue edit "$PR_NUM" \
-        --add-label "$_NUF_CODEX_PREFIX/$_NUF_APPROVED_SUFFIX" \
-        --remove-label "$_NUF_CODEX_PREFIX/$_NUF_INPROGRESS_SUFFIX,$_NUF_CODEX_PREFIX/$_NUF_CHANGES_SUFFIX" 2>/dev/null || true
-    # CRITICAL: only write Gemini approved label if Gemini has reviewed the
-    # CURRENT push. GEMINI_ENABLED=true means Gemini has reviewed at some point
-    # historically, but its last review may predate the current push (stale cached
-    # pass). Writing the approved label for a stale Gemini pass lets poll-labels.sh
-    # exit 0 immediately even though Gemini never evaluated the latest changes.
+    # Gate: write Codex approved only if CODEX_PASSED=true (i.e. CODEX_STATE=="approved").
+    # If Codex has not signalled +1 yet (e.g. top-level changes-requested with all inline
+    # comments answered), write in-progress instead — poll-labels.sh will then wait for
+    # the bot-review/codex/approved label to appear organically.
+    if [ "$CODEX_PASSED" = true ]; then
+      gh issue edit "$PR_NUM" \
+          --add-label "$_NUF_CODEX_PREFIX/$_NUF_APPROVED_SUFFIX" \
+          --remove-label "$_NUF_CODEX_PREFIX/$_NUF_INPROGRESS_SUFFIX,$_NUF_CODEX_PREFIX/$_NUF_CHANGES_SUFFIX" 2>/dev/null || true
+    else
+      gh issue edit "$PR_NUM" \
+          --add-label "$_NUF_CODEX_PREFIX/$_NUF_INPROGRESS_SUFFIX" \
+          --remove-label "$_NUF_CODEX_PREFIX/$_NUF_APPROVED_SUFFIX,$_NUF_CODEX_PREFIX/$_NUF_CHANGES_SUFFIX" 2>/dev/null || true
+    fi
+    # CRITICAL: only write Gemini approved label if Gemini has reviewed the CURRENT
+    # push AND GEMINI_PASSED=true. GEMINI_ENABLED=true means Gemini has reviewed at
+    # some point historically, but its last review may predate the current push.
+    # Writing the approved label for a stale Gemini pass lets poll-labels.sh exit 0
+    # without Gemini ever evaluating the latest changes.
     # Guard: check whether any Gemini review was submitted after PUSH_TIME.
     _GEMINI_FRESH=false
     if [ "$GEMINI_ENABLED" = true ]; then
@@ -808,22 +823,29 @@ while ROUND < MAX_ROUNDS:
         _GEMINI_FRESH=true
       fi
     fi
-    if [ "$_GEMINI_FRESH" = true ]; then
+    if [ "$GEMINI_ENABLED" = true ] && [ "$_GEMINI_FRESH" = true ] && [ "$GEMINI_PASSED" = true ]; then
       _NUF_GEMINI_PREFIX=$(echo "$_NUF_MERGED" | jq -r '.active_reviewers.gemini.label_prefix // "bot-review/gemini/"' | sed 's|/$||')
       gh issue edit "$PR_NUM" \
           --add-label "$_NUF_GEMINI_PREFIX/$_NUF_APPROVED_SUFFIX" \
           --remove-label "$_NUF_GEMINI_PREFIX/$_NUF_INPROGRESS_SUFFIX,$_NUF_GEMINI_PREFIX/$_NUF_CHANGES_SUFFIX" 2>/dev/null || true
+    elif [ "$GEMINI_ENABLED" = true ] && [ "$_GEMINI_FRESH" = false ]; then
+      # Gemini is active but hasn't reviewed this push yet. Trigger a fresh review
+      # and mark in-progress. poll-labels.sh will wait for the actual verdict label.
+      # Do NOT skip Gemini from the gate — that bypasses the "all active reviewers
+      # passed" requirement for a PR Gemini has previously engaged with.
+      gh pr comment "$PR_NUM" --body "/gemini review" 2>/dev/null || true
+      _NUF_GEMINI_PREFIX=$(echo "$_NUF_MERGED" | jq -r '.active_reviewers.gemini.label_prefix // "bot-review/gemini/"' | sed 's|/$||')
+      gh issue edit "$PR_NUM" \
+          --add-label "$_NUF_GEMINI_PREFIX/$_NUF_INPROGRESS_SUFFIX" \
+          --remove-label "$_NUF_GEMINI_PREFIX/$_NUF_APPROVED_SUFFIX,$_NUF_GEMINI_PREFIX/$_NUF_CHANGES_SUFFIX" 2>/dev/null || true
     fi
 
-    # CRITICAL: pass --skip-reviewer gemini when:
-    # (a) GEMINI_ENABLED=false — Gemini has never reviewed this PR, OR
-    # (b) _GEMINI_FRESH=false — Gemini is enabled but hasn't reviewed the current push.
-    # In both cases, requiring bot-review/gemini/approved would cause poll-labels.sh
-    # to timeout waiting for a label that will never appear.
-    # The --skip-reviewer flag excludes the key at runtime without mutating config.
+    # CRITICAL: pass --skip-reviewer gemini only when GEMINI_ENABLED=false.
+    # When Gemini is enabled but stale (_GEMINI_FRESH=false), we trigger /gemini review
+    # above and let poll-labels.sh wait for the fresh verdict — skipping Gemini from
+    # the gate would bypass the "all active reviewers passed" requirement.
     _SKIP_ARGS=()
     [ "$GEMINI_ENABLED" = false ] && _SKIP_ARGS+=(--skip-reviewer gemini)
-    [ "$_GEMINI_FRESH" = false ] && [ "$GEMINI_ENABLED" = true ] && _SKIP_ARGS+=(--skip-reviewer gemini)
     bash "$HARNESS/skills/automated-code-review-cycle/scripts/poll-labels.sh" --pr "$PR_NUM" --repo-dir "$REPO_DIR" "${_SKIP_ARGS[@]+"${_SKIP_ARGS[@]}"}"
     case $? in
       0) ALL_PASSED=true; break ;;
