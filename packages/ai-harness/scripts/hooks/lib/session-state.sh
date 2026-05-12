@@ -690,9 +690,8 @@ dangerous_nonce_set() {
 
 _dangerous_nonce_set_inner() {
     local f="$1" nonce="$2" reason="$3"
-    local ts; ts=$(date +%Y-%m-%dT%H:%M:%S%z)
-    local tmp; tmp=$(mktemp)
-    if jq --arg n "$nonce" --arg r "$reason" --arg ts "$ts" '
+    local tmp; tmp=$(mktemp "${f}.XXXXXX")
+    if jq --arg n "$nonce" --arg r "$reason" '
         .dangerous_override_nonce = $n
         | .dangerous_override_reason = $r
     ' "$f" > "$tmp"; then
@@ -719,7 +718,7 @@ dangerous_nonce_consume() {
 _dangerous_nonce_consume_inner() {
     local f="$1" nonce="$2" pattern="$3"
     local ts; ts=$(date +%Y-%m-%dT%H:%M:%S%z)
-    local tmp; tmp=$(mktemp)
+    local tmp; tmp=$(mktemp "${f}.XXXXXX")
     # Atomic re-validate inside lock: select(.dangerous_override_nonce == $n)
     # ensures a second concurrent consumer sees null (first already cleared it)
     # and fails the select, producing null output — jq exits 0 but output is
