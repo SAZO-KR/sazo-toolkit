@@ -14,16 +14,15 @@
 
 # ----- Plan 13 Stage B: auto-skip wrapper -----
 
-# WRAPPER_EXEMPT_STAGES — stages NOT eligible for auto-skip via mark_skip_with_check.
+# WRAPPER_EXEMPT_STAGES — stages eligible for auto-skip regardless of SAZO_ALLOW_AUTO_SKIP.
 #
-# "worktree" is exempt because the worktree gate enforces protected-branch isolation
-# at boot time; auto-skipping it would let a Claude session mutate main/master without
-# branch creation, breaking Plan 13 Stage A0a's assumption that worktree always gates
-# subsequent stages.
+# "worktree" is exempt because it manages its own skip policy (e.g., allowing
+# passthrough on non-git repos). The global wrapper should not block these
+# internal decisions, as the worktree gate itself ensures that mutation
+# only happens in safe environments.
 #
-# Bar for adding new exempt stages: only stages where auto-skip would
-# silently invalidate a downstream gate's invariant. Most workflow stages
-# tolerate auto-skip (with audit log entry); this list should stay minimal.
+# Bar for adding new exempt stages: only stages that implement their own
+# safety invariants and should not be subject to the global auto-skip toggle.
 #
 # See: proposals/harness-determinism/13-control-flow-extensions.md (Stage B).
 WRAPPER_EXEMPT_STAGES=("worktree")
