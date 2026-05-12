@@ -1200,7 +1200,7 @@ ci_invalidate_unconditional() {
 #   `source session-state.sh || fallback`
 # can detect partial-install / checkout-conflict situations.
 # `unset _SAZO_LIB_DIR` would otherwise swallow a failed source exit code.
-_SAZO_LIB_DIR="${BASH_SOURCE[0]%/*}"
+_SAZO_LIB_DIR="${BASH_SOURCE[0]%/*}"; [ "$_SAZO_LIB_DIR" = "${BASH_SOURCE[0]}" ] && _SAZO_LIB_DIR="."
 # shellcheck source=skip-control.sh
 source "$_SAZO_LIB_DIR/skip-control.sh" \
     || { echo "[session-state] failed to source skip-control.sh" >&2; unset _SAZO_LIB_DIR; return 1 2>/dev/null || exit 1; }
