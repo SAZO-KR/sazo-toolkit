@@ -780,19 +780,24 @@ while ROUND < MAX_ROUNDS:
     _NUF_CONFIG="$_NUF_HARNESS/skills/automated-code-review-cycle/config.json"
     if [[ -f "$REPO_DIR/.github/sazo-bot-review.json" ]]; then
       _NUF_MERGED=$(jq -n --slurpfile b "$_NUF_CONFIG" --slurpfile o "$REPO_DIR/.github/sazo-bot-review.json" \
-        '$b[0] | .active_reviewers = (($b[0].active_reviewers // {}) + ($o[0].active_reviewers // {}))')
+        '$b[0]
+         | .active_reviewers = (($b[0].active_reviewers // {}) + ($o[0].active_reviewers // {}))
+         | .labels = ($b[0].labels * ($o[0].labels // {}))')
     else
       _NUF_MERGED=$(jq '.' "$_NUF_CONFIG")
     fi
     _NUF_CODEX_PREFIX=$(echo "$_NUF_MERGED" | jq -r '.active_reviewers.codex.label_prefix // "bot-review/codex/"' | sed 's|/$||')
+    _NUF_APPROVED_SUFFIX=$(echo "$_NUF_MERGED" | jq -r '.labels.approved.suffix // "approved"')
+    _NUF_INPROGRESS_SUFFIX=$(echo "$_NUF_MERGED" | jq -r '.labels.in_progress.suffix // "in-progress"')
+    _NUF_CHANGES_SUFFIX=$(echo "$_NUF_MERGED" | jq -r '.labels.changes_requested.suffix // "changes-requested"')
     gh issue edit "$PR_NUM" \
-        --add-label "$_NUF_CODEX_PREFIX/approved" \
-        --remove-label "$_NUF_CODEX_PREFIX/in-progress,$_NUF_CODEX_PREFIX/changes-requested" 2>/dev/null || true
+        --add-label "$_NUF_CODEX_PREFIX/$_NUF_APPROVED_SUFFIX" \
+        --remove-label "$_NUF_CODEX_PREFIX/$_NUF_INPROGRESS_SUFFIX,$_NUF_CODEX_PREFIX/$_NUF_CHANGES_SUFFIX" 2>/dev/null || true
     if [ "$GEMINI_ENABLED" = true ]; then
       _NUF_GEMINI_PREFIX=$(echo "$_NUF_MERGED" | jq -r '.active_reviewers.gemini.label_prefix // "bot-review/gemini/"' | sed 's|/$||')
       gh issue edit "$PR_NUM" \
-          --add-label "$_NUF_GEMINI_PREFIX/approved" \
-          --remove-label "$_NUF_GEMINI_PREFIX/in-progress,$_NUF_GEMINI_PREFIX/changes-requested" 2>/dev/null || true
+          --add-label "$_NUF_GEMINI_PREFIX/$_NUF_APPROVED_SUFFIX" \
+          --remove-label "$_NUF_GEMINI_PREFIX/$_NUF_INPROGRESS_SUFFIX,$_NUF_GEMINI_PREFIX/$_NUF_CHANGES_SUFFIX" 2>/dev/null || true
     fi
 
     # CRITICAL: pass --skip-reviewer gemini when GEMINI_ENABLED=false.
@@ -831,13 +836,20 @@ while ROUND < MAX_ROUNDS:
     _MERGED=$(jq -n \
       --slurpfile base "$_SKILL_CONFIG" \
       --slurpfile ovr "$_REPO_OVERRIDE" \
-      '$base[0] | .active_reviewers = (($base[0].active_reviewers // {}) + ($ovr[0].active_reviewers // {}))')
+      '$base[0]
+       | .active_reviewers = (($base[0].active_reviewers // {}) + ($ovr[0].active_reviewers // {}))
+       | .labels = ($base[0].labels * ($ovr[0].labels // {}))')
   else
     _MERGED=$(jq '.' "$_SKILL_CONFIG")
   fi
 
   CODEX_PREFIX=$(echo "$_MERGED" | jq -r '.active_reviewers.codex.label_prefix // "bot-review/codex/"' | sed 's|/$||')
   GEMINI_PREFIX=$(echo "$_MERGED" | jq -r '.active_reviewers.gemini.label_prefix // "bot-review/gemini/"' | sed 's|/$||')
+  # CRITICAL: read suffixes from config to match what poll-labels.sh and setup-labels.sh create.
+  # Repos with .labels.*.suffix overrides must write matching label names here.
+  _APPROVED_SUFFIX=$(echo "$_MERGED" | jq -r '.labels.approved.suffix // "approved"')
+  _INPROGRESS_SUFFIX=$(echo "$_MERGED" | jq -r '.labels.in_progress.suffix // "in-progress"')
+  _CHANGES_SUFFIX=$(echo "$_MERGED" | jq -r '.labels.changes_requested.suffix // "changes-requested"')
 
   # LLM determines status per-reviewer based on review evaluation:
   # - approved: 모든 unanswered 댓글 답변 완료 + decline 0건
@@ -848,18 +860,18 @@ while ROUND < MAX_ROUNDS:
   case "$REVIEW_STATUS_CODEX" in
       approved)
           gh issue edit "$PR_NUM" \
-              --add-label "$CODEX_PREFIX/approved" \
-              --remove-label "$CODEX_PREFIX/in-progress,$CODEX_PREFIX/changes-requested"
+              --add-label "$CODEX_PREFIX/$_APPROVED_SUFFIX" \
+              --remove-label "$CODEX_PREFIX/$_INPROGRESS_SUFFIX,$CODEX_PREFIX/$_CHANGES_SUFFIX"
           ;;
       changes-requested)
           gh issue edit "$PR_NUM" \
-              --add-label "$CODEX_PREFIX/changes-requested" \
-              --remove-label "$CODEX_PREFIX/in-progress,$CODEX_PREFIX/approved"
+              --add-label "$CODEX_PREFIX/$_CHANGES_SUFFIX" \
+              --remove-label "$CODEX_PREFIX/$_INPROGRESS_SUFFIX,$CODEX_PREFIX/$_APPROVED_SUFFIX"
           ;;
       in-progress)
           gh issue edit "$PR_NUM" \
-              --add-label "$CODEX_PREFIX/in-progress" \
-              --remove-label "$CODEX_PREFIX/approved,$CODEX_PREFIX/changes-requested"
+              --add-label "$CODEX_PREFIX/$_INPROGRESS_SUFFIX" \
+              --remove-label "$CODEX_PREFIX/$_APPROVED_SUFFIX,$CODEX_PREFIX/$_CHANGES_SUFFIX"
           ;;
   esac
 
@@ -867,9 +879,9 @@ while ROUND < MAX_ROUNDS:
   if [ "$GEMINI_ENABLED" = true ]; then
       REVIEW_STATUS_GEMINI="approved"  # ← LLM 평가
       case "$REVIEW_STATUS_GEMINI" in
-          approved) gh issue edit "$PR_NUM" --add-label "$GEMINI_PREFIX/approved" --remove-label "$GEMINI_PREFIX/in-progress,$GEMINI_PREFIX/changes-requested" ;;
-          changes-requested) gh issue edit "$PR_NUM" --add-label "$GEMINI_PREFIX/changes-requested" --remove-label "$GEMINI_PREFIX/in-progress,$GEMINI_PREFIX/approved" ;;
-          in-progress) gh issue edit "$PR_NUM" --add-label "$GEMINI_PREFIX/in-progress" --remove-label "$GEMINI_PREFIX/approved,$GEMINI_PREFIX/changes-requested" ;;
+          approved) gh issue edit "$PR_NUM" --add-label "$GEMINI_PREFIX/$_APPROVED_SUFFIX" --remove-label "$GEMINI_PREFIX/$_INPROGRESS_SUFFIX,$GEMINI_PREFIX/$_CHANGES_SUFFIX" ;;
+          changes-requested) gh issue edit "$PR_NUM" --add-label "$GEMINI_PREFIX/$_CHANGES_SUFFIX" --remove-label "$GEMINI_PREFIX/$_INPROGRESS_SUFFIX,$GEMINI_PREFIX/$_APPROVED_SUFFIX" ;;
+          in-progress) gh issue edit "$PR_NUM" --add-label "$GEMINI_PREFIX/$_INPROGRESS_SUFFIX" --remove-label "$GEMINI_PREFIX/$_APPROVED_SUFFIX,$GEMINI_PREFIX/$_CHANGES_SUFFIX" ;;
       esac
   fi
   # CRITICAL: REVIEW_STATUS는 LLM이 본문 해석 후 결정. approved는 모든 unanswered가 fix됐고
