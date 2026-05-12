@@ -37,7 +37,8 @@ state_init "$SAZO_SESSION_ID" "$SAZO_CWD" "${SAZO_MODEL:-unknown}"
 # Combining with double-quoted ${_ENV_PREFIX} via "${_ENV_PREFIX}...${_HOME_SUFFIX}".
 _ENV_PREFIX='^([[:alpha:]_][[:alnum:]_]*=[^[:space:]]*[[:space:]]+|sudo([[:space:]]+-[a-zA-Z0-9-]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+)*'
 # shellcheck disable=SC2016  # intentional: $HOME is not a shell variable here
-_HOME_SUFFIX='(\$HOME(\b|/)|~(\b|/))'
+# Use POSIX ERE char classes instead of \b (not portable on BSD/macOS grep).
+_HOME_SUFFIX='(\$HOME([[:space:]/&>]|$)|~([[:space:]/&>]|$))'
 
 check_dangerous() {
     local c="$1"
@@ -103,7 +104,9 @@ check_dangerous() {
             echo "rm_rf_abs_system_path"; return 0
         fi
         # 8. sql_destructive — 패턴은 segment 전체 텍스트 대상 (here-string body 포함)
-        if echo "$seg" | grep -qiE '\b(DROP[[:space:]]+TABLE|DROP[[:space:]]+DATABASE|TRUNCATE[[:space:]]+TABLE)\b'; then
+        # Use portable word-boundary simulation: ([^[:alnum:]_]|^) and ([^[:alnum:]_]|$)
+        # instead of \b which is not POSIX ERE and fails on BSD grep (macOS).
+        if echo "$seg" | grep -qiE '(^|[^[:alnum:]_])(DROP[[:space:]]+TABLE|DROP[[:space:]]+DATABASE|TRUNCATE[[:space:]]+TABLE)([^[:alnum:]_]|$)'; then
             echo "sql_destructive"; return 0
         fi
     done <<< "$segments"
