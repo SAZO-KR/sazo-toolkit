@@ -42,9 +42,9 @@ hook_healthy() {
     [ -w "$(state_dir)" ] || return 1
     # check 4
     command -v jq >/dev/null 2>&1 || return 1
-    # check 5 — mkdir simulate
-    mkdir -p "${HOME}/.claude/state/.healthcheck-$$" 2>/dev/null || return 1
-    rmdir "${HOME}/.claude/state/.healthcheck-$$" 2>/dev/null || true
+    # check 5 — mkdir simulate (use state_dir() so SAZO_STATE_DIR override is respected)
+    mkdir -p "$(state_dir)/.healthcheck-$$" 2>/dev/null || return 1
+    rmdir "$(state_dir)/.healthcheck-$$" 2>/dev/null || true
     # check 6 — hook command paths exist
     # Extract all command values from SessionEnd and PreToolUse hook arrays.
     # settings.json schema: .hooks.{SessionEnd,PreToolUse}[] can be:
