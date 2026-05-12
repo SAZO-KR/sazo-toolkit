@@ -209,7 +209,7 @@ _state_schema_upgrade() {
 _state_schema_upgrade_v4() {
     local f="$1"
     local tmp
-    tmp=$(mktemp)
+    tmp=$(mktemp "${f}.XXXXXX")
     if jq '.schema_version = 4
         | .dangerous_override_nonce //= null
         | .dangerous_override_reason //= null
@@ -224,7 +224,7 @@ _state_schema_upgrade_v4() {
 _state_schema_upgrade_v5() {
     local f="$1"
     local tmp
-    tmp=$(mktemp)
+    tmp=$(mktemp "${f}.XXXXXX")
     jq '.schema_version = 5
         | .override_skip_streak_at //= null
         | .override_skip_streak_consumed //= false

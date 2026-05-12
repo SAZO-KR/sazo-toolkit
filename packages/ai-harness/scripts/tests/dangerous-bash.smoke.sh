@@ -237,17 +237,17 @@ echo "Test R-hs: here-string TRUNCATE TABLE"
 assert_exit 2 "R-hs psql <<< TRUNCATE TABLE → exit 2" \
     run_hook 'psql <<< "TRUNCATE TABLE x;"'
 
-# ---- T_MIG: v3 → v4 schema migration ----
-echo "=== T_MIG: v3 → v4 schema migration ==="
+# ---- T_MIG: v3 → v5 schema migration (v3→v4→v5 dispatcher chain) ----
+echo "=== T_MIG: v3 → v5 schema migration ==="
 (
     TMP_HOME=$(mktemp -d)
     SAZO_STATE_DIR="$TMP_HOME/.claude/state"
     mkdir -p "$SAZO_STATE_DIR"
 
-    # Source lib (sets STATE_DIR / SCHEMA_VERSION=4)
+    # Source lib (sets STATE_DIR / SCHEMA_VERSION=5 after P09 v5 merge)
     source "$LIB_DIR/session-state.sh"
 
-    # Manually create a v3 state file (pre-v4 schema)
+    # Manually create a v3 state file (pre-v4 schema, will be upgraded to v5)
     SID="t_mig_session"
     CWD="/tmp/test-cwd"
     f=$(state_file "$SID" "$CWD")
@@ -268,7 +268,7 @@ EOF
 
     # Verify migration happened
     POST_VER=$(jq -r '.schema_version' "$f")
-    assert_eq "4" "$POST_VER" "T_MIG.1 schema_version upgraded to 4"
+    assert_eq "5" "$POST_VER" "T_MIG.1 schema_version upgraded to 5 (v3→v4→v5 chain)"
 
     POST_NONCE=$(jq -r '.dangerous_override_nonce' "$f")
     assert_eq "null" "$POST_NONCE" "T_MIG.2 dangerous_override_nonce field added (null)"
