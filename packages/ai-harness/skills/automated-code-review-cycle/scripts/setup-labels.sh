@@ -51,8 +51,15 @@ if [[ -n "$REPO_OVERRIDE" ]]; then
         --slurpfile base "$CONFIG_PATH" \
         --slurpfile ovr "$REPO_OVERRIDE" \
         '
+        ($base[0].active_reviewers // {}) as $br |
+        ($ovr[0].active_reviewers // {}) as $or |
         $base[0]
-        | .active_reviewers = (($base[0].active_reviewers // {}) + ($ovr[0].active_reviewers // {}))
+        | .active_reviewers = (
+            ($br + $or)
+            | to_entries
+            | map(.value = (($br[.key] // {}) * ($or[.key] // {})))
+            | from_entries
+          )
         | .labels = ($base[0].labels * ($ovr[0].labels // {}))
         | .override_label = ($ovr[0].override_label // $base[0].override_label)
         | .polling = ($base[0].polling * ($ovr[0].polling // {}))

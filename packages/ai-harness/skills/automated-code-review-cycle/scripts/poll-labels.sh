@@ -204,20 +204,26 @@ while true; do
             fi
 
             _b6_err_file="/tmp/poll-labels-b6-err-${PR_NUM}-${_bot_login//[^a-zA-Z0-9_-]/_}"
+            # CRITICAL: --paginate required — PRs with >30 reviews only return first page without it.
+            # 2-stage pattern: raw emit per page → jq -s to slurp all pages into one array.
             if [[ -n "$_repo_owner_repo" ]]; then
-                _reviews_json=$(gh api "repos/$_repo_owner_repo/pulls/$PR_NUM/reviews" 2>"$_b6_err_file" || true)
+                _reviews_json=$(gh api --paginate "repos/$_repo_owner_repo/pulls/$PR_NUM/reviews" \
+                    --jq '.[] | {state, submitted_at, user_login: .user.login}' 2>"$_b6_err_file" \
+                    | jq -s '.' || true)
             else
-                _reviews_json=$(gh api "repos/{owner}/{repo}/pulls/$PR_NUM/reviews" 2>"$_b6_err_file" || true)
+                _reviews_json=$(gh api --paginate "repos/{owner}/{repo}/pulls/$PR_NUM/reviews" \
+                    --jq '.[] | {state, submitted_at, user_login: .user.login}' 2>"$_b6_err_file" \
+                    | jq -s '.' || true)
             fi
 
-            if [[ -z "$_reviews_json" ]]; then
+            if [[ -z "$_reviews_json" ]] || [[ "$_reviews_json" == "null" ]]; then
                 _b6_err=$(cat "$_b6_err_file" 2>/dev/null || true)
                 echo "WARN: B6 pre-termination gh api failed for $_reviewer: $_b6_err — trusting label" >&2
                 continue
             fi
 
             _latest_state=$(echo "$_reviews_json" | jq -r --arg login "$_bot_login" \
-                '[.[] | select(.user.login == $login)] | sort_by(.submitted_at) | last | .state // "NONE"')
+                '[.[] | select(.user_login == $login)] | sort_by(.submitted_at) | last | .state // "NONE"' 2>/dev/null || echo "NONE")
             if [[ "$_latest_state" != "APPROVED" ]]; then
                 echo "WARN: B6 pre-termination: $_reviewer ($_bot_login) latest review state=$_latest_state — label stale, continuing poll" >&2
                 _B6_VERIFIED=false

@@ -122,6 +122,7 @@ mkdir -p "$T2_BIN"
 cat > "$T2_BIN/gh" <<'GHEOF'
 #!/usr/bin/env bash
 # mock: return labels with both approved; B6 pre-termination api returns APPROVED
+# Emits NDJSON objects matching gh api --jq '.[] | {state, submitted_at, user_login: .user.login}'
 case "$*" in
     *"pr view"*)
         echo "bot-review/codex/approved"
@@ -129,7 +130,8 @@ case "$*" in
         ;;
     *"api"*"reviews"*)
         # B6 verify: both bots APPROVED
-        printf '[{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"chatgpt-codex-connector[bot]"}},{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"gemini-code-assist[bot]"}}]\n'
+        printf '{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user_login":"chatgpt-codex-connector[bot]"}\n'
+        printf '{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user_login":"gemini-code-assist[bot]"}\n'
         ;;
 esac
 exit 0
@@ -252,7 +254,8 @@ case "$*" in
         echo "bot-review/gemini/approved"
         ;;
     *"api"*"reviews"*)
-        printf '[{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"chatgpt-codex-connector[bot]"}},{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"gemini-code-assist[bot]"}}]\n'
+        printf '{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user_login":"chatgpt-codex-connector[bot]"}\n'
+        printf '{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user_login":"gemini-code-assist[bot]"}\n'
         ;;
 esac
 exit 0
@@ -294,7 +297,7 @@ case "$*" in
         ;;
     *"api"*"reviews"*)
         # B6 verify: codex APPROVED (gemini disabled — not checked)
-        printf '[{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"chatgpt-codex-connector[bot]"}}]\n'
+        printf '{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user_login":"chatgpt-codex-connector[bot]"}\n'
         ;;
 esac
 exit 0
@@ -482,7 +485,7 @@ case "$*" in
         ;;
     *"api"*"reviews"*)
         # B6 verify: codex APPROVED (gemini skipped — not checked)
-        printf '[{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"chatgpt-codex-connector[bot]"}}]\n'
+        printf '{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user_login":"chatgpt-codex-connector[bot]"}\n'
         ;;
 esac
 exit 0
@@ -692,6 +695,8 @@ T17A_BIN="$T17_SANDBOX/t17a-bin"
 mkdir -p "$T17A_BIN"
 
 # stub: pr view returns approved labels; api reviews returns CHANGES_REQUESTED
+# Mock emits NDJSON objects (one per line) matching what `gh api --jq '.[] | {state, submitted_at, user_login: .user.login}'` produces.
+# The real gh --jq filter is ignored by the stub; we pre-transform the output to the expected shape.
 cat > "$T17A_BIN/gh" <<'GHEOF'
 #!/usr/bin/env bash
 case "$*" in
@@ -701,7 +706,7 @@ case "$*" in
         ;;
     *"api"*"reviews"*)
         # B6 verify: codex says CHANGES_REQUESTED (label is stale/wrong)
-        printf '[{"state":"CHANGES_REQUESTED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"chatgpt-codex-connector[bot]"}}]\n'
+        printf '{"state":"CHANGES_REQUESTED","submitted_at":"2026-01-01T00:00:00Z","user_login":"chatgpt-codex-connector[bot]"}\n'
         ;;
 esac
 exit 0
@@ -720,7 +725,8 @@ echo "=== T17b: labels approved + gh api empty → exit 2 ==="
 T17B_BIN="$T17_SANDBOX/t17b-bin"
 mkdir -p "$T17B_BIN"
 
-# stub: pr view returns approved labels; api reviews returns empty array
+# stub: pr view returns approved labels; api reviews returns empty (no output)
+# Empty output → jq -s '.' → [] → no matching user_login → NONE state → timeout
 cat > "$T17B_BIN/gh" <<'GHEOF'
 #!/usr/bin/env bash
 case "$*" in
@@ -729,8 +735,7 @@ case "$*" in
         echo "bot-review/gemini/approved"
         ;;
     *"api"*"reviews"*)
-        # B6 verify: no reviews from bot (empty array → NONE state)
-        printf '[]\n'
+        # B6 verify: no reviews from bot (empty → jq -s '.' → [] → NONE state)
         ;;
 esac
 exit 0
@@ -750,6 +755,7 @@ T17C_BIN="$T17_SANDBOX/t17c-bin"
 mkdir -p "$T17C_BIN"
 
 # stub: pr view returns approved labels; api reviews returns APPROVED
+# Mock emits NDJSON objects matching what `gh api --jq '.[] | {state, submitted_at, user_login: .user.login}'` produces.
 cat > "$T17C_BIN/gh" <<'GHEOF'
 #!/usr/bin/env bash
 case "$*" in
@@ -759,7 +765,8 @@ case "$*" in
         ;;
     *"api"*"reviews"*)
         # B6 verify: both bots confirmed APPROVED via gh api
-        printf '[{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"chatgpt-codex-connector[bot]"}},{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"gemini-code-assist[bot]"}}]\n'
+        printf '{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user_login":"chatgpt-codex-connector[bot]"}\n'
+        printf '{"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z","user_login":"gemini-code-assist[bot]"}\n'
         ;;
 esac
 exit 0
@@ -806,7 +813,8 @@ case "$*" in
         ;;
     *"api"*"reviews"*)
         # B6 verify: latest review is CHANGES_REQUESTED (label is stale)
-        printf '[{"state":"CHANGES_REQUESTED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"chatgpt-codex-connector[bot]"}}]\n'
+        # Emit NDJSON matching gh api --jq '.[] | {state, submitted_at, user_login: .user.login}'
+        printf '{"state":"CHANGES_REQUESTED","submitted_at":"2026-01-01T00:00:00Z","user_login":"chatgpt-codex-connector[bot]"}\n'
         ;;
 esac
 exit 0
