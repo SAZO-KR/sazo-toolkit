@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test: dangerous-bash-block hook (Plan 10)
-# 30 cases: 11 spec + T_ESC + R-co + R6 + R7 + R-hs + T_MIG + T4b + T3b + T3c + narrow_off + T_FP1 + T_FP2 + T_REC + T_SUDO + T_REASON + R9a + R9b + R9c
+# 38 cases: 11 spec + T_ESC + R-co + R6 + R7 + R-hs + T_MIG + T4b + T3b + T3c + narrow_off + T_FP1 + T_FP2 + T_REC + T_SUDO + T_REASON + R9a + R9b + R9c
+# R10 additions: R10a + R10b + R10c + R10d + R10e + R10f + R10g + R10h
 #
 # Tests the hook directly via simulated payloads and tests lib helpers via sourcing.
 # SAZO_STATE_DIR is isolated per-test to prevent contamination.
@@ -359,6 +360,46 @@ assert_exit 0 'T_FP2 grep "rm -rf /" file → exit 0' \
 echo "Test: narrow hooks off → passthrough"
 assert_exit 0 "narrow_off git push --force → exit 0" \
     run_hook "git push --force" "test-sid-narrow" "$TMP_MAIN" "0" "1"
+
+# ---- R10a: git push --force>/dev/null → block (redirect bypass) ----
+echo "Test R10a: git push --force redirect bypass → block"
+assert_exit 2 "R10a git push --force>/dev/null → exit 2" \
+    run_hook "git push --force>/dev/null"
+
+# ---- R10b: rm -rf /* → block (root glob) ----
+echo "Test R10b: rm -rf /* root glob → block"
+assert_exit 2 "R10b rm -rf /* → exit 2" \
+    run_hook "rm -rf /*"
+
+# ---- R10c: git reset --hard origin/main-feature → pass (false positive guard) ----
+echo "Test R10c: git reset --hard origin/main-feature → pass (not protected branch)"
+assert_exit 0 "R10c git reset --hard origin/main-feature → exit 0" \
+    run_hook "git reset --hard origin/main-feature"
+
+# ---- R10d: git reset --hard origin/main → block (exact branch name) ----
+echo "Test R10d: git reset --hard origin/main → block"
+assert_exit 2 "R10d git reset --hard origin/main → exit 2" \
+    run_hook "git reset --hard origin/main"
+
+# ---- R10e: git branch -D main-feature → pass (false positive guard) ----
+echo "Test R10e: git branch -D main-feature → pass (not protected branch)"
+assert_exit 0 "R10e git branch -D main-feature → exit 0" \
+    run_hook "git branch -D main-feature"
+
+# ---- R10f: git checkout .gitignore → pass (false positive guard) ----
+echo "Test R10f: git checkout .gitignore → pass (not cwd discard)"
+assert_exit 0 "R10f git checkout .gitignore → exit 0" \
+    run_hook "git checkout .gitignore"
+
+# ---- R10g: rm -rf /usr>/dev/null → block (redirect bypass on system path) ----
+echo "Test R10g: rm -rf /usr redirect bypass → block"
+assert_exit 2 "R10g rm -rf /usr>/dev/null → exit 2" \
+    run_hook "rm -rf /usr>/dev/null"
+
+# ---- R10h: rm -f -r ~ → block (split flags for home deletion) ----
+echo "Test R10h: rm -f -r ~ (split flags) → block"
+assert_exit 2 "R10h rm -f -r ~ → exit 2" \
+    run_hook "rm -f -r ~"
 
 # ---- Summary ----
 echo "─────────────────────"

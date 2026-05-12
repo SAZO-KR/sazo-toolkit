@@ -95,6 +95,23 @@ register_workflow_hooks() {
     # 0) dangerous-bash-block — Bash (Plan 10, narrow ON, 가장 먼저 차단)
     _register_one_hook "PreToolUse" "Bash" \
         "$hooks_dir/dangerous-bash-block.sh"
+    # Ensure dangerous-bash-block is FIRST in PreToolUse for existing installs.
+    # _register_one_hook appends missing entries, so upgrade paths land it at the
+    # end. Reorder: move the entry whose command matches dangerous-bash-block.sh to
+    # index 0 so it intercepts before pre-worktree-gate / exploration-gate / etc.
+    local _dangerous_cmd="$hooks_dir/dangerous-bash-block.sh"
+    local _reorder_tmp
+    _reorder_tmp=$(mktemp)
+    jq --arg cmd "$_dangerous_cmd" '
+        if (.hooks.PreToolUse // [] | map(.hooks // [] | map(.command) | .[]) | any(. == $cmd))
+           and (.hooks.PreToolUse[0].hooks[0].command // "") != $cmd
+        then
+            .hooks.PreToolUse = (
+                (.hooks.PreToolUse | map(select((.hooks // [] | map(.command) | .[]) == $cmd))) +
+                (.hooks.PreToolUse | map(select((.hooks // [] | map(.command) | .[]) != $cmd)))
+            )
+        else . end
+    ' "$settings_file" > "$_reorder_tmp" && mv "$_reorder_tmp" "$settings_file" || rm -f "$_reorder_tmp"
 
     # 1) pre-worktree-gate — Write/Edit/NotebookEdit/Bash
     _register_one_hook "PreToolUse" "Write|Edit|NotebookEdit|Bash" \
