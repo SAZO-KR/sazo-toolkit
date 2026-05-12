@@ -1,7 +1,7 @@
 ---
 name: Automated-Code-Review-Cycle
 description: PR에 대해 Codex/Gemini 코드 리뷰를 자동으로 받고, 피드백 수정 → 재리뷰 사이클을 사용자 개입 없이 반복. 활성 리뷰어 전부 통과하면 완료. Gemini 미설정 repo는 Codex만으로 판단.
-version: 1.8.0
+version: 1.9.0
 when_to_use: PR 생성 후 코드 리뷰 사이클을 자동화하고 싶을 때
 ---
 
@@ -749,11 +749,34 @@ while ROUND < MAX_ROUNDS:
   filter_unanswered()           # in_reply_to_id로 미답변만
 
   if no_unanswered_feedback:
-    check_pass_conditions()     # 👍 / 인라인 0건 (Gemini 미설정 시 Codex만)
-    if all_passed: break        # ALL_PASSED = Codex통과 && (Gemini통과 or 미설정)
+    # Plan 08: label-based deterministic termination (Phase 1 = Option C)
+    HARNESS="${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}"
+    [ "$ROUND" -eq 1 ] && bash "$HARNESS/skills/automated-code-review-cycle/scripts/setup-labels.sh" >/dev/null 2>&1 || true
+    bash "$HARNESS/skills/automated-code-review-cycle/scripts/poll-labels.sh" --pr "$PR_NUM"
+    case $? in
+      0) ALL_PASSED=true; break ;;            # 활성 reviewer 전부 approved
+      2) notify_user "Bot review polling timeout"; break ;;
+      3) continue ;;                          # changes-requested → 다음 iteration unanswered fetch
+      4) echo "WARN: gh CLI 미설치/미인증 — Phase 1 라벨 게이트 skip" >&2 ;;
+      5) echo "WARN: active reviewers empty — Phase 1 라벨 게이트 skip" >&2 ;;
+    esac
     # 통과 조건 미충족 + 새 리뷰 없음 → stale로 처리됨 (위 로직)
 
   fix_commit_push_reply()       # Step 4 — 수정 → 테스트 → 커밋 → push → 답변(commit hash)
+
+  # Step 4-8: review 결과 라벨 부착 (Plan 08)
+  # LLM이 본문 해석 후 결정 → 라벨로 결정적 기록.
+  # - 모든 unanswered가 fix됐고 decline 없으면: <reviewer>/approved
+  # - decline 있거나 fix 진행 중: <reviewer>/changes-requested
+  # - 트리거만 보낸 상태: <reviewer>/in-progress (선택)
+  gh issue edit "$PR_NUM" \
+      --add-label "bot-review/codex/approved" \
+      --remove-label "bot-review/codex/in-progress,bot-review/codex/changes-requested"
+  # Gemini도 동일 (활성 시)
+  # gh issue edit "$PR_NUM" \
+  #     --add-label "bot-review/gemini/approved" \
+  #     --remove-label "bot-review/gemini/in-progress,bot-review/gemini/changes-requested"
+
   gemini_fallback_if_quota()    # Step 5 — Codex quota 초과 시에만
 
   # Wall-clock budget check
@@ -817,6 +840,7 @@ PR이 머지 가능한 상태입니다. / 사용자 확인이 필요합니다.
 | `ALL_*_REVIEW_IDS`를 Step 1의 cycle-start snapshot만 신뢰 | 매 라운드 Step 3-1 진입 시 재조회 — 사이클 도중 submit된 review를 누락하지 않도록 |
 | Step 2 polling에서 PR 작성자의 리뷰 reply도 "새 리뷰"로 카운트 | `gh api .../reviews`에 bot 로그인 **정확 매칭** 필수 (`select(.user.login == $codex or .user.login == $gemini)`). substring `test("codex\|gemini")`는 identity spoofing 위험 있음 — Step 3-3의 가드와 일관되게 exact match 사용 |
 | 봇이 quota 코멘트도 안 남기고 silent하게 멈춘 상태에서 무한 대기/즉시 fallback | polling 1회(≈10분) 무반응 시 stale=1 단계에서 `@codex review`(Codex) / `/gemini review`(Gemini) 코멘트로 **수동 재트리거 1회** 발송 후 다음 polling 대기. fallback/escalation은 그 후에도 무반응일 때만 |
+| 라벨 갱신 안 하고 다음 cycle 대기 | Step 4-8에서 매 round 끝 라벨 부착 — Plan 08 termination gate가 라벨 기반이므로 미부착 시 polling timeout |
 
 ## Related Skills
 

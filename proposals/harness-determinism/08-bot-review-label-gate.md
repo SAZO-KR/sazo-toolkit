@@ -99,6 +99,20 @@ Repo별 override: `.github/sazo-bot-review.json` 우선 (없으면 default skill
 
 `auto-update.sh` 또는 첫 cycle 진입 시 라벨 존재 검사 → 없으면 생성.
 
+## Phase 1 Scope (Option C only)
+
+**Phase 1 = Option C**: LLM이 봇 댓글 내용을 해석하여 라벨을 부착, skill이 라벨 폴링으로 결정적 판정.
+
+- `setup-labels.sh`: 최초 cycle 진입 시 `ROUND==1`이면 라벨 자동 생성 (`--force` 멱등)
+- `poll-labels.sh`: 라벨 상태 폴링, exit 0/2/3/4/5 반환
+- SKILL.md Step 4-8에서 LLM이 봇 댓글 해석 후 `gh issue edit --add-label` 호출
+- SKILL.md Step 6 termination block이 `poll-labels.sh` 반환 코드로 분기
+
+## Deferred (Option A·B)
+
+- **Option A** (봇 self-label): Codex/Gemini 봇이 직접 라벨 부착 — 봇 개발 또는 봇 설정 변경 필요. 현실적으로 불가.
+- **Option B** (Actions auto-label): GitHub Actions workflow가 봇 댓글 detect → 라벨 자동 부착 — workflow 개발 및 유지 비용. Phase 2에서 검토.
+
 ## 변경 파일
 
 ```
