@@ -50,7 +50,11 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
     exit 1
 fi
 
-# Merge repo override (entry-level replace for active_reviewers, deep merge for labels/polling)
+# Merge repo override (deep merge for active_reviewers per-reviewer + labels/polling)
+# CRITICAL: active_reviewers must be merged at the field level, not the reviewer level.
+# A shallow `base + ovr` replaces the entire reviewer object when the key exists in both,
+# causing fields present only in base (e.g. bot_login) to be silently dropped. Deep-merge
+# each reviewer's fields individually so partial overrides (e.g. label_prefix only) are safe.
 REPO_OVERRIDE=""
 if [[ -n "$REPO_DIR" && -f "$REPO_DIR/.github/sazo-bot-review.json" ]]; then
     REPO_OVERRIDE="$REPO_DIR/.github/sazo-bot-review.json"
@@ -61,8 +65,15 @@ if [[ -n "$REPO_OVERRIDE" ]]; then
         --slurpfile base "$CONFIG_PATH" \
         --slurpfile ovr "$REPO_OVERRIDE" \
         '
+        ($base[0].active_reviewers // {}) as $br |
+        ($ovr[0].active_reviewers // {}) as $or |
         $base[0]
-        | .active_reviewers = (($base[0].active_reviewers // {}) + ($ovr[0].active_reviewers // {}))
+        | .active_reviewers = (
+            ($br + $or)
+            | to_entries
+            | map(.value = (($br[.key] // {}) * ($or[.key] // {})))
+            | from_entries
+          )
         | .labels = ($base[0].labels * ($ovr[0].labels // {}))
         | .override_label = ($ovr[0].override_label // $base[0].override_label)
         | .polling = ($base[0].polling * ($ovr[0].polling // {}))

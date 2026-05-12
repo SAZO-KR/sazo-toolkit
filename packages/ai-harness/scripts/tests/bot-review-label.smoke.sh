@@ -772,6 +772,53 @@ PATH="$T17C_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
 rc=$?
 assert_exit 0 "$rc" "T17c: labels approved + api APPROVED → exit 0"
 
+# T18: repo override with label_prefix only (no bot_login) — deep-merge preserves bot_login
+# Regression guard for Codex P2: shallow merge silently dropped bot_login, disabling B6.
+# ─────────────────────────────────────────────────────────
+echo ""
+echo "=== T18: deep-merge preserves bot_login when override has label_prefix only ==="
+
+T18_SANDBOX="$SANDBOX/t18"
+T18_BIN="$T18_SANDBOX/bin"
+T18_REPO="$T18_SANDBOX/repo"
+mkdir -p "$T18_BIN" "$T18_REPO/.github"
+
+# repo override: only label_prefix, no bot_login (T14-style partial override)
+cat > "$T18_REPO/.github/sazo-bot-review.json" <<'EOF'
+{
+  "active_reviewers": {
+    "codex":  { "label_prefix": "custom/codex/" },
+    "gemini": { "label_prefix": "custom/gemini/" }
+  }
+}
+EOF
+
+# stub: labels say approved; api returns CHANGES_REQUESTED (B6 should catch this)
+cat > "$T18_BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+case "$*" in
+    *"remote get-url origin"*)
+        echo "https://github.com/OWNER/REPO.git"
+        ;;
+    *"pr view"*)
+        echo "custom/codex/approved"
+        echo "custom/gemini/approved"
+        ;;
+    *"api"*"reviews"*)
+        # B6 verify: latest review is CHANGES_REQUESTED (label is stale)
+        printf '[{"state":"CHANGES_REQUESTED","submitted_at":"2026-01-01T00:00:00Z","user":{"login":"chatgpt-codex-connector[bot]"}}]\n'
+        ;;
+esac
+exit 0
+GHEOF
+chmod +x "$T18_BIN/gh"
+
+rc=0
+PATH="$T18_BIN:$PATH" SAZO_BOT_POLL_INTERVAL=0 SAZO_BOT_MAX_ITER=2 \
+    bash "$POLL_LABELS" --pr 1 --config "$CONFIG" --repo-dir "$T18_REPO" 2>/dev/null
+rc=$?
+assert_exit 2 "$rc" "T18: partial override (label_prefix only) → bot_login preserved → B6 catches stale label → timeout exit 2"
+
 # ─────────────────────────────────────────────────────────
 echo ""
 echo "─────────────────────"
