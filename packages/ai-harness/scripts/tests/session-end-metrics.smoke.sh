@@ -369,6 +369,7 @@ echo "=== T5: 5s timeout portable ==="
     if ! command -v gtimeout >/dev/null 2>&1; then
         mark_test_skip "T5b.1 gtimeout not installed (skip — install coreutils to enable)"
         mark_test_skip "T5b.2 metric written via gtimeout"
+        mark_test_skip "T5b.3 gtimeout actually invoked (wrapper recorded call)"
     else
         TMP_HOME=$(mktemp -d)
         TMP_HARNESS=$(mktemp -d)
@@ -383,13 +384,23 @@ echo "=== T5: 5s timeout portable ==="
         PAYLOAD=$(mk_payload "ses-t5b" "/tmp/t5b.jsonl" "/tmp" "other")
 
         FAKE_PATH=$(mktemp -d)
-        # gtimeout is symlinked, timeout is explicitly omitted
-        for bin in bash cat date mkdir rm printf wc grep awk sed tr stat shasum sha1sum md5sum openssl mktemp cp chmod ln sleep jq gtimeout; do
+        trap 'rm -rf "$TMP_HOME" "$TMP_HARNESS" "$FAKE_PATH"' EXIT
+        # Build FAKE_PATH with everything EXCEPT timeout, gtimeout (wrapper added below)
+        for bin in bash cat date mkdir rm printf wc grep awk sed tr stat shasum sha1sum md5sum openssl mktemp cp chmod ln sleep jq; do
             if command -v "$bin" >/dev/null 2>&1; then
                 ln -sf "$(command -v "$bin")" "$FAKE_PATH/$bin" 2>/dev/null || true
             fi
         done
         # timeout explicitly not linked — gtimeout only
+        # Wrapper that proves gtimeout was invoked, then exec real gtimeout
+        GTIMEOUT_LOG="$TMP_HOME/.gtimeout-invoked"
+        REAL_GTIMEOUT=$(command -v gtimeout)
+        cat > "$FAKE_PATH/gtimeout" <<EOF
+#!/usr/bin/env bash
+echo "invoked: \$@" >> "$GTIMEOUT_LOG"
+exec "$REAL_GTIMEOUT" "\$@"
+EOF
+        chmod +x "$FAKE_PATH/gtimeout"
 
         RC=0
         HOME="$TMP_HOME" SAZO_HARNESS_DIR="$TMP_HARNESS" SAZO_STATE_DIR="$TMP_HOME/.claude/state" \
@@ -404,6 +415,13 @@ echo "=== T5: 5s timeout portable ==="
             assert_fail "T5b.2 metric written via gtimeout" "file missing or empty"
         fi
 
+        if [ -f "$GTIMEOUT_LOG" ]; then
+            assert_pass "T5b.3 gtimeout actually invoked (wrapper recorded call)"
+        else
+            assert_fail "T5b.3 gtimeout actually invoked (wrapper recorded call)" "no invocation log found"
+        fi
+
+        trap - EXIT
         rm -rf "$TMP_HOME" "$TMP_HARNESS" "$FAKE_PATH"
     fi
 
