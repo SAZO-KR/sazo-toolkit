@@ -29,8 +29,8 @@
 | 12 | Phase 2 default ON (workflow-state-machine) | P3 | 02, 06, dogfood | 0.3주 |
 | 13 | Control flow extensions (integrator wishlist 통합) | P1 (PR #27 후속) | PR #27 | 1.5주 |
 | 14? | (proposed) subagent routing enforcement (general-purpose 차단 + tools whitelist + Glob exploration-gate) | **P0 candidate** | 06 | TBD |
-| 09 | Architecture review 2026-05-12 (F1-F4 + S1-S7) | — (리포트) | — | ✅ 완료 |
-| 10 | P0 후속 plan (F1 dead code + F2 slash spike + F3 dead-end 문서화) | **P0** | 09 | 사용자 결정 3건 대기 |
+| 15 | Architecture review 2026-05-12 (F1-F4 + S1-S7) | — (리포트) | — | ✅ 완료 |
+| 16 | P0 후속 plan (F1 dead code + F2 slash spike + F3 dead-end 문서화) | **P0** | 15 | — |
 
 ### 우선순위 변경 사유 (2026-05-11)
 
