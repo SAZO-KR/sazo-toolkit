@@ -84,6 +84,20 @@ case "$first_token" in
             echo "[skip-streak] override issued. Next mutating tool will pass once." >&2
         fi
         ;;
+    /allow-dangerous)
+        if [ -n "$parsed" ]; then
+            local_rest="${parsed#allow-dangerous}"
+            local_rest=$(trim_leading "$local_rest")
+            state_init "$SAZO_SESSION_ID" "$SAZO_CWD" "${SAZO_MODEL:-unknown}"
+            nonce_val=""
+            if command -v openssl >/dev/null 2>&1; then
+                nonce_val=$(openssl rand -hex 16)
+            else
+                nonce_val=$(LC_ALL=C tr -dc 'a-f0-9' < /dev/urandom | head -c 32)
+            fi
+            dangerous_nonce_set "$SAZO_SESSION_ID" "$nonce_val" "$local_rest" "$SAZO_CWD"
+        fi
+        ;;
 esac
 
 exit 0

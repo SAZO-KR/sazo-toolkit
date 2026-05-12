@@ -168,6 +168,7 @@ _state_init_inner() {
             last_cycle_id: {},
             pre_commit_markers: {},
             dangerous_override_nonce: null,
+            dangerous_override_reason: null,
             dangerous_override_history: [],
             override_skip_streak_at: null,
             override_skip_streak_consumed: false,
@@ -208,16 +209,22 @@ _state_schema_upgrade() {
 _state_schema_upgrade_v4() {
     local f="$1"
     local tmp
-    tmp=$(mktemp)
-    jq '.schema_version = 4
+    tmp=$(mktemp "${f}.XXXXXX")
+    if jq '.schema_version = 4
         | .dangerous_override_nonce //= null
-        | .dangerous_override_history //= []' "$f" > "$tmp" && mv "$tmp" "$f"
+        | .dangerous_override_reason //= null
+        | .dangerous_override_history //= []' "$f" > "$tmp"; then
+        mv "$tmp" "$f"
+    else
+        rm -f "$tmp"
+        return 1
+    fi
 }
 
 _state_schema_upgrade_v5() {
     local f="$1"
     local tmp
-    tmp=$(mktemp)
+    tmp=$(mktemp "${f}.XXXXXX")
     jq '.schema_version = 5
         | .override_skip_streak_at //= null
         | .override_skip_streak_consumed //= false
@@ -665,6 +672,70 @@ _mark_approval_complete_inner() {
         .plan_approved_at = $now
         | .history += [{stage: "approval", status: "completed", by: $by, reason: $reason, ts: $now}]
     ' "$f" > "$tmp"; then mv "$tmp" "$f"; else rm -f "$tmp"; return 1; fi
+}
+
+# ----- dangerous override nonce (Plan 10) -----
+# dangerous_nonce_set <sid> <nonce> <reason> [cwd]
+# dangerous_nonce_consume <sid> <matched_pattern> [cwd]
+#   → null/empty이면 return 1 (block 유지)
+#   → 값 있으면 null로 reset, history append, return 0
+
+dangerous_nonce_set() {
+    local sid="$1" nonce="$2" reason="$3" cwd="${4:-${SAZO_CWD:-}}"
+    local f
+    f=$(state_file "$sid" "$cwd") || return 1
+    [ -f "$f" ] || state_init "$sid" "$cwd" "${SAZO_MODEL:-unknown}"
+    _with_lock "$f" _dangerous_nonce_set_inner "$f" "$nonce" "$reason"
+}
+
+_dangerous_nonce_set_inner() {
+    local f="$1" nonce="$2" reason="$3"
+    local tmp; tmp=$(mktemp "${f}.XXXXXX")
+    if jq --arg n "$nonce" --arg r "$reason" '
+        .dangerous_override_nonce = $n
+        | .dangerous_override_reason = $r
+    ' "$f" > "$tmp"; then
+        mv "$tmp" "$f"
+    else
+        rm -f "$tmp"
+        return 1
+    fi
+}
+
+dangerous_nonce_consume() {
+    local sid="$1" matched_pattern="$2" cwd="${3:-${SAZO_CWD:-}}"
+    local stored
+    stored=$(state_get "$sid" ".dangerous_override_nonce // \"\"" "$cwd")
+    # null/empty → block
+    [ -z "$stored" ] || [ "$stored" = "null" ] && return 1
+    # has nonce → consume: reset + append history
+    local f
+    f=$(state_file "$sid" "$cwd") || return 1
+    [ -f "$f" ] || return 1
+    _with_lock "$f" _dangerous_nonce_consume_inner "$f" "$stored" "$matched_pattern"
+}
+
+_dangerous_nonce_consume_inner() {
+    local f="$1" nonce="$2" pattern="$3"
+    local ts; ts=$(date +%Y-%m-%dT%H:%M:%S%z)
+    local tmp; tmp=$(mktemp "${f}.XXXXXX")
+    # Atomic re-validate inside lock: select(.dangerous_override_nonce == $n)
+    # ensures a second concurrent consumer sees null (first already cleared it)
+    # and fails the select, producing null output — jq exits 0 but output is
+    # null, so the `if` below is false and we return 1 (block).
+    local out
+    out=$(jq --arg n "$nonce" --arg p "$pattern" --arg ts "$ts" '
+        select(.dangerous_override_nonce == $n)
+        | .dangerous_override_nonce = null
+        | .dangerous_override_history = ((.dangerous_override_history // []) + [{nonce: $n, pattern: $p, reason: (.dangerous_override_reason // null), consumed_at: $ts}])
+        | .dangerous_override_reason = null
+    ' "$f" 2>/dev/null)
+    if [ -n "$out" ]; then
+        printf '%s\n' "$out" > "$tmp" && mv "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+    else
+        rm -f "$tmp"
+        return 1
+    fi
 }
 
 # ----- hook payload reader -----

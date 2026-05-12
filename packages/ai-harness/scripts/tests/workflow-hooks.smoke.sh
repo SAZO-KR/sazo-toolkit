@@ -839,12 +839,12 @@ PRE2=$(jq '(.hooks.PreToolUse // []) | length' "$TMP_SETTINGS")
 POST2=$(jq '(.hooks.PostToolUse // []) | length' "$TMP_SETTINGS")
 USR2=$(jq '(.hooks.UserPromptSubmit // []) | length' "$TMP_SETTINGS")
 
-if [ "$PRE1" = "$PRE2" ] && [ "$PRE1" = "4" ]; then
+if [ "$PRE1" = "$PRE2" ] && [ "$PRE1" = "5" ]; then
     PASS=$((PASS + 1))
-    echo "  ✓ PreToolUse 4 entries idempotent"
+    echo "  ✓ PreToolUse 5 entries idempotent"
 else
     FAIL=$((FAIL + 1))
-    echo "  ✗ PreToolUse: run1=$PRE1 run2=$PRE2 (expected 4)"
+    echo "  ✗ PreToolUse: run1=$PRE1 run2=$PRE2 (expected 5)"
 fi
 if [ "$POST1" = "$POST2" ] && [ "$POST1" = "2" ]; then
     PASS=$((PASS + 1))
