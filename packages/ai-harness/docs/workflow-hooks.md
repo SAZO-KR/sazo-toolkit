@@ -155,6 +155,10 @@ implementation에는 별도 gate 없음 (approval ~ ci 사이 자유 구간). PR
 approval/ci bypass(`SAZO_ALLOW_APPROVAL_BYPASS`, `SAZO_ALLOW_CI_SKIP`)로 PR을 만들었어도
 review만큼은 건너뛸 수 없다.
 
+> ⚠️ **영속성 주의**: `SAZO_ALLOW_APPROVAL_BYPASS=1`로 한 번 우회 → 내부적으로 `stage_mark approval completed by="bypass"` 호출 → state file에 영속.
+> 후속 hook 호출에서 env unset해도 approval gate 통과 유지. 의도된 동작이지만 잘못 알고 있으면 디버깅 시간 소모.
+> 새 approval cycle 원하면 state file 직접 reset 필요.
+
 **한계**: `gh pr m` (gh CLI abbreviation) 미매칭. alias 사용 시 우회 가능 — 알려진 한계.
 
 ### SAZO_ALLOW_MERGE_BYPASS=1
