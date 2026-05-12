@@ -712,11 +712,18 @@ _dangerous_nonce_consume_inner() {
     local f="$1" nonce="$2" pattern="$3"
     local ts; ts=$(date +%Y-%m-%dT%H:%M:%S%z)
     local tmp; tmp=$(mktemp)
-    if jq --arg n "$nonce" --arg p "$pattern" --arg ts "$ts" '
-        .dangerous_override_nonce = null
+    # Atomic re-validate inside lock: select(.dangerous_override_nonce == $n)
+    # ensures a second concurrent consumer sees null (first already cleared it)
+    # and fails the select, producing null output — jq exits 0 but output is
+    # null, so the `if` below is false and we return 1 (block).
+    local out
+    out=$(jq --arg n "$nonce" --arg p "$pattern" --arg ts "$ts" '
+        select(.dangerous_override_nonce == $n)
+        | .dangerous_override_nonce = null
         | .dangerous_override_history = ((.dangerous_override_history // []) + [{nonce: $n, pattern: $p, consumed_at: $ts}])
-    ' "$f" > "$tmp"; then
-        mv "$tmp" "$f"
+    ' "$f" 2>/dev/null)
+    if [ -n "$out" ]; then
+        printf '%s\n' "$out" > "$tmp" && mv "$tmp" "$f" || { rm -f "$tmp"; return 1; }
     else
         rm -f "$tmp"
         return 1

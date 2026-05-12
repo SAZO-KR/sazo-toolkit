@@ -52,16 +52,16 @@ check_dangerous() {
         if echo "$seg" | grep -qE 'git[[:space:]]+checkout[[:space:]]+--[[:space:]]+.+'; then
             echo "git_checkout_discard"; return 0
         fi
-        # 5. rm_rf_root
-        if echo "$seg" | grep -qE 'rm[[:space:]]+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)[[:space:]]+/[[:space:]]*$'; then
+        # 5. rm_rf_root — match trailing chars (backgrounding, redirect, extra args)
+        if echo "$seg" | grep -qE 'rm[[:space:]]+.*-[a-zA-Z]*[rR].*[[:space:]]+/[[:space:]]*([[:space:]]|&|\|[|>]?|>|$)'; then
             echo "rm_rf_root"; return 0
         fi
         # 6. rm_rf_home
         if echo "$seg" | grep -qE 'rm[[:space:]]+-[a-zA-Z]*[rRf][a-zA-Z]*[[:space:]]+(\$HOME(\b|/)|~(\b|/))'; then
             echo "rm_rf_home"; return 0
         fi
-        # 7. rm_rf_abs_system_path
-        if echo "$seg" | grep -qE 'rm[[:space:]]+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)[[:space:]]+/[a-zA-Z]'; then
+        # 7. rm_rf_abs_system_path — restrict to sensitive system directories only
+        if echo "$seg" | grep -qE 'rm[[:space:]]+.*-[a-zA-Z]*[rR].*[[:space:]]+/(usr|etc|bin|sbin|var|opt|lib|boot|root|dev|proc|sys)([[:space:]]|/|$)'; then
             echo "rm_rf_abs_system_path"; return 0
         fi
         # 8. sql_destructive — 패턴은 segment 전체 텍스트 대상 (here-string body 포함)
@@ -77,7 +77,7 @@ matched=$(check_dangerous "$cmd")
 
 # matched. nonce consume 시도.
 if dangerous_nonce_consume "$SAZO_SESSION_ID" "$matched" "$SAZO_CWD"; then
-    simple_audit "dangerous_override_consumed" "sid=$SAZO_SESSION_ID" "pattern=$matched" "cmd=$(printf '%s' "$cmd" | head -c 200)"
+    simple_audit "dangerous_override_consumed" "sid=$SAZO_SESSION_ID" "pattern=$matched" "cmd=$(printf '%s' "$cmd" | tr '\n' ' ' | head -c 200)"
     exit 0
 fi
 
@@ -91,5 +91,5 @@ CLAUDE.md "금지 사항" hook whitelist 매칭. 의도적이라면:
 
 긴급 비활성: SAZO_DISABLE_DANGEROUS_BLOCK=1 (세션 단위)
 EOF
-simple_audit "dangerous_blocked" "sid=$SAZO_SESSION_ID" "pattern=$matched" "cmd=$(printf '%s' "$cmd" | head -c 200)"
+simple_audit "dangerous_blocked" "sid=$SAZO_SESSION_ID" "pattern=$matched" "cmd=$(printf '%s' "$cmd" | tr '\n' ' ' | head -c 200)"
 exit 2

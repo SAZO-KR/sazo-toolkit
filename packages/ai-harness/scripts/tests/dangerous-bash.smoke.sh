@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Smoke test: dangerous-bash-block hook (Plan 10)
-# 17 cases: 11 spec + T_ESC + R-co + R6 + R7 + R-hs + T_MIG
+# 21 cases: 11 spec + T_ESC + R-co + R6 + R7 + R-hs + T_MIG + T4b + T3b + T3c + narrow_off
 #
 # Tests the hook directly via simulated payloads and tests lib helpers via sourcing.
 # SAZO_STATE_DIR is isolated per-test to prevent contamination.
@@ -96,6 +96,21 @@ assert_exit 0 "T3 rm -rf build/ → exit 0" \
 echo "Test T4: rm_rf_root block"
 assert_exit 2 "T4 rm -rf / → exit 2" \
     run_hook "rm -rf /"
+
+# ---- T4b: rm -rf / & → block (trailing background op) ----
+echo "Test T4b: rm_rf_root with trailing & block"
+assert_exit 2 "T4b rm -rf / & → exit 2" \
+    run_hook "rm -rf / &"
+
+# ---- T3b: rm -rf /app → pass (not a system dir) ----
+echo "Test T3b: rm_rf_abs_system_path /app → pass (restricted to system dirs)"
+assert_exit 0 "T3b rm -rf /app → exit 0" \
+    run_hook "rm -rf /app"
+
+# ---- T3c: rm -rf /usr → block (system dir) ----
+echo "Test T3c: rm_rf_abs_system_path /usr → block"
+assert_exit 2 "T3c rm -rf /usr → exit 2" \
+    run_hook "rm -rf /usr"
 
 # ---- T5: rm -rf $HOME → block (exit 2) ----
 echo "Test T5: rm_rf_home block"
