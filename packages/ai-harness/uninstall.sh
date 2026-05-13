@@ -112,15 +112,14 @@ if [ -f "$SETTINGS_FILE" ] && command -v jq &>/dev/null; then
 
     # sazo-ai-harness 경로를 참조하는 hook 항목 제거
     jq '
-      def remove_harness_hooks:
+      def filter_harness_commands:
         if type == "array" then
-          [ .[] | select(
-            (.hooks // [] | map(.command // "") | any(contains("sazo-ai-harness"))) | not
-          ) ]
+          [ .[] | .hooks = ([(.hooks // [])[] | select((.command // "") | contains("sazo-ai-harness") | not)])
+            | select((.hooks | length) > 0) ]
         else . end;
 
       if .hooks then
-        .hooks |= with_entries(.value |= remove_harness_hooks)
+        .hooks |= with_entries(.value |= filter_harness_commands)
         | .hooks |= with_entries(select(.value | length > 0))
       else . end
 
@@ -211,10 +210,21 @@ echo "[7/8] CLI 도구 및 상태 파일 제거..."
 for f in "$HOME/.local/bin/awake" \
          "$HOME/.local/bin/sazo-workflow" \
          "$HOME/.local/bin/claude-sync-notify.sh"; do
-    if [ -L "$f" ] || [ -f "$f" ]; then
+    if [ -L "$f" ]; then
+        target=$(readlink "$f" 2>/dev/null || true)
+        if echo "$target" | grep -q "sazo-ai-harness"; then
+            rm -f "$f"
+            info "$(basename "$f") 제거 (심볼릭 링크)"
+            removed=$((removed + 1))
+        else
+            skip "$(basename "$f") (sazo-ai-harness 외 링크 — 보존)"
+        fi
+    elif [ -f "$f" ] && echo "$f" | grep -q "claude-sync-notify"; then
         rm -f "$f"
-        info "$(basename "$f") 제거"
+        info "$(basename "$f") 제거 (복사된 파일)"
         removed=$((removed + 1))
+    elif [ -f "$f" ]; then
+        skip "$(basename "$f") (사용자 파일 — 보존)"
     fi
 done
 
