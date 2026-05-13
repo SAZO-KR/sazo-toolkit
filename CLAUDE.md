@@ -7,7 +7,6 @@
 ```
 packages/
 ├── ai-harness/      # AI 에이전트/스킬/커맨드 (archived)
-├── claude-notify/   # Claude 완료 알림 (Bash)
 ├── translate-bot/   # 번역 봇 (Go + AWS Lambda)
 ├── bamboo-forest/   # 익명 게시판 봇 (Go + AWS Lambda)
 └── shuffle-bot/     # 셔플/룰렛 봇 (Go + AWS Lambda)
@@ -21,7 +20,6 @@ packages/
 | ----------------------------------------------------- | ------------------------------------------------------------------ |
 | ai-harness                                            | `bash -n packages/ai-harness/uninstall.sh` |
 | Go 패키지 (translate-bot, bamboo-forest, shuffle-bot) | `cd packages/{name} && go build ./...`                             |
-| 셸 스크립트 (claude-notify)                           | `bash -n scripts/*.sh`                                             |
 
 ## 패키지별 규칙
 
