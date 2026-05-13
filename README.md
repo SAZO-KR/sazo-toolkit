@@ -4,13 +4,6 @@
 
 ## 📦 패키지
 
-### [claude-notify](./packages/claude-notify)
-Claude CLI 응답 완료 시 macOS 알림을 보내주는 훅 설치 스크립트
-
-- ✅ 응답 완료 시 자동 알림
-- ✅ Git 브랜치 정보 포함
-- ✅ Worktree 환경 지원
-
 ### [translate-bot](./packages/translate-bot)
 Slack 채널에서 한국어와 일본어를 자동으로 번역해주는 봇
 

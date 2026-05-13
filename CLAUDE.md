@@ -7,7 +7,6 @@
 ```
 packages/
 ├── ai-harness/      # AI 에이전트 설정 하네스 (Bash)
-├── claude-notify/   # Claude 완료 알림 (Bash)
 ├── translate-bot/   # 번역 봇 (Go + AWS Lambda)
 ├── bamboo-forest/   # 익명 게시판 봇 (Go + AWS Lambda)
 └── shuffle-bot/     # 셔플/룰렛 봇 (Go + AWS Lambda)
@@ -21,7 +20,6 @@ packages/
 | ----------------------------------------------------- | ------------------------------------------------------------------ |
 | ai-harness                                            | `bash -n scripts/auto-update.sh && bash -n install.sh && bash -n scripts/setup-rtk.sh && bash -n scripts/awake/awake.sh && bash -n scripts/sazo-workflow.sh && bash scripts/tests/setup-rtk.smoke.sh && bash scripts/tests/awake.smoke.sh && bash scripts/tests/sleep-guard-cleanup.smoke.sh && bash scripts/tests/workflow-hooks.smoke.sh && bash scripts/tests/footer-parser.smoke.sh && bash scripts/tests/verdict-nonce.smoke.sh && bash scripts/tests/verdict-aggregation.smoke.sh && bash scripts/tests/state-truncate.smoke.sh && bash scripts/tests/verdict-flow.smoke.sh && bash scripts/tests/ci-invalidate.smoke.sh && bash scripts/tests/workflow-cli.smoke.sh && bash scripts/tests/phase1-default.smoke.sh && bash scripts/tests/general-purpose-gate.smoke.sh && bash scripts/tests/approval-immediate.smoke.sh && bash scripts/tests/slash-detect.smoke.sh && bash scripts/tests/session-end-metrics.smoke.sh && bash scripts/tests/task-output-audit.smoke.sh && bash scripts/tests/auto-skip-block.smoke.sh && bash scripts/tests/approval-bypass.smoke.sh && bash scripts/tests/worktree-gate.smoke.sh && bash scripts/tests/pr-merge-gate.smoke.sh && bash scripts/tests/register-stale-dedup.smoke.sh && bash scripts/tests/bot-review-label.smoke.sh && bash scripts/tests/skip-streak.smoke.sh && bash scripts/tests/dangerous-bash.smoke.sh && bash scripts/tests/workflow-state-utf8-locale.smoke.sh` |
 | Go 패키지 (translate-bot, bamboo-forest, shuffle-bot) | `cd packages/{name} && go build ./...`                             |
-| 셸 스크립트 (claude-notify)                           | `bash -n scripts/*.sh`                                             |
 
 ## 패키지별 규칙
 
