@@ -56,15 +56,26 @@ PLIST="$HOME/Library/LaunchAgents/com.opencode.claude-sync.plist"
 PLIST_LEGACY="$HOME/Library/LaunchAgents/shop.sazo.claude-sleep-guard.plist"
 
 found_plist=0
-for p in "$PLIST" "$PLIST_LEGACY"; do
-    if [ -f "$p" ]; then
-        launchctl unload "$p" 2>/dev/null || true
-        rm -f "$p"
-        info "$(basename "$p") 해제 및 삭제"
+
+if [ -f "$PLIST" ]; then
+    if grep -q "claude-sync-notify" "$PLIST" 2>/dev/null; then
+        launchctl unload "$PLIST" 2>/dev/null || true
+        rm -f "$PLIST"
+        info "$(basename "$PLIST") 해제 및 삭제 (ai-harness가 수정한 plist)"
         removed=$((removed + 1))
         found_plist=1
+    else
+        skip "$(basename "$PLIST") (ai-harness 수정 아님 — 보존)"
     fi
-done
+fi
+
+if [ -f "$PLIST_LEGACY" ]; then
+    launchctl unload "$PLIST_LEGACY" 2>/dev/null || true
+    rm -f "$PLIST_LEGACY"
+    info "$(basename "$PLIST_LEGACY") 해제 및 삭제 (레거시)"
+    removed=$((removed + 1))
+    found_plist=1
+fi
 [ "$found_plist" -eq 0 ] && skip "LaunchAgent"
 
 # --- 3. 심볼릭 링크 제거 (sazo-ai-harness를 가리키는 것만) ---
