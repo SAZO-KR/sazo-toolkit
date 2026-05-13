@@ -6,7 +6,7 @@
 
 ```
 packages/
-├── ai-harness/      # AI 에이전트 설정 하네스 (Bash)
+├── ai-harness/      # AI 에이전트/스킬/커맨드 (archived)
 ├── translate-bot/   # 번역 봇 (Go + AWS Lambda)
 ├── bamboo-forest/   # 익명 게시판 봇 (Go + AWS Lambda)
 └── shuffle-bot/     # 셔플/룰렛 봇 (Go + AWS Lambda)
@@ -18,18 +18,15 @@ packages/
 
 | 패키지                                                | 검증 방법                                                          |
 | ----------------------------------------------------- | ------------------------------------------------------------------ |
-| ai-harness                                            | `bash -n scripts/auto-update.sh && bash -n install.sh && bash -n scripts/setup-rtk.sh && bash -n scripts/awake/awake.sh && bash -n scripts/sazo-workflow.sh && bash scripts/tests/setup-rtk.smoke.sh && bash scripts/tests/awake.smoke.sh && bash scripts/tests/sleep-guard-cleanup.smoke.sh && bash scripts/tests/workflow-hooks.smoke.sh && bash scripts/tests/footer-parser.smoke.sh && bash scripts/tests/verdict-nonce.smoke.sh && bash scripts/tests/verdict-aggregation.smoke.sh && bash scripts/tests/state-truncate.smoke.sh && bash scripts/tests/verdict-flow.smoke.sh && bash scripts/tests/ci-invalidate.smoke.sh && bash scripts/tests/workflow-cli.smoke.sh && bash scripts/tests/phase1-default.smoke.sh && bash scripts/tests/general-purpose-gate.smoke.sh && bash scripts/tests/approval-immediate.smoke.sh && bash scripts/tests/slash-detect.smoke.sh && bash scripts/tests/session-end-metrics.smoke.sh && bash scripts/tests/task-output-audit.smoke.sh && bash scripts/tests/auto-skip-block.smoke.sh && bash scripts/tests/approval-bypass.smoke.sh && bash scripts/tests/worktree-gate.smoke.sh && bash scripts/tests/pr-merge-gate.smoke.sh && bash scripts/tests/register-stale-dedup.smoke.sh && bash scripts/tests/bot-review-label.smoke.sh && bash scripts/tests/skip-streak.smoke.sh && bash scripts/tests/dangerous-bash.smoke.sh && bash scripts/tests/workflow-state-utf8-locale.smoke.sh` |
+| ai-harness                                            | `bash -n packages/ai-harness/uninstall.sh` |
 | Go 패키지 (translate-bot, bamboo-forest, shuffle-bot) | `cd packages/{name} && go build ./...`                             |
 
 ## 패키지별 규칙
 
-### ai-harness (팀 공유 AI 설정)
+### ai-harness (archived)
 
-- `commands/`, `skills/`, `agents/` → `~/.claude/`에 심볼릭 링크됨
-- `_TEMPLATE*` 파일은 link 대상에서 제외됨
-- `install.sh` 수정 시 → 반드시 새 환경에서 테스트 (기존 설치 깨뜨리지 않는지)
-- `scripts/auto-update.sh` → SessionStart 훅으로 실행됨. 비대화형이어야 함.
-- **스킬 권한 선언 필수**: 스킬이 기본 allow 리스트에 없는 bash 명령(`date`, `sleep`, `echo`, `seq` 등)을 사용하면, 해당 스킬 디렉토리에 `permissions.json`을 두어 declare한다. `install.sh`와 `auto-update.sh`가 자동으로 `~/.claude/settings.json`의 `permissions.allow`에 union한다. 상세는 `packages/ai-harness/README.md` 참조.
+- Hook/workflow 시스템 폐기됨. Agent 정의, 스킬, 커맨드만 보존.
+- 기존 설치 제거: `curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/ai-harness/uninstall.sh | bash`
 
 ### Go 패키지 (Slack 봇)
 

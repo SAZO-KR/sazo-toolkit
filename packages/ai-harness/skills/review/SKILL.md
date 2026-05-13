@@ -45,23 +45,17 @@ description: Use after CI passes and before PR creation — launches independent
 └─────────────────────────────────────────────┘
 ```
 
-## Aggregation gate vs. multi-perspective fan-out
+## Review modes
 
-There are TWO modes — choose explicitly:
+**Mode A (DEFAULT, recommended):**
+- **2 Task calls**: `code-reviewer` (5개 관점 통합) + `architect-advisor`.
+- 양쪽 모두 PASS 반환 시 통과.
 
-**Mode A: Aggregation gate (DEFAULT, recommended)**
-- Launch **2 Task calls**: one `code-reviewer` (with all 5 perspectives consolidated in the prompt) + one `architect-advisor`.
-- Each call carries one nonce. Hook aggregates verdicts per agent.
-- review_expected_set MUST be `["code-reviewer","architect-advisor"]` (unique agent names).
-- This is what the verdict-footer aggregation gate is designed for.
+**Mode B (advisory):**
+- 5 parallel Task calls (4× code-reviewer + 1× architect-advisor).
+- Main loop이 각 결과를 직접 판단.
 
-**Mode B: Multi-perspective fan-out (advisory only, NOT aggregation-tracked)**
-- Launch 5 parallel Task calls (4× code-reviewer + 1× architect-advisor) for prompt-cache savings.
-- All 4 code-reviewer verdicts collapse into the same `last_verdicts.review["code-reviewer"]` slot under per-agent keying. The hook gate cannot distinguish individual perspectives — only the most-recently-arrived verdict survives.
-- DO NOT use this mode as an aggregation gate. Use it only when the main loop manually evaluates each result and the user (not the hook) decides pass/fail.
-- If you use this mode, set `SAZO_VERDICT_FOOTER_ENFORCE=warn` so hook fall-through to legacy stage_mark is preserved.
-
-The remainder of this section describes the perspectives. In Mode A, consolidate them into a single code-reviewer prompt. In Mode B, fan them out across 4 calls (advisory).
+Mode A에서는 5개 관점을 하나의 code-reviewer 프롬프트에 통합. Mode B에서는 관점별로 분리.
 
 ## Review Agents (perspectives)
 
@@ -167,76 +161,7 @@ Each reviewer returns **PASS** or **FAIL**. The threshold:
 
 ## How to Launch Review Agents
 
-### 1. Initialize the review cycle (clear stale verdicts + set expected reviewers)
-
-Before launching, atomically clear any leftover verdicts from a previous
-cycle and declare which reviewers will participate. Use
-`verdict_cycle_init` — it does both in a single locked write so a stale
-APPROVE from a prior cycle cannot combine with a fresh APPROVE to pass
-the gate prematurely.
-
-**IMPORTANT — unique agent names only.** `_evaluate_stage_completion`
-keys verdicts by agent name (`last_verdicts.review[<agent>]`). Listing
-the same agent multiple times in `review_expected_set` collapses to one
-key — it does NOT enforce N invocations. Use unique entries.
-
-```bash
-SESSION_ID="${CLAUDE_SESSION_ID:-${SAZO_SESSION_ID:-}}"
-CWD="$(pwd)"
-bash -c "source ${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}/scripts/hooks/lib/session-state.sh && \
-         verdict_cycle_init '$SESSION_ID' '$CWD' 'review' \
-         '[\"code-reviewer\",\"architect-advisor\"]'"
-```
-
-`verdict_cycle_init` resets `last_verdicts.review` to `{}` and sets
-`review_expected_set` to the supplied list — both under one
-`_with_lock` guard. Skipping this step risks the gate passing on stale
-verdicts.
-
-### 2. Mint nonces and inject into each prompt
-
-**CRITICAL: each Task call needs its own nonce bound to that exact agent.**
-`verdict_nonce_consume` rejects a footer whose nonce was minted for a
-different agent. Reusing one nonce across both agents will silently
-reject one of the verdicts and the gate will never complete.
-
-Mode A — mint TWO nonces, one per agent:
-
-```bash
-NONCE_CR=$(bash -c "source ${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}/scripts/hooks/lib/session-state.sh && \
-                    verdict_nonce_issue '$SESSION_ID' '$CWD' 'code-reviewer' 'review'")
-NONCE_AA=$(bash -c "source ${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}/scripts/hooks/lib/session-state.sh && \
-                    verdict_nonce_issue '$SESSION_ID' '$CWD' 'architect-advisor' 'review'")
-
-# Build per-agent footer instruction
-mk_footer_instruction() {
-  cat <<EOF
-
----
-At the end of your response, append exactly this footer (do not omit, do
-not modify the nonce):
----SAZO_FOOTER_BEGIN---
-SAZO_VERDICT_NONCE: $1
-SAZO_VERDICT: APPROVE | BLOCK | NEEDS_REVISION
-SAZO_BLOCKING_ISSUES: <integer>
----SAZO_FOOTER_END---
-EOF
-}
-
-CR_INSTRUCTION=$(mk_footer_instruction "$NONCE_CR")
-AA_INSTRUCTION=$(mk_footer_instruction "$NONCE_AA")
-```
-
-Append `$CR_INSTRUCTION` to the `code-reviewer` Task prompt and
-`$AA_INSTRUCTION` to the `architect-advisor` Task prompt — each at the
-end (after the perspective-specific tail). The shared cached prefix is
-unaffected — the per-call nonce sits in the per-call tail.
-
-Mode B (advisory): mint one nonce per agent type as needed; the gate
-treats the result as advisory only, so the strictness above doesn't
-apply, but minting per-call nonces still prevents replay.
-
-### 3. Launch the parallel Task calls
+### 1. Launch the parallel Task calls
 
 **Mode A (aggregation gate, default — 2 calls):**
 
@@ -256,7 +181,7 @@ Task(
 )
 ```
 
-Two Task calls, each with its own nonce. Hook aggregates: stage marks `completed` only when both return APPROVE.
+Two Task calls. 양쪽 모두 APPROVE 반환 시 통과.
 
 **Mode B (advisory, multi-perspective fan-out — 5 calls):**
 
@@ -270,7 +195,7 @@ For each of the 5 perspectives, use Task tool:
   )
 ```
 
-In Mode B, hook aggregation is unreliable (per-agent keying collapses 4 code-reviewer slots) — the main loop must evaluate each result manually and treat the gate as advisory.
+Mode B에서는 main loop이 각 결과를 직접 평가.
 
 **CRITICAL (both modes):**
   - Do NOT pass session_id — each review MUST be a fresh session
@@ -282,22 +207,7 @@ Agent selection:
   - Correctness / Security / Performance / Test Quality → `code-reviewer` (diff-based, sonnet)
   - Architecture → `architect-advisor` (depth over breadth, sonnet — escalate to opus only when the main loop identifies architecturally sensitive changes; see CLAUDE.md §0)
 
-### 4. Verdict aggregation (automatic)
-
-The PostToolUse hook (workflow-state-machine.sh) parses each reviewer's
-footer, validates the nonce against the issued pool, and records the
-verdict in state. When **every** expected reviewer has responded with
-`APPROVE`, the review stage is automatically marked complete. Any single
-`BLOCK` keeps the stage incomplete — proceed to "Handling Review Results"
-below.
-
-If the SAZO_VERDICT_FOOTER_ENFORCE env is `warn` (Phase 1 default), a
-missing footer falls back to legacy stage_mark — but the
-`verdict_missing_count` metric increments, so callers omitting the footer
-are detectable. Switch per-agent to `block` once dogfooding shows footer
-compliance.
-
-## Handling Review Results
+### 2. Handling Review Results
 
 **ALL PASS:** Proceed to the next workflow step.
 
