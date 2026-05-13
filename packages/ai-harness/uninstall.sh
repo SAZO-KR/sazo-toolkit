@@ -12,7 +12,9 @@
 set -uo pipefail
 
 INSTALL_DIR="$HOME/.config/sazo-ai-harness"
+INSTALL_DIR_LEGACY="$HOME/.config/sazo-ai-prompts"
 SETTINGS_FILE="$HOME/.claude/settings.json"
+[ -L "$SETTINGS_FILE" ] && SETTINGS_FILE=$(readlink -f "$SETTINGS_FILE" 2>/dev/null || readlink "$SETTINGS_FILE")
 CLAUDE_MD="$HOME/.claude/CLAUDE.md"
 OPENCODE_CONFIG="$HOME/.config/opencode/opencode.json"
 
@@ -83,7 +85,7 @@ remove_harness_symlinks() {
     for item in "$dir"/*; do
         [ -L "$item" ] || continue
         target=$(readlink "$item" 2>/dev/null || true)
-        if echo "$target" | grep -q "sazo-ai-harness"; then
+        if echo "$target" | grep -qE "sazo-ai-harness|sazo-ai-prompts"; then
             rm -f "$item"
             count=$((count + 1))
         fi
@@ -114,7 +116,7 @@ if [ -f "$SETTINGS_FILE" ] && command -v jq &>/dev/null; then
     jq '
       def filter_harness_commands:
         if type == "array" then
-          [ .[] | .hooks = ([(.hooks // [])[] | select((.command // "") | contains("sazo-ai-harness") | not)])
+          [ .[] | .hooks = ([(.hooks // [])[] | select((.command // "") | test("sazo-ai-harness|sazo-ai-prompts") | not)])
             | select((.hooks | length) > 0) ]
         else . end;
 
@@ -212,7 +214,7 @@ for f in "$HOME/.local/bin/awake" \
          "$HOME/.local/bin/claude-sync-notify.sh"; do
     if [ -L "$f" ]; then
         target=$(readlink "$f" 2>/dev/null || true)
-        if echo "$target" | grep -q "sazo-ai-harness"; then
+        if echo "$target" | grep -qE "sazo-ai-harness|sazo-ai-prompts"; then
             rm -f "$f"
             info "$(basename "$f") 제거 (심볼릭 링크)"
             removed=$((removed + 1))
@@ -247,13 +249,15 @@ fi
 echo ""
 echo "[8/8] 설치 디렉토리 삭제..."
 
-if [ -d "$INSTALL_DIR" ]; then
-    rm -rf "$INSTALL_DIR"
-    info "$INSTALL_DIR 삭제 완료"
-    removed=$((removed + 1))
-else
-    skip "설치 디렉토리"
-fi
+for d in "$INSTALL_DIR" "$INSTALL_DIR_LEGACY"; do
+    if [ -d "$d" ]; then
+        rm -rf "$d"
+        info "$d 삭제 완료"
+        removed=$((removed + 1))
+    fi
+done
+
+[ ! -d "$INSTALL_DIR" ] && [ ! -d "$INSTALL_DIR_LEGACY" ] && skip "설치 디렉토리"
 
 # --- 완료 ---
 
