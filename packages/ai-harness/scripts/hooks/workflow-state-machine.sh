@@ -143,8 +143,9 @@ EOF
     fi
     audit_log "stage_block" "${SAZO_SESSION_ID:-}" "$stage" "blocked" "hook" \
         "soft_warn_count=$count exceeded threshold $warn_threshold; tool=$SAZO_TOOL_NAME"
+    # NOTE: 한국어/non-ASCII 직접 후행 시 ${var}로 brace 필수 — LC_ALL=C 환경에서 bash가 첫 UTF-8 byte를 변수명 일부로 파싱
     cat >&2 <<EOF
-[workflow-block] stage=$stage 미통과 $count회 — $SAZO_TOOL_NAME 차단.
+[workflow-block] stage=$stage 미통과 ${count}회 — $SAZO_TOOL_NAME 차단.
 $msg
 Override:
   - skip: /skip $stage <reason>
