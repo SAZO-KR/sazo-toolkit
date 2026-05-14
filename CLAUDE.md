@@ -32,7 +32,10 @@ packages/
 
 - AWS Lambda 배포 대상
 - `GOOS=linux GOARCH=amd64 go build` 로 크로스 컴파일
-- 시크릿: AWS Secrets Manager (`sazo-toolkit/slack`)
+- 시크릿: AWS Secrets Manager (패키지별 상이)
+  - translate-bot: `translate-bot/config`
+  - bamboo-forest: `bamboo-forest/slack`
+  - shuffle-bot: `sazo-toolkit/slack` (범용 앱 공유)
 - 환경변수: `SECRET_NAME` 으로 시크릿 이름 지정
 
 ## 커밋 규칙

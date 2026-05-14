@@ -1,4 +1,4 @@
-module slackbot
+module translate-bot
 
 go 1.24
 

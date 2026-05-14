@@ -11,6 +11,9 @@ Slack 채널에서 한국어와 일본어를 자동으로 번역해주는 봇
 - ✅ 스레드로 자동 회신
 - ✅ AWS Lambda 서버리스 아키텍처
 - ✅ Google Cloud Translation API (LLM 모델) 사용
+- ✅ `!tt` 명령어로 스레드별 번역 토글
+- ✅ 반복 문자 정규화 (LLM 반복 폭발 방지)
+- ✅ 통화 단위·웃음 표현 자동 변환 (원↔ウォン, ㅋㅋㅋ↔www)
 
 ### [bamboo-forest](./packages/bamboo-forest)
 Slack 채널에서 익명으로 메시지를 게시할 수 있는 대나무숲 봇
@@ -25,21 +28,10 @@ Slack 채널에서 셔플/룰렛을 실행할 수 있는 봇
 
 - ✅ `/shuffle @사람1 @사람2` 빠른 실행 (모달 없이)
 - ✅ `/shuffle 2 @사람1 @사람2 @사람3` 숫자로 룰렛
-- ✅ `/shuffle #채널` 채널 멤버 대상 실행
+- ✅ `/shuffle @here` 채널 멤버 대상 실행
 - ✅ 모달을 통한 상세 설정 (유저그룹, 제외 인원 등)
 - ✅ 결과 메시지에 커스텀 제목 지원
 - ✅ AWS Lambda 서버리스 아키텍처
-
-### [ai-prompts](./packages/ai-prompts)
-팀 공용 AI 프롬프트 (Commands & Skills) 저장소
-
-- ✅ 팀 공용 슬래시 커맨드/스킬 공유
-- ✅ Claude 세션 시작 시 자동 업데이트
-- ✅ sparse-checkout으로 ai-prompts만 설치 (전체 레포 X)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/ai-prompts/install.sh | bash
-```
 
 ## 🏗️ Slack 앱 구조
 
