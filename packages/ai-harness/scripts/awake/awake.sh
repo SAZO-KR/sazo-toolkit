@@ -46,18 +46,28 @@ read_legacy_pid() {
 }
 
 clean_legacy_state() {
+    rm -f "$LEGACY_PID_FILE" "$LEGACY_EXPIRES_FILE"
+}
+
+stop_legacy_state() {
     local legacy_pid legacy_comm
 
-    if legacy_pid="$(read_legacy_pid 2>/dev/null)"; then
-        legacy_comm="$($PS_BIN -p "$legacy_pid" -o comm= 2>/dev/null || true)"
-        case "$legacy_comm" in
-            *caffeinate*)
-                "$KILL_BIN" "$legacy_pid" 2>/dev/null || true
-                ;;
-        esac
+    if legacy_pid="$(legacy_caffeinate_pid 2>/dev/null)"; then
+        "$KILL_BIN" "$legacy_pid" 2>/dev/null || true
     fi
 
-    rm -f "$LEGACY_PID_FILE" "$LEGACY_EXPIRES_FILE"
+    clean_legacy_state
+}
+
+legacy_caffeinate_pid() {
+    local legacy_pid legacy_comm
+
+    legacy_pid="$(read_legacy_pid 2>/dev/null)" || return 1
+    legacy_comm="$($PS_BIN -p "$legacy_pid" -o comm= 2>/dev/null || true)"
+    case "$legacy_comm" in
+        *caffeinate*) printf '%s\n' "$legacy_pid" ;;
+        *) return 1 ;;
+    esac
 }
 
 clean_state() {
@@ -258,7 +268,7 @@ cmd_on() {
 
     require_darwin || return 1
     acquire_cli_lock || return 1
-    clean_legacy_state
+    stop_legacy_state
 
     if ! secs="$(parse_duration "$dur")"; then
         err "Invalid duration: $dur"
@@ -288,7 +298,7 @@ cmd_off() {
 
     require_darwin || return 1
     acquire_cli_lock || return 1
-    clean_legacy_state
+    stop_legacy_state
 
     if ! token="$(read_state_value token)"; then
         clean_state
@@ -321,9 +331,8 @@ cmd_off() {
 }
 
 cmd_status() {
-    local token expires_epoch now remain pmset_value helper_active
+    local token expires_epoch now remain pmset_value helper_active legacy_pid
 
-    clean_legacy_state
     now="$(now_epoch)"
     token="$(read_state_value token 2>/dev/null || true)"
     expires_epoch="$(read_state_value expires_epoch 2>/dev/null || true)"
@@ -351,7 +360,13 @@ cmd_status() {
         return 0
     fi
 
+    if legacy_pid="$(legacy_caffeinate_pid 2>/dev/null)"; then
+        echo "awake: on (legacy pid $legacy_pid)"
+        return 0
+    fi
+
     clean_state
+    clean_legacy_state
     echo "awake: off"
 }
 
@@ -361,7 +376,7 @@ cmd_extend() {
 
     require_darwin || return 1
     acquire_cli_lock || return 1
-    clean_legacy_state
+    stop_legacy_state
 
     if [ -z "$dur" ]; then
         err "Usage: awake extend <duration>"
