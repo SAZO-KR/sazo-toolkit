@@ -179,8 +179,8 @@ cmd_restore() {
 
     original_disablesleep="$(read_state_value original_disablesleep)" || return 1
     rollback_pid="$(read_state_value rollback_pid 2>/dev/null || true)"
-    kill_rollback_pid "$rollback_pid"
     apply_disablesleep "$original_disablesleep" || return 1
+    kill_rollback_pid "$rollback_pid"
     clear_state
 }
 
