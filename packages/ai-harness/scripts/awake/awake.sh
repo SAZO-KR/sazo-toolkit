@@ -13,6 +13,8 @@ LEGACY_EXPIRES_FILE="$STATE_DIR/awake.expires"
 DEFAULT_DURATION="2h"
 MAX_DURATION_SECS=86400
 PMSET_BIN="${AWAKE_PMSET_BIN-/usr/bin/pmset}"
+PS_BIN="${AWAKE_PS_BIN-/bin/ps}"
+KILL_BIN="${AWAKE_KILL_BIN-kill}"
 
 usage() {
     cat <<EOF
@@ -31,7 +33,28 @@ EOF
 
 err() { echo "$@" >&2; }
 
+read_legacy_pid() {
+    local pid
+    [ -f "$LEGACY_PID_FILE" ] || return 1
+    pid="$(cat "$LEGACY_PID_FILE" 2>/dev/null || true)"
+    case "$pid" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    printf '%s\n' "$pid"
+}
+
 clean_legacy_state() {
+    local legacy_pid legacy_comm
+
+    if legacy_pid="$(read_legacy_pid 2>/dev/null)"; then
+        legacy_comm="$($PS_BIN -p "$legacy_pid" -o comm= 2>/dev/null || true)"
+        case "$legacy_comm" in
+            *caffeinate*)
+                "$KILL_BIN" "$legacy_pid" 2>/dev/null || true
+                ;;
+        esac
+    fi
+
     rm -f "$LEGACY_PID_FILE" "$LEGACY_EXPIRES_FILE"
 }
 

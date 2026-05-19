@@ -81,6 +81,56 @@ EOF
     [ ! -f "$state_dir/awake.state" ] || fail "expected awake.state to be removed"
 }
 
+test_awake_off_stops_legacy_caffeinate_before_cleanup() {
+    local tmpdir helper state_dir ps_bin kill_bin stdout_file stderr_file
+    tmpdir="$(mktemp -d)"
+    helper="$tmpdir/fake-helper.sh"
+    state_dir="$tmpdir/state"
+    ps_bin="$tmpdir/fake-ps.sh"
+    kill_bin="$tmpdir/fake-kill.sh"
+    stdout_file="$tmpdir/stdout"
+    stderr_file="$tmpdir/stderr"
+
+    cat > "$helper" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+exit 0
+EOF
+    chmod +x "$helper"
+
+    cat > "$ps_bin" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+printf 'caffeinate\n'
+EOF
+    chmod +x "$ps_bin"
+
+    cat > "$kill_bin" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$AWAKE_TEST_KILL_LOG"
+EOF
+    chmod +x "$kill_bin"
+
+    mkdir -p "$state_dir"
+    printf '12345\n' > "$state_dir/awake.pid"
+    printf '9999999999\n' > "$state_dir/awake.expires"
+
+    export AWAKE_HELPER_BIN="$helper"
+    export AWAKE_SUDO_BIN=""
+    export AWAKE_STATE_DIR="$state_dir"
+    export AWAKE_UNAME="Darwin"
+    export AWAKE_PS_BIN="$ps_bin"
+    export AWAKE_KILL_BIN="$kill_bin"
+    export AWAKE_TEST_KILL_LOG="$tmpdir/kill.log"
+
+    bash "$AWAKE_BIN" off >"$stdout_file" 2>"$stderr_file" || fail "awake off should succeed"
+
+    assert_file_contains "$AWAKE_TEST_KILL_LOG" '^12345$'
+    [ ! -f "$state_dir/awake.pid" ] || fail "expected legacy awake.pid to be removed"
+    [ ! -f "$state_dir/awake.expires" ] || fail "expected legacy awake.expires to be removed"
+}
+
 test_awake_on_respects_platform_override() {
     local tmpdir helper state_dir stdout_file stderr_file
     tmpdir="$(mktemp -d)"
@@ -280,6 +330,10 @@ test_awake_extend_restores_helper_when_local_state_write_fails() {
     cat > "$helper" <<'EOF'
 #!/bin/bash
 set -euo pipefail
+if [ "${1:-}" = "start" ]; then
+    rm -rf "$AWAKE_STATE_DIR"
+    printf 'not-a-dir\n' > "$AWAKE_STATE_DIR"
+fi
 printf '%s\n' "$*" >> "$AWAKE_TEST_HELPER_LOG"
 exit 0
 EOF
@@ -292,8 +346,6 @@ token=token-extend
 expires_epoch=4102445800
 helper_bin=$helper
 EOF
-    chmod 500 "$state_dir"
-
     export AWAKE_HELPER_BIN="$helper"
     export AWAKE_SUDO_BIN=""
     export AWAKE_STATE_DIR="$state_dir"
@@ -310,6 +362,7 @@ EOF
 
 test_awake_on_uses_helper_and_writes_state
 test_awake_off_restores_and_cleans_state
+test_awake_off_stops_legacy_caffeinate_before_cleanup
 test_awake_on_respects_platform_override
 test_awake_status_cleans_expired_state_even_when_sleepdisabled_is_one
 test_awake_off_cleans_expired_state_when_helper_restore_is_missing
