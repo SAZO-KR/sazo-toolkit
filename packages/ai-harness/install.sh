@@ -195,7 +195,6 @@ AWAKE_SUDOERS_FILE="/etc/sudoers.d/sazo-ai-harness-awake"
 if [ -f "$AWAKE_SCRIPT" ] && [ "$(uname -s)" = "Darwin" ]; then
     echo ""
     echo "Installing awake CLI..."
-    chmod +x "$AWAKE_SCRIPT"
     mkdir -p "$HOME/.local/bin"
     ln -sfn "$AWAKE_SCRIPT" "$AWAKE_SYMLINK"
     echo "  Installed: $AWAKE_SYMLINK"
@@ -216,7 +215,6 @@ if [ -f "$AWAKE_SCRIPT" ] && [ "$(uname -s)" = "Darwin" ]; then
         echo "  - requires sudo because pmset is global"
 
         if ask_yes_no "Install root-owned awake helper now?" n; then
-            chmod +x "$AWAKE_HELPER_SRC"
             sudo install -d -o root -g wheel -m 0755 "$(dirname "$AWAKE_HELPER_DST")"
             sudo install -o root -g wheel -m 0755 "$AWAKE_HELPER_SRC" "$AWAKE_HELPER_DST"
             echo "  Installed helper: $AWAKE_HELPER_DST"
