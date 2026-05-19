@@ -158,8 +158,20 @@ apply_disablesleep() {
 
 kill_rollback_pid() {
     local pid="$1"
+    local cmd=""
+    local ps_bin="${AWAKE_HELPER_PS_BIN-/bin/ps}"
     validate_uint "$pid" || return 0
     [ "$pid" -gt 0 ] || return 0
+    # Best-effort identity check: only signal the PID if its command line
+    # looks like a rollback child (sleep + awake-helper rollback). This is
+    # not foolproof against PID reuse but rejects obvious mismatches.
+    if [ -x "$ps_bin" ]; then
+        cmd="$("$ps_bin" -o command= -p "$pid" 2>/dev/null || true)"
+        case "$cmd" in
+            ''|*awake-helper*|*sleep*) ;;
+            *) return 0 ;;
+        esac
+    fi
     kill "$pid" 2>/dev/null || true
 }
 
@@ -253,7 +265,9 @@ cmd_restore() {
     [ "$current_token" = "$token" ] || return 1
 
     original_disablesleep="$(read_state_value original_disablesleep)" || return 1
+    rollback_pid="$(read_state_value rollback_pid 2>/dev/null || true)"
     apply_disablesleep "$original_disablesleep" || return 1
+    kill_rollback_pid "$rollback_pid"
     clear_state
 }
 
@@ -291,8 +305,13 @@ cmd_rollback() {
 }
 
 cmd_reset() {
+    local rollback_pid=""
     acquire_lock || return 1
+    if [ -f "$STATE_FILE" ]; then
+        rollback_pid="$(read_state_value rollback_pid 2>/dev/null || true)"
+    fi
     apply_disablesleep 0 || return 1
+    kill_rollback_pid "$rollback_pid"
     clear_state
 }
 

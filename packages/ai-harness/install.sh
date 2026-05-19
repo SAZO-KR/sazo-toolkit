@@ -198,8 +198,25 @@ if [ -f "$AWAKE_SCRIPT" ] && [ "$(uname -s)" = "Darwin" ]; then
     echo ""
     echo "Installing awake CLI..."
     mkdir -p "$HOME/.local/bin"
-    ln -sfn "$AWAKE_SCRIPT" "$AWAKE_SYMLINK"
-    echo "  Installed: $AWAKE_SYMLINK"
+
+    # BEGIN AWAKE_INSTALL_GUARD
+    install_awake=1
+    if [ -L "$AWAKE_SYMLINK" ]; then
+        existing_target=$(readlink "$AWAKE_SYMLINK" 2>/dev/null || true)
+        if ! echo "$existing_target" | grep -qE "sazo-ai-harness|sazo-ai-prompts"; then
+            echo "  Skip: awake (existing symlink → $existing_target, not managed by ai-harness)"
+            install_awake=0
+        fi
+    elif [ -e "$AWAKE_SYMLINK" ]; then
+        echo "  Skip: awake (local file exists at $AWAKE_SYMLINK)"
+        install_awake=0
+    fi
+
+    if [ "$install_awake" -eq 1 ]; then
+        ln -sfn "$AWAKE_SCRIPT" "$AWAKE_SYMLINK"
+        echo "  Installed: $AWAKE_SYMLINK"
+    fi
+    # END AWAKE_INSTALL_GUARD
 
     case ":$PATH:" in
         *":$HOME/.local/bin:"*) ;;

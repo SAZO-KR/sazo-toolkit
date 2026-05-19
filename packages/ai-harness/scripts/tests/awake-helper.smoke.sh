@@ -566,6 +566,144 @@ EOF
     [ ! -f "$AWAKE_TEST_PMSET_LOG" ] || fail "expected pmset not to be touched when expiry validation fails"
 }
 
+test_helper_restore_terminates_rollback_pid() {
+    local tmpdir pmset_bin state_dir lock_dir state_file rollback_pid
+    tmpdir="$(mktemp -d)"
+    pmset_bin="$tmpdir/fake-pmset.sh"
+    state_dir="$tmpdir/root-state"
+    lock_dir="$tmpdir/lockdir"
+    state_file="$state_dir/awake-root.state"
+
+    cat > "$pmset_bin" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+state_file="$AWAKE_TEST_PMSET_STATE"
+log_file="$AWAKE_TEST_PMSET_LOG"
+current="1"
+[ -f "$state_file" ] && current="$(/bin/cat "$state_file")"
+
+if [ "${1:-}" = "-g" ]; then
+    printf ' SleepDisabled %s\n' "$current"
+    exit 0
+fi
+
+if [ "${1:-}" = "-a" ] && [ "${2:-}" = "disablesleep" ]; then
+    printf '%s\n' "$3" > "$state_file"
+    printf 'set %s\n' "$3" >> "$log_file"
+    exit 0
+fi
+
+exit 1
+EOF
+    chmod +x "$pmset_bin"
+
+    export AWAKE_HELPER_PMSET_BIN="$pmset_bin"
+    export AWAKE_HELPER_STATE_DIR="$state_dir"
+    export AWAKE_HELPER_LOCK_DIR="$lock_dir"
+    export AWAKE_HELPER_SLEEP_BIN="/bin/sleep"
+    export AWAKE_TEST_PMSET_STATE="$tmpdir/pmset.state"
+    export AWAKE_TEST_PMSET_LOG="$tmpdir/pmset.log"
+
+    printf '1\n' > "$AWAKE_TEST_PMSET_STATE"
+
+    /bin/sleep 300 >/dev/null 2>&1 &
+    rollback_pid="$!"
+    mkdir -p "$state_dir"
+    cat > "$state_file" <<EOF
+version=1
+token=token-kill
+expires_epoch=4102444800
+original_disablesleep=0
+rollback_pid=$rollback_pid
+started_epoch=1
+EOF
+
+    kill -0 "$rollback_pid" 2>/dev/null || fail "expected rollback process alive before restore"
+
+    bash "$HELPER_BIN" restore token-kill >/dev/null 2>&1 || fail "helper restore should succeed"
+
+    [ ! -f "$state_file" ] || fail "expected helper state to be cleared after restore"
+
+    local waited=0
+    while kill -0 "$rollback_pid" 2>/dev/null && [ "$waited" -lt 20 ]; do
+        /bin/sleep 0.05
+        waited=$((waited + 1))
+    done
+    if kill -0 "$rollback_pid" 2>/dev/null; then
+        kill "$rollback_pid" 2>/dev/null || true
+        fail "expected rollback process to be terminated after successful restore"
+    fi
+}
+
+test_helper_reset_terminates_rollback_pid() {
+    local tmpdir pmset_bin state_dir lock_dir state_file rollback_pid
+    tmpdir="$(mktemp -d)"
+    pmset_bin="$tmpdir/fake-pmset.sh"
+    state_dir="$tmpdir/root-state"
+    lock_dir="$tmpdir/lockdir"
+    state_file="$state_dir/awake-root.state"
+
+    cat > "$pmset_bin" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+state_file="$AWAKE_TEST_PMSET_STATE"
+log_file="$AWAKE_TEST_PMSET_LOG"
+current="1"
+[ -f "$state_file" ] && current="$(/bin/cat "$state_file")"
+
+if [ "${1:-}" = "-g" ]; then
+    printf ' SleepDisabled %s\n' "$current"
+    exit 0
+fi
+
+if [ "${1:-}" = "-a" ] && [ "${2:-}" = "disablesleep" ]; then
+    printf '%s\n' "$3" > "$state_file"
+    printf 'set %s\n' "$3" >> "$log_file"
+    exit 0
+fi
+
+exit 1
+EOF
+    chmod +x "$pmset_bin"
+
+    export AWAKE_HELPER_PMSET_BIN="$pmset_bin"
+    export AWAKE_HELPER_STATE_DIR="$state_dir"
+    export AWAKE_HELPER_LOCK_DIR="$lock_dir"
+    export AWAKE_HELPER_SLEEP_BIN="/bin/sleep"
+    export AWAKE_TEST_PMSET_STATE="$tmpdir/pmset.state"
+    export AWAKE_TEST_PMSET_LOG="$tmpdir/pmset.log"
+
+    printf '1\n' > "$AWAKE_TEST_PMSET_STATE"
+
+    /bin/sleep 300 >/dev/null 2>&1 &
+    rollback_pid="$!"
+    mkdir -p "$state_dir"
+    cat > "$state_file" <<EOF
+version=1
+token=token-reset-kill
+expires_epoch=4102444800
+original_disablesleep=1
+rollback_pid=$rollback_pid
+started_epoch=1
+EOF
+
+    kill -0 "$rollback_pid" 2>/dev/null || fail "expected rollback process alive before reset"
+
+    bash "$HELPER_BIN" reset >/dev/null 2>&1 || fail "helper reset should succeed"
+
+    [ ! -f "$state_file" ] || fail "expected helper state to be cleared after reset"
+
+    local waited=0
+    while kill -0 "$rollback_pid" 2>/dev/null && [ "$waited" -lt 20 ]; do
+        /bin/sleep 0.05
+        waited=$((waited + 1))
+    done
+    if kill -0 "$rollback_pid" 2>/dev/null; then
+        kill "$rollback_pid" 2>/dev/null || true
+        fail "expected rollback process to be terminated after successful reset"
+    fi
+}
+
 test_helper_start_and_restore
 test_helper_start_does_not_steal_live_lock_with_old_mtime
 test_helper_reset_and_token_mismatch_rollback
@@ -576,4 +714,6 @@ test_helper_start_failure_restores_when_state_write_fails
 test_helper_start_failure_restores_when_heredoc_write_fails
 test_helper_reset_failure_keeps_rollback_alive
 test_helper_start_rejects_far_future_expiry
+test_helper_restore_terminates_rollback_pid
+test_helper_reset_terminates_rollback_pid
 echo "ok - helper start and restore"
