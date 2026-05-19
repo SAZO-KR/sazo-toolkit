@@ -376,7 +376,6 @@ cmd_extend() {
 
     require_darwin || return 1
     acquire_cli_lock || return 1
-    stop_legacy_state
 
     if [ -z "$dur" ]; then
         err "Usage: awake extend <duration>"
@@ -419,13 +418,15 @@ cmd_extend() {
         return 1
     }
 
+    stop_legacy_state
+
     echo "awake extended (${new_secs}s remaining)"
 }
 
 cmd_reset() {
     require_darwin || return 1
     acquire_cli_lock || return 1
-    clean_legacy_state
+    stop_legacy_state
 
     if ! run_helper reset; then
         err "Failed to force awake reset"

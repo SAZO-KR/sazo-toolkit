@@ -182,6 +182,57 @@ EOF
     [ -f "$state_dir/awake.pid" ] || fail "expected legacy awake.pid to remain when replacement fails"
 }
 
+test_awake_extend_preserves_legacy_caffeinate_when_no_helper_state_exists() {
+    local tmpdir helper state_dir ps_bin kill_bin stdout_file stderr_file
+    tmpdir="$(mktemp -d)"
+    helper="$tmpdir/fake-helper.sh"
+    state_dir="$tmpdir/state"
+    ps_bin="$tmpdir/fake-ps.sh"
+    kill_bin="$tmpdir/fake-kill.sh"
+    stdout_file="$tmpdir/stdout"
+    stderr_file="$tmpdir/stderr"
+
+    cat > "$helper" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+exit 0
+EOF
+    chmod +x "$helper"
+
+    cat > "$ps_bin" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+printf 'caffeinate\n'
+EOF
+    chmod +x "$ps_bin"
+
+    cat > "$kill_bin" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$AWAKE_TEST_KILL_LOG"
+EOF
+    chmod +x "$kill_bin"
+
+    mkdir -p "$state_dir"
+    printf '12345\n' > "$state_dir/awake.pid"
+    printf '9999999999\n' > "$state_dir/awake.expires"
+
+    export AWAKE_HELPER_BIN="$helper"
+    export AWAKE_SUDO_BIN=""
+    export AWAKE_STATE_DIR="$state_dir"
+    export AWAKE_UNAME="Darwin"
+    export AWAKE_PS_BIN="$ps_bin"
+    export AWAKE_KILL_BIN="$kill_bin"
+    export AWAKE_TEST_KILL_LOG="$tmpdir/kill.log"
+
+    if bash "$AWAKE_BIN" extend 30m >"$stdout_file" 2>"$stderr_file"; then
+        fail "awake extend should fail when helper-backed state does not exist"
+    fi
+
+    [ ! -f "$tmpdir/kill.log" ] || fail "expected awake extend not to kill legacy caffeinate before replacement exists"
+    [ -f "$state_dir/awake.pid" ] || fail "expected legacy awake.pid to remain when extend cannot replace it"
+}
+
 test_awake_status_does_not_stop_legacy_caffeinate() {
     local tmpdir helper state_dir ps_bin kill_bin stdout_file stderr_file
     tmpdir="$(mktemp -d)"
@@ -230,6 +281,58 @@ EOF
     [ ! -f "$tmpdir/kill.log" ] || fail "expected awake status not to kill legacy caffeinate"
     assert_file_contains "$stdout_file" '^awake: on \(legacy pid 12345\)$'
     [ -f "$state_dir/awake.pid" ] || fail "expected legacy awake.pid to remain after status"
+}
+
+test_awake_reset_stops_legacy_caffeinate() {
+    local tmpdir helper state_dir ps_bin kill_bin stdout_file stderr_file
+    tmpdir="$(mktemp -d)"
+    helper="$tmpdir/fake-helper.sh"
+    state_dir="$tmpdir/state"
+    ps_bin="$tmpdir/fake-ps.sh"
+    kill_bin="$tmpdir/fake-kill.sh"
+    stdout_file="$tmpdir/stdout"
+    stderr_file="$tmpdir/stderr"
+
+    cat > "$helper" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+if [ "${1:-}" = "reset" ]; then
+    exit 0
+fi
+exit 0
+EOF
+    chmod +x "$helper"
+
+    cat > "$ps_bin" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+printf 'caffeinate\n'
+EOF
+    chmod +x "$ps_bin"
+
+    cat > "$kill_bin" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$AWAKE_TEST_KILL_LOG"
+EOF
+    chmod +x "$kill_bin"
+
+    mkdir -p "$state_dir"
+    printf '12345\n' > "$state_dir/awake.pid"
+    printf '9999999999\n' > "$state_dir/awake.expires"
+
+    export AWAKE_HELPER_BIN="$helper"
+    export AWAKE_SUDO_BIN=""
+    export AWAKE_STATE_DIR="$state_dir"
+    export AWAKE_UNAME="Darwin"
+    export AWAKE_PS_BIN="$ps_bin"
+    export AWAKE_KILL_BIN="$kill_bin"
+    export AWAKE_TEST_KILL_LOG="$tmpdir/kill.log"
+
+    bash "$AWAKE_BIN" reset >"$stdout_file" 2>"$stderr_file" || fail "awake reset should succeed"
+
+    assert_file_contains "$tmpdir/kill.log" '^12345$'
+    [ ! -f "$state_dir/awake.pid" ] || fail "expected legacy awake.pid to be removed on reset"
 }
 
 test_awake_on_respects_platform_override() {
@@ -601,7 +704,9 @@ test_awake_on_uses_helper_and_writes_state
 test_awake_off_restores_and_cleans_state
 test_awake_off_stops_legacy_caffeinate_before_cleanup
 test_awake_on_preserves_legacy_caffeinate_when_helper_start_fails
+test_awake_extend_preserves_legacy_caffeinate_when_no_helper_state_exists
 test_awake_status_does_not_stop_legacy_caffeinate
+test_awake_reset_stops_legacy_caffeinate
 test_awake_on_respects_platform_override
 test_awake_status_cleans_expired_state_even_when_sleepdisabled_is_one
 test_awake_off_cleans_expired_state_when_helper_restore_is_missing
