@@ -78,6 +78,10 @@ now_epoch() {
     date +%s
 }
 
+platform_name() {
+    printf '%s\n' "${AWAKE_UNAME-$(uname -s)}"
+}
+
 generate_token() {
     if command -v uuidgen >/dev/null 2>&1; then
         uuidgen | tr '[:upper:]' '[:lower:]'
@@ -115,7 +119,7 @@ parse_duration() {
 }
 
 require_darwin() {
-    if [ "$(uname -s)" != "Darwin" ]; then
+    if [ "$(platform_name)" != "Darwin" ]; then
         err "awake is only supported on macOS"
         return 1
     fi
@@ -217,7 +221,7 @@ cmd_status() {
         remain=$(( expires_epoch - now ))
         [ "$remain" -lt 0 ] && remain=0
 
-        if [ "$remain" -eq 0 ] && [ "$pmset_value" != "1" ]; then
+        if [ "$remain" -eq 0 ]; then
             clean_state
             echo "awake: off"
             return 0
