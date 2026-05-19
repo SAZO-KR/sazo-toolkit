@@ -17,7 +17,7 @@ assert_file_contains() {
 }
 
 test_helper_start_and_restore() {
-    local tmpdir pmset_bin state_dir lock_dir state_file
+    local tmpdir pmset_bin state_dir lock_dir state_file expires_epoch
     tmpdir="$(mktemp -d)"
     pmset_bin="$tmpdir/fake-pmset.sh"
     state_dir="$tmpdir/root-state"
@@ -55,8 +55,9 @@ EOF
     export AWAKE_TEST_PMSET_LOG="$tmpdir/pmset.log"
 
     printf '0\n' > "$AWAKE_TEST_PMSET_STATE"
+    expires_epoch=$(( $(date +%s) + 1800 ))
 
-    bash "$HELPER_BIN" start 1800 token-1 4102444800 >/dev/null 2>&1 || fail "helper start should succeed"
+    bash "$HELPER_BIN" start 1800 token-1 "$expires_epoch" >/dev/null 2>&1 || fail "helper start should succeed"
     [ -f "$state_file" ] || fail "expected root awake state file"
     assert_file_contains "$state_file" '^token=token-1$'
     assert_file_contains "$AWAKE_TEST_PMSET_LOG" '^set 1$'
@@ -67,7 +68,7 @@ EOF
 }
 
 test_helper_reset_and_token_mismatch_rollback() {
-    local tmpdir pmset_bin state_dir lock_dir state_file
+    local tmpdir pmset_bin state_dir lock_dir state_file expires_epoch
     tmpdir="$(mktemp -d)"
     pmset_bin="$tmpdir/fake-pmset.sh"
     state_dir="$tmpdir/root-state"
@@ -104,8 +105,9 @@ EOF
     export AWAKE_TEST_PMSET_LOG="$tmpdir/pmset.log"
 
     printf '0\n' > "$AWAKE_TEST_PMSET_STATE"
+    expires_epoch=$(( $(date +%s) + 1800 ))
 
-    bash "$HELPER_BIN" start 1800 token-2 4102444800 >/dev/null 2>&1 || fail "helper start should succeed"
+    bash "$HELPER_BIN" start 1800 token-2 "$expires_epoch" >/dev/null 2>&1 || fail "helper start should succeed"
     [ -f "$state_file" ] || fail "expected root awake state file"
 
     bash "$HELPER_BIN" rollback wrong-token 4102444800 >/dev/null 2>&1 || fail "token mismatch rollback should no-op"
@@ -188,7 +190,7 @@ EOF
 }
 
 test_helper_start_failure_preserves_existing_rollback() {
-    local tmpdir pmset_bin state_dir lock_dir state_file
+    local tmpdir pmset_bin state_dir lock_dir state_file expires_epoch
     tmpdir="$(mktemp -d)"
     pmset_bin="$tmpdir/fake-pmset.sh"
     state_dir="$tmpdir/root-state"
@@ -243,7 +245,8 @@ started_epoch=1
 EOF
 
     export AWAKE_TEST_PMSET_FAIL_ON="1"
-    if bash "$HELPER_BIN" start 1800 token-new 4102445800 >/dev/null 2>&1; then
+    expires_epoch=$(( $(date +%s) + 1800 ))
+    if bash "$HELPER_BIN" start 1800 token-new "$expires_epoch" >/dev/null 2>&1; then
         fail "helper start should fail when replacement apply fails"
     fi
 
@@ -255,7 +258,7 @@ EOF
 }
 
 test_helper_start_failure_restores_fresh_session_state() {
-    local tmpdir pmset_bin state_dir lock_dir state_file
+    local tmpdir pmset_bin state_dir lock_dir state_file expires_epoch
     tmpdir="$(mktemp -d)"
     pmset_bin="$tmpdir/fake-pmset.sh"
     state_dir="$tmpdir/root-state"
@@ -293,8 +296,9 @@ EOF
     export AWAKE_TEST_PMSET_LOG="$tmpdir/pmset.log"
 
     printf '0\n' > "$AWAKE_TEST_PMSET_STATE"
+    expires_epoch=$(( $(date +%s) + 1800 ))
 
-    if bash "$HELPER_BIN" start 1800 token-fresh 4102445800 >/dev/null 2>&1; then
+    if bash "$HELPER_BIN" start 1800 token-fresh "$expires_epoch" >/dev/null 2>&1; then
         fail "helper start should fail when fresh-session rollback spawn fails"
     fi
 
@@ -304,7 +308,7 @@ EOF
 }
 
 test_helper_start_failure_restores_when_state_write_fails() {
-    local tmpdir pmset_bin bad_state_dir lock_dir
+    local tmpdir pmset_bin bad_state_dir lock_dir expires_epoch
     tmpdir="$(mktemp -d)"
     pmset_bin="$tmpdir/fake-pmset.sh"
     bad_state_dir="$tmpdir/not-a-dir"
@@ -343,8 +347,9 @@ EOF
     export AWAKE_TEST_PMSET_LOG="$tmpdir/pmset.log"
 
     printf '0\n' > "$AWAKE_TEST_PMSET_STATE"
+    expires_epoch=$(( $(date +%s) + 1800 ))
 
-    if bash "$HELPER_BIN" start 1800 token-state-write 4102445800 >/dev/null 2>&1; then
+    if bash "$HELPER_BIN" start 1800 token-state-write "$expires_epoch" >/dev/null 2>&1; then
         fail "helper start should fail when helper state write fails"
     fi
 
@@ -353,7 +358,7 @@ EOF
 }
 
 test_helper_start_failure_restores_when_heredoc_write_fails() {
-    local tmpdir pmset_bin state_dir lock_dir state_file fake_cat path_backup
+    local tmpdir pmset_bin state_dir lock_dir state_file fake_cat path_backup expires_epoch
     tmpdir="$(mktemp -d)"
     pmset_bin="$tmpdir/fake-pmset.sh"
     state_dir="$tmpdir/root-state"
@@ -402,8 +407,9 @@ EOF
     export AWAKE_TEST_PMSET_LOG="$tmpdir/pmset.log"
 
     printf '0\n' > "$AWAKE_TEST_PMSET_STATE"
+    expires_epoch=$(( $(date +%s) + 1800 ))
 
-    if bash "$HELPER_BIN" start 1800 token-heredoc 4102445800 >/dev/null 2>&1; then
+    if bash "$HELPER_BIN" start 1800 token-heredoc "$expires_epoch" >/dev/null 2>&1; then
         fail "helper start should fail when heredoc write fails"
     fi
 
@@ -476,6 +482,54 @@ EOF
     bash "$HELPER_BIN" reset >/dev/null 2>&1 || fail "helper reset should eventually succeed"
 }
 
+test_helper_start_rejects_far_future_expiry() {
+    local tmpdir pmset_bin state_dir lock_dir state_file
+    tmpdir="$(mktemp -d)"
+    pmset_bin="$tmpdir/fake-pmset.sh"
+    state_dir="$tmpdir/root-state"
+    lock_dir="$tmpdir/lockdir"
+    state_file="$state_dir/awake-root.state"
+
+    cat > "$pmset_bin" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+state_file="$AWAKE_TEST_PMSET_STATE"
+log_file="$AWAKE_TEST_PMSET_LOG"
+current="0"
+[ -f "$state_file" ] && current="$(/bin/cat "$state_file")"
+
+if [ "${1:-}" = "-g" ]; then
+    printf ' SleepDisabled %s\n' "$current"
+    exit 0
+fi
+
+if [ "${1:-}" = "-a" ] && [ "${2:-}" = "disablesleep" ]; then
+    printf '%s\n' "$3" > "$state_file"
+    printf 'set %s\n' "$3" >> "$log_file"
+    exit 0
+fi
+
+exit 1
+EOF
+    chmod +x "$pmset_bin"
+
+    export AWAKE_HELPER_PMSET_BIN="$pmset_bin"
+    export AWAKE_HELPER_STATE_DIR="$state_dir"
+    export AWAKE_HELPER_LOCK_DIR="$lock_dir"
+    export AWAKE_HELPER_SLEEP_BIN="/bin/sleep"
+    export AWAKE_TEST_PMSET_STATE="$tmpdir/pmset.state"
+    export AWAKE_TEST_PMSET_LOG="$tmpdir/pmset.log"
+
+    printf '0\n' > "$AWAKE_TEST_PMSET_STATE"
+
+    if bash "$HELPER_BIN" start 60 token-future $(( $(date +%s) + 999999 )) >/dev/null 2>&1; then
+        fail "helper start should reject far-future expiry beyond ttl cap"
+    fi
+
+    [ ! -f "$state_file" ] || fail "expected no helper state file for rejected far-future expiry"
+    [ ! -f "$AWAKE_TEST_PMSET_LOG" ] || fail "expected pmset not to be touched when expiry validation fails"
+}
+
 test_helper_start_and_restore
 test_helper_reset_and_token_mismatch_rollback
 test_helper_restore_failure_keeps_rollback_alive
@@ -484,4 +538,5 @@ test_helper_start_failure_restores_fresh_session_state
 test_helper_start_failure_restores_when_state_write_fails
 test_helper_start_failure_restores_when_heredoc_write_fails
 test_helper_reset_failure_keeps_rollback_alive
+test_helper_start_rejects_far_future_expiry
 echo "ok - helper start and restore"

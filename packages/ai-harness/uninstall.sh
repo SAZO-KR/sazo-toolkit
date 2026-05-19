@@ -38,8 +38,16 @@ AWAKE_PID_FILE="$INSTALL_DIR/awake.pid"
 AWAKE_EXPIRES_FILE="$INSTALL_DIR/awake.expires"
 AWAKE_STATE_FILE="$INSTALL_DIR/awake.state"
 AWAKE_CLI="$HOME/.local/bin/awake"
+AWAKE_CLI_MANAGED=0
 
-if [ -x "$AWAKE_CLI" ]; then
+if [ -L "$AWAKE_CLI" ]; then
+    AWAKE_CLI_TARGET=$(readlink "$AWAKE_CLI" 2>/dev/null || true)
+    if echo "$AWAKE_CLI_TARGET" | grep -qE "sazo-ai-harness|sazo-ai-prompts"; then
+        AWAKE_CLI_MANAGED=1
+    fi
+fi
+
+if [ "$AWAKE_CLI_MANAGED" -eq 1 ] && [ -x "$AWAKE_CLI" ]; then
     "$AWAKE_CLI" off >/dev/null 2>&1 || "$AWAKE_CLI" reset >/dev/null 2>&1 || true
 fi
 

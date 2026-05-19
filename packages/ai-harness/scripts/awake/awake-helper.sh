@@ -8,6 +8,7 @@ STATE_FILE="$STATE_DIR/awake-root.state"
 LOCK_DIR="${AWAKE_HELPER_LOCK_DIR-/var/run/sazo-ai-harness-awake.lock.d}"
 SLEEP_BIN="${AWAKE_HELPER_SLEEP_BIN-/bin/sleep}"
 SELF_BIN="${AWAKE_HELPER_SELF_BIN-$0}"
+MAX_DURATION_SECS=86400
 
 err() { echo "$@" >&2; }
 
@@ -165,12 +166,19 @@ cmd_start() {
     local secs="$1"
     local token="$2"
     local expires_epoch="$3"
-    local original_disablesleep rollback_pid started_epoch existing_original existing_pid had_existing_state=0
+    local original_disablesleep rollback_pid started_epoch existing_original existing_pid had_existing_state=0 max_allowed_expires
 
     validate_uint "$secs" || return 2
+    [ "$secs" -gt 0 ] || return 2
+    [ "$secs" -le "$MAX_DURATION_SECS" ] || return 2
     validate_token "$token" || return 2
     validate_uint "$expires_epoch" || return 2
     acquire_lock || return 1
+    started_epoch="$(now_epoch)"
+    max_allowed_expires=$(( started_epoch + secs + 5 ))
+    if [ "$expires_epoch" -lt "$started_epoch" ] || [ "$expires_epoch" -gt "$max_allowed_expires" ]; then
+        return 2
+    fi
 
     if [ -f "$STATE_FILE" ]; then
         had_existing_state=1
@@ -185,7 +193,6 @@ cmd_start() {
     fi
 
     apply_disablesleep 1 || return 1
-    started_epoch="$(now_epoch)"
 
     if [ "$had_existing_state" -eq 0 ]; then
         if ! write_state "$token" "$expires_epoch" "$original_disablesleep" 0 "$started_epoch"; then
