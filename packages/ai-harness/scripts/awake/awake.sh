@@ -187,7 +187,7 @@ cmd_on() {
 }
 
 cmd_off() {
-    local token
+    local token expires_epoch now
 
     require_darwin || return 1
     clean_legacy_state
@@ -198,7 +198,18 @@ cmd_off() {
         return 0
     fi
 
+    expires_epoch="$(read_state_value expires_epoch 2>/dev/null || true)"
+    case "$expires_epoch" in
+        ''|*[!0-9]*) expires_epoch=0 ;;
+    esac
+    now="$(now_epoch)"
+
     if ! run_helper restore "$token"; then
+        if [ "$expires_epoch" -gt 0 ] && [ "$expires_epoch" -le "$now" ]; then
+            clean_state
+            echo "awake: off"
+            return 0
+        fi
         err "Failed to restore previous sleep setting"
         err "If state looks stuck, run 'awake reset'."
         return 1
