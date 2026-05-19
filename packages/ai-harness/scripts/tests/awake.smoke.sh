@@ -360,6 +360,58 @@ EOF
     assert_file_contains "$AWAKE_TEST_HELPER_LOG" '^restore '
 }
 
+test_awake_on_serializes_local_state_writes() {
+    local tmpdir helper state_dir stdout1 stderr1 stdout2 stderr2 token1 token2 final_token
+    tmpdir="$(mktemp -d)"
+    helper="$tmpdir/fake-helper.sh"
+    state_dir="$tmpdir/state"
+    stdout1="$tmpdir/stdout1"
+    stderr1="$tmpdir/stderr1"
+    stdout2="$tmpdir/stdout2"
+    stderr2="$tmpdir/stderr2"
+
+    cat > "$helper" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+count_file="$AWAKE_TEST_HELPER_COUNT"
+count=0
+[ -f "$count_file" ] && count="$(cat "$count_file")"
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+printf '%s\n' "$*" >> "$AWAKE_TEST_HELPER_LOG"
+if [ "$count" -eq 1 ] && [ "${1:-}" = "start" ]; then
+    sleep 0.2
+fi
+exit 0
+EOF
+    chmod +x "$helper"
+
+    mkdir -p "$state_dir"
+
+    export AWAKE_HELPER_BIN="$helper"
+    export AWAKE_SUDO_BIN=""
+    export AWAKE_STATE_DIR="$state_dir"
+    export AWAKE_UNAME="Darwin"
+    export AWAKE_TEST_HELPER_LOG="$tmpdir/helper.log"
+    export AWAKE_TEST_HELPER_COUNT="$tmpdir/helper.count"
+
+    bash "$AWAKE_BIN" on 30m >"$stdout1" 2>"$stderr1" &
+    pid1=$!
+    bash "$AWAKE_BIN" on 30m >"$stdout2" 2>"$stderr2" &
+    pid2=$!
+
+    wait "$pid1" || fail "first concurrent awake on should succeed"
+    wait "$pid2" || fail "second concurrent awake on should succeed"
+
+    token1="$(sed -n '1s/^start 1800 \([^ ]*\) .*/\1/p' "$tmpdir/helper.log")"
+    token2="$(sed -n '2s/^start 1800 \([^ ]*\) .*/\1/p' "$tmpdir/helper.log")"
+    final_token="$(sed -n 's/^token=//p' "$state_dir/awake.state")"
+
+    [ -n "$token1" ] || fail "expected first helper token"
+    [ -n "$token2" ] || fail "expected second helper token"
+    [ "$final_token" = "$token2" ] || fail "expected final awake.state token to match the second serialized invocation"
+}
+
 test_awake_on_uses_helper_and_writes_state
 test_awake_off_restores_and_cleans_state
 test_awake_off_stops_legacy_caffeinate_before_cleanup
@@ -369,4 +421,5 @@ test_awake_off_cleans_expired_state_when_helper_restore_is_missing
 test_awake_off_preserves_state_when_helper_restore_fails_and_helper_is_still_active
 test_awake_on_restores_helper_when_local_state_write_fails
 test_awake_extend_restores_helper_when_local_state_write_fails
+test_awake_on_serializes_local_state_writes
 echo "ok - awake on uses helper and writes state"

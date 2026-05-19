@@ -10,6 +10,7 @@ STATE_DIR="${AWAKE_STATE_DIR-$HOME/.config/sazo-ai-harness}"
 STATE_FILE="$STATE_DIR/awake.state"
 LEGACY_PID_FILE="$STATE_DIR/awake.pid"
 LEGACY_EXPIRES_FILE="$STATE_DIR/awake.expires"
+CLI_LOCK_DIR="${AWAKE_LOCK_DIR-${STATE_DIR}.lock.d}"
 DEFAULT_DURATION="2h"
 MAX_DURATION_SECS=86400
 PMSET_BIN="${AWAKE_PMSET_BIN-/usr/bin/pmset}"
@@ -105,8 +106,42 @@ now_epoch() {
     date +%s
 }
 
+read_mtime() {
+    local target="$1"
+    local mtime=""
+    if [ "$(platform_name)" = "Darwin" ]; then
+        mtime="$(stat -f %m "$target" 2>/dev/null || true)"
+    else
+        mtime="$(stat -c %Y "$target" 2>/dev/null || true)"
+    fi
+    case "$mtime" in
+        ''|*[!0-9]*) printf '0\n' ;;
+        *) printf '%s\n' "$mtime" ;;
+    esac
+}
+
 platform_name() {
     printf '%s\n' "${AWAKE_UNAME-$(uname -s)}"
+}
+
+acquire_cli_lock() {
+    local attempt=0 lock_mtime now age
+    while ! mkdir "$CLI_LOCK_DIR" 2>/dev/null; do
+        attempt=$((attempt + 1))
+        lock_mtime="$(read_mtime "$CLI_LOCK_DIR")"
+        now="$(now_epoch)"
+        age=$(( now - lock_mtime ))
+        if [ "$age" -gt 30 ]; then
+            rmdir "$CLI_LOCK_DIR" 2>/dev/null || true
+            if mkdir "$CLI_LOCK_DIR" 2>/dev/null; then
+                trap 'rmdir "$CLI_LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+                return 0
+            fi
+        fi
+        [ "$attempt" -ge 50 ] && return 1
+        sleep 0.05
+    done
+    trap 'rmdir "$CLI_LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
 }
 
 generate_token() {
@@ -200,6 +235,7 @@ cmd_on() {
     local secs token expires_epoch
 
     require_darwin || return 1
+    acquire_cli_lock || return 1
     clean_legacy_state
 
     if ! secs="$(parse_duration "$dur")"; then
@@ -229,6 +265,7 @@ cmd_off() {
     local token expires_epoch now helper_active
 
     require_darwin || return 1
+    acquire_cli_lock || return 1
     clean_legacy_state
 
     if ! token="$(read_state_value token)"; then
@@ -301,6 +338,7 @@ cmd_extend() {
     local add token expires_epoch now remain new_secs new_token new_expires_epoch
 
     require_darwin || return 1
+    acquire_cli_lock || return 1
     clean_legacy_state
 
     if [ -z "$dur" ]; then
@@ -349,6 +387,7 @@ cmd_extend() {
 
 cmd_reset() {
     require_darwin || return 1
+    acquire_cli_lock || return 1
     clean_legacy_state
 
     if ! run_helper reset; then
