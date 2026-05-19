@@ -137,7 +137,7 @@ cmd_start() {
     local secs="$1"
     local token="$2"
     local expires_epoch="$3"
-    local original_disablesleep rollback_pid started_epoch existing_original existing_pid
+    local original_disablesleep rollback_pid started_epoch existing_original existing_pid had_existing_state=0
 
     validate_uint "$secs" || return 2
     validate_token "$token" || return 2
@@ -145,25 +145,35 @@ cmd_start() {
     acquire_lock || return 1
 
     if [ -f "$STATE_FILE" ]; then
+        had_existing_state=1
         existing_original="$(read_state_value original_disablesleep 2>/dev/null || true)"
         existing_pid="$(read_state_value rollback_pid 2>/dev/null || true)"
         case "$existing_original" in
             0|1) original_disablesleep="$existing_original" ;;
             *) original_disablesleep="$(read_pmset_disablesleep)" || return 1 ;;
         esac
-        kill_rollback_pid "$existing_pid"
     else
         original_disablesleep="$(read_pmset_disablesleep)" || return 1
     fi
 
     apply_disablesleep 1 || return 1
     started_epoch="$(now_epoch)"
-    write_state "$token" "$expires_epoch" "$original_disablesleep" 0 "$started_epoch" || return 1
+
+    if [ "$had_existing_state" -eq 0 ]; then
+        write_state "$token" "$expires_epoch" "$original_disablesleep" 0 "$started_epoch" || return 1
+    fi
+
     rollback_pid="$(spawn_rollback "$token" "$expires_epoch" 2>/dev/null || true)"
     case "$rollback_pid" in
         ''|*[!0-9]*) rollback_pid=0 ;;
     esac
+    if [ "$rollback_pid" -eq 0 ]; then
+        return 1
+    fi
     write_state "$token" "$expires_epoch" "$original_disablesleep" "$rollback_pid" "$started_epoch" || return 1
+    if [ "$had_existing_state" -eq 1 ]; then
+        kill_rollback_pid "$existing_pid"
+    fi
 }
 
 cmd_restore() {
