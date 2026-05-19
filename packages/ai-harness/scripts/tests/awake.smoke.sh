@@ -413,6 +413,46 @@ EOF
     [ "$final_token" = "$token2" ] || fail "expected final awake.state token to match the second serialized invocation"
 }
 
+test_awake_on_does_not_steal_live_lock_with_old_mtime() {
+    local tmpdir helper state_dir stdout_file stderr_file owner_pid_file
+    tmpdir="$(mktemp -d)"
+    helper="$tmpdir/fake-helper.sh"
+    state_dir="$tmpdir/state"
+    stdout_file="$tmpdir/stdout"
+    stderr_file="$tmpdir/stderr"
+    owner_pid_file="$tmpdir/lock.d/owner.pid"
+
+    cat > "$helper" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$AWAKE_TEST_HELPER_LOG"
+exit 0
+EOF
+    chmod +x "$helper"
+
+    /bin/sleep 300 >/dev/null 2>&1 &
+    live_pid="$!"
+
+    mkdir -p "$tmpdir/lock.d"
+    printf '%s\n' "$live_pid" > "$owner_pid_file"
+    touch -t 200001010000 "$tmpdir/lock.d"
+
+    export AWAKE_HELPER_BIN="$helper"
+    export AWAKE_SUDO_BIN=""
+    export AWAKE_STATE_DIR="$state_dir"
+    export AWAKE_LOCK_DIR="$tmpdir/lock.d"
+    export AWAKE_UNAME="Darwin"
+    export AWAKE_STAT_FLAVOR="$(uname -s)"
+    export AWAKE_TEST_HELPER_LOG="$tmpdir/helper.log"
+
+    if bash "$AWAKE_BIN" on 30m >"$stdout_file" 2>"$stderr_file"; then
+        fail "awake on should not steal a live lock even if directory mtime is old"
+    fi
+
+    kill "$live_pid" 2>/dev/null || true
+    [ ! -f "$tmpdir/helper.log" ] || fail "expected no helper call while another live lock owner exists"
+}
+
 test_awake_on_uses_helper_and_writes_state
 test_awake_off_restores_and_cleans_state
 test_awake_off_stops_legacy_caffeinate_before_cleanup
@@ -423,4 +463,5 @@ test_awake_off_preserves_state_when_helper_restore_fails_and_helper_is_still_act
 test_awake_on_restores_helper_when_local_state_write_fails
 test_awake_extend_restores_helper_when_local_state_write_fails
 test_awake_on_serializes_local_state_writes
+test_awake_on_does_not_steal_live_lock_with_old_mtime
 echo "ok - awake on uses helper and writes state"

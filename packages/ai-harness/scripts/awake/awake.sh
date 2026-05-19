@@ -11,6 +11,7 @@ STATE_FILE="$STATE_DIR/awake.state"
 LEGACY_PID_FILE="$STATE_DIR/awake.pid"
 LEGACY_EXPIRES_FILE="$STATE_DIR/awake.expires"
 CLI_LOCK_DIR="${AWAKE_LOCK_DIR-${STATE_DIR}.lock.d}"
+CLI_LOCK_PID_FILE="$CLI_LOCK_DIR/owner.pid"
 DEFAULT_DURATION="2h"
 MAX_DURATION_SECS=86400
 PMSET_BIN="${AWAKE_PMSET_BIN-/usr/bin/pmset}"
@@ -128,24 +129,40 @@ stat_flavor_name() {
     printf '%s\n' "${AWAKE_STAT_FLAVOR-$(uname -s)}"
 }
 
+release_cli_lock() {
+    rm -f "$CLI_LOCK_PID_FILE" 2>/dev/null || true
+    rmdir "$CLI_LOCK_DIR" 2>/dev/null || true
+}
+
 acquire_cli_lock() {
-    local attempt=0 lock_mtime now age
+    local attempt=0 lock_mtime now age owner_pid
     while ! mkdir "$CLI_LOCK_DIR" 2>/dev/null; do
         attempt=$((attempt + 1))
+        owner_pid="$(cat "$CLI_LOCK_PID_FILE" 2>/dev/null || true)"
+        case "$owner_pid" in
+            ''|*[!0-9]*) owner_pid="" ;;
+        esac
+        if [ -n "$owner_pid" ] && "$KILL_BIN" -0 "$owner_pid" 2>/dev/null; then
+            [ "$attempt" -ge 50 ] && return 1
+            sleep 0.05
+            continue
+        fi
         lock_mtime="$(read_mtime "$CLI_LOCK_DIR")"
         now="$(now_epoch)"
         age=$(( now - lock_mtime ))
         if [ "$age" -gt 30 ]; then
+            rm -f "$CLI_LOCK_PID_FILE" 2>/dev/null || true
             rmdir "$CLI_LOCK_DIR" 2>/dev/null || true
             if mkdir "$CLI_LOCK_DIR" 2>/dev/null; then
-                trap 'rmdir "$CLI_LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+                trap 'release_cli_lock' EXIT INT TERM
                 return 0
             fi
         fi
         [ "$attempt" -ge 50 ] && return 1
         sleep 0.05
     done
-    trap 'rmdir "$CLI_LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+    printf '%s\n' "$$" > "$CLI_LOCK_PID_FILE"
+    trap 'release_cli_lock' EXIT INT TERM
 }
 
 generate_token() {
