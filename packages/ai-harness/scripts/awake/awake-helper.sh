@@ -202,7 +202,14 @@ cmd_start() {
         fi
         return 1
     fi
-    write_state "$token" "$expires_epoch" "$original_disablesleep" "$rollback_pid" "$started_epoch" || return 1
+    if ! write_state "$token" "$expires_epoch" "$original_disablesleep" "$rollback_pid" "$started_epoch"; then
+        kill_rollback_pid "$rollback_pid"
+        if [ "$had_existing_state" -eq 0 ]; then
+            apply_disablesleep "$original_disablesleep" || true
+            clear_state
+        fi
+        return 1
+    fi
     if [ "$had_existing_state" -eq 1 ]; then
         kill_rollback_pid "$existing_pid"
     fi
