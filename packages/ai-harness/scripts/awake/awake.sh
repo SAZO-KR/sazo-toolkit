@@ -268,8 +268,6 @@ cmd_on() {
 
     require_darwin || return 1
     acquire_cli_lock || return 1
-    stop_legacy_state
-
     if ! secs="$(parse_duration "$dur")"; then
         err "Invalid duration: $dur"
         return 2
@@ -289,6 +287,8 @@ cmd_on() {
         err "Failed to write awake state"
         return 1
     }
+
+    stop_legacy_state
 
     echo "awake on (${secs}s)"
 }
