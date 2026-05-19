@@ -109,7 +109,7 @@ now_epoch() {
 read_mtime() {
     local target="$1"
     local mtime=""
-    if [ "$(platform_name)" = "Darwin" ]; then
+    if [ "$(stat_flavor_name)" = "Darwin" ]; then
         mtime="$(stat -f %m "$target" 2>/dev/null || true)"
     else
         mtime="$(stat -c %Y "$target" 2>/dev/null || true)"
@@ -122,6 +122,10 @@ read_mtime() {
 
 platform_name() {
     printf '%s\n' "${AWAKE_UNAME-$(uname -s)}"
+}
+
+stat_flavor_name() {
+    printf '%s\n' "${AWAKE_STAT_FLAVOR-$(uname -s)}"
 }
 
 acquire_cli_lock() {

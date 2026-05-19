@@ -392,6 +392,7 @@ EOF
     export AWAKE_SUDO_BIN=""
     export AWAKE_STATE_DIR="$state_dir"
     export AWAKE_UNAME="Darwin"
+    export AWAKE_STAT_FLAVOR="$(uname -s)"
     export AWAKE_TEST_HELPER_LOG="$tmpdir/helper.log"
     export AWAKE_TEST_HELPER_COUNT="$tmpdir/helper.count"
 
