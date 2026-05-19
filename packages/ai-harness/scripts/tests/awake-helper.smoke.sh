@@ -67,6 +67,42 @@ EOF
     assert_file_contains "$AWAKE_TEST_PMSET_LOG" '^set 0$'
 }
 
+test_helper_start_does_not_steal_live_lock_with_old_mtime() {
+    local tmpdir pmset_bin state_dir lock_dir state_file
+    tmpdir="$(mktemp -d)"
+    pmset_bin="$tmpdir/fake-pmset.sh"
+    state_dir="$tmpdir/root-state"
+    lock_dir="$tmpdir/lockdir"
+    state_file="$state_dir/awake-root.state"
+
+    cat > "$pmset_bin" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+exit 0
+EOF
+    chmod +x "$pmset_bin"
+
+    export AWAKE_HELPER_PMSET_BIN="$pmset_bin"
+    export AWAKE_HELPER_STATE_DIR="$state_dir"
+    export AWAKE_HELPER_LOCK_DIR="$lock_dir"
+    export AWAKE_HELPER_SLEEP_BIN="/bin/sleep"
+    export AWAKE_TEST_PMSET_STATE="$tmpdir/pmset.state"
+    export AWAKE_TEST_PMSET_LOG="$tmpdir/pmset.log"
+
+    mkdir -p "$lock_dir"
+    /bin/sleep 300 >/dev/null 2>&1 &
+    live_pid="$!"
+    printf '%s\n' "$live_pid" > "$lock_dir/owner.pid"
+    touch -t 200001010000 "$lock_dir"
+
+    if bash "$HELPER_BIN" start 1800 token-live $(( $(date +%s) + 1800 )) >/dev/null 2>&1; then
+        fail "helper start should not steal a live helper lock even if directory mtime is old"
+    fi
+
+    kill "$live_pid" 2>/dev/null || true
+    [ ! -f "$state_file" ] || fail "expected no helper state while another live helper owner exists"
+}
+
 test_helper_reset_and_token_mismatch_rollback() {
     local tmpdir pmset_bin state_dir lock_dir state_file expires_epoch
     tmpdir="$(mktemp -d)"
@@ -531,6 +567,7 @@ EOF
 }
 
 test_helper_start_and_restore
+test_helper_start_does_not_steal_live_lock_with_old_mtime
 test_helper_reset_and_token_mismatch_rollback
 test_helper_restore_failure_keeps_rollback_alive
 test_helper_start_failure_preserves_existing_rollback

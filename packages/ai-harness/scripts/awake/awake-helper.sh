@@ -6,6 +6,7 @@ PMSET_BIN="${AWAKE_HELPER_PMSET_BIN-/usr/bin/pmset}"
 STATE_DIR="${AWAKE_HELPER_STATE_DIR-/var/db/sazo-ai-harness}"
 STATE_FILE="$STATE_DIR/awake-root.state"
 LOCK_DIR="${AWAKE_HELPER_LOCK_DIR-/var/run/sazo-ai-harness-awake.lock.d}"
+LOCK_PID_FILE="$LOCK_DIR/owner.pid"
 SLEEP_BIN="${AWAKE_HELPER_SLEEP_BIN-/bin/sleep}"
 SELF_BIN="${AWAKE_HELPER_SELF_BIN-$0}"
 MAX_DURATION_SECS=86400
@@ -34,6 +35,11 @@ ensure_dirs() {
     mkdir -p "$STATE_DIR"
 }
 
+release_lock() {
+    rm -f "$LOCK_PID_FILE" 2>/dev/null || true
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+
 read_mtime() {
     local target="$1"
     local mtime=""
@@ -49,23 +55,35 @@ read_mtime() {
 }
 
 acquire_lock() {
-    local attempt=0 lock_mtime now age
+    local attempt=0 lock_mtime now age owner_pid
     while ! mkdir "$LOCK_DIR" 2>/dev/null; do
         attempt=$((attempt + 1))
+        owner_pid="$(cat "$LOCK_PID_FILE" 2>/dev/null || true)"
+        case "$owner_pid" in
+            ''|*[!0-9]*) owner_pid="" ;;
+        esac
+        if [ -n "$owner_pid" ] && kill -0 "$owner_pid" 2>/dev/null; then
+            [ "$attempt" -ge 50 ] && return 1
+            "$SLEEP_BIN" 0.05 2>/dev/null || sleep 1
+            continue
+        fi
         lock_mtime="$(read_mtime "$LOCK_DIR")"
         now="$(now_epoch)"
         age=$(( now - lock_mtime ))
         if [ "$age" -gt 30 ]; then
+            rm -f "$LOCK_PID_FILE" 2>/dev/null || true
             rmdir "$LOCK_DIR" 2>/dev/null || true
             if mkdir "$LOCK_DIR" 2>/dev/null; then
-                trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+                printf '%s\n' "$$" > "$LOCK_PID_FILE"
+                trap 'release_lock' EXIT INT TERM
                 return 0
             fi
         fi
         [ "$attempt" -ge 50 ] && return 1
         "$SLEEP_BIN" 0.05 2>/dev/null || sleep 1
     done
-    trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+    printf '%s\n' "$$" > "$LOCK_PID_FILE"
+    trap 'release_lock' EXIT INT TERM
 }
 
 read_state_value() {
