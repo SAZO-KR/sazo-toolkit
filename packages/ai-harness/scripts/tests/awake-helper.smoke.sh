@@ -30,7 +30,7 @@ set -euo pipefail
 state_file="$AWAKE_TEST_PMSET_STATE"
 log_file="$AWAKE_TEST_PMSET_LOG"
 current="0"
-[ -f "$state_file" ] && current="$(cat "$state_file")"
+[ -f "$state_file" ] && current="$(/bin/cat "$state_file")"
 
 if [ "${1:-}" = "-g" ]; then
     printf ' SleepDisabled %s\n' "$current"
@@ -80,7 +80,7 @@ set -euo pipefail
 state_file="$AWAKE_TEST_PMSET_STATE"
 log_file="$AWAKE_TEST_PMSET_LOG"
 current="0"
-[ -f "$state_file" ] && current="$(cat "$state_file")"
+[ -f "$state_file" ] && current="$(/bin/cat "$state_file")"
 
 if [ "${1:-}" = "-g" ]; then
     printf ' SleepDisabled %s\n' "$current"
@@ -131,7 +131,7 @@ set -euo pipefail
 state_file="$AWAKE_TEST_PMSET_STATE"
 log_file="$AWAKE_TEST_PMSET_LOG"
 current="0"
-[ -f "$state_file" ] && current="$(cat "$state_file")"
+[ -f "$state_file" ] && current="$(/bin/cat "$state_file")"
 
 if [ "${1:-}" = "-g" ]; then
     printf ' SleepDisabled %s\n' "$current"
@@ -352,6 +352,66 @@ EOF
     assert_file_contains "$AWAKE_TEST_PMSET_LOG" '^set 0$'
 }
 
+test_helper_start_failure_restores_when_heredoc_write_fails() {
+    local tmpdir pmset_bin state_dir lock_dir state_file fake_cat path_backup
+    tmpdir="$(mktemp -d)"
+    pmset_bin="$tmpdir/fake-pmset.sh"
+    state_dir="$tmpdir/root-state"
+    lock_dir="$tmpdir/lockdir"
+    state_file="$state_dir/awake-root.state"
+    fake_cat="$tmpdir/cat"
+    path_backup="$PATH"
+
+    cat > "$pmset_bin" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+state_file="$AWAKE_TEST_PMSET_STATE"
+log_file="$AWAKE_TEST_PMSET_LOG"
+current="0"
+[ -f "$state_file" ] && current="$(cat "$state_file")"
+
+if [ "${1:-}" = "-g" ]; then
+    printf ' SleepDisabled %s\n' "$current"
+    exit 0
+fi
+
+if [ "${1:-}" = "-a" ] && [ "${2:-}" = "disablesleep" ]; then
+    printf '%s\n' "$3" > "$state_file"
+    printf 'set %s\n' "$3" >> "$log_file"
+    exit 0
+fi
+
+exit 1
+EOF
+    chmod +x "$pmset_bin"
+
+    cat > "$fake_cat" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+printf 'version=1\n'
+exit 1
+EOF
+    chmod +x "$fake_cat"
+
+    export PATH="$tmpdir:$path_backup"
+    export AWAKE_HELPER_PMSET_BIN="$pmset_bin"
+    export AWAKE_HELPER_STATE_DIR="$state_dir"
+    export AWAKE_HELPER_LOCK_DIR="$lock_dir"
+    export AWAKE_HELPER_SLEEP_BIN="/bin/sleep"
+    export AWAKE_TEST_PMSET_STATE="$tmpdir/pmset.state"
+    export AWAKE_TEST_PMSET_LOG="$tmpdir/pmset.log"
+
+    printf '0\n' > "$AWAKE_TEST_PMSET_STATE"
+
+    if bash "$HELPER_BIN" start 1800 token-heredoc 4102445800 >/dev/null 2>&1; then
+        fail "helper start should fail when heredoc write fails"
+    fi
+
+    [ ! -f "$state_file" ] || fail "expected helper state file not to be published on heredoc failure"
+    [ "$(/bin/cat "$AWAKE_TEST_PMSET_STATE")" = "0" ] || fail "expected pmset state to be restored to 0 on heredoc failure"
+    export PATH="$path_backup"
+}
+
 test_helper_reset_failure_keeps_rollback_alive() {
     local tmpdir pmset_bin state_dir lock_dir state_file
     tmpdir="$(mktemp -d)"
@@ -422,5 +482,6 @@ test_helper_restore_failure_keeps_rollback_alive
 test_helper_start_failure_preserves_existing_rollback
 test_helper_start_failure_restores_fresh_session_state
 test_helper_start_failure_restores_when_state_write_fails
+test_helper_start_failure_restores_when_heredoc_write_fails
 test_helper_reset_failure_keeps_rollback_alive
 echo "ok - helper start and restore"

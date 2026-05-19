@@ -93,7 +93,7 @@ write_state() {
 
     ensure_dirs
     tmp="$(mktemp "$STATE_DIR/awake-root.state.tmp.XXXXXX")" || return 1
-    cat > "$tmp" <<EOF
+    if ! cat > "$tmp" <<EOF
 version=1
 token=$token
 expires_epoch=$expires_epoch
@@ -101,6 +101,10 @@ original_disablesleep=$original_disablesleep
 rollback_pid=$rollback_pid
 started_epoch=$started_epoch
 EOF
+    then
+        rm -f "$tmp"
+        return 1
+    fi
     mv "$tmp" "$STATE_FILE"
 }
 

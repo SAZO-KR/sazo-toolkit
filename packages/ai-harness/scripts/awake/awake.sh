@@ -69,12 +69,16 @@ write_state() {
 
     mkdir -p "$STATE_DIR"
     tmp="$(mktemp "$STATE_DIR/awake.state.tmp.XXXXXX")" || return 1
-    cat > "$tmp" <<EOF
+    if ! cat > "$tmp" <<EOF
 version=1
 token=$token
 expires_epoch=$expires_epoch
 helper_bin=$HELPER_BIN
 EOF
+    then
+        rm -f "$tmp"
+        return 1
+    fi
     mv "$tmp" "$STATE_FILE"
 }
 
