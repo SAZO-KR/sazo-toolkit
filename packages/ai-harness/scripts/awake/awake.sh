@@ -1,41 +1,29 @@
 #!/bin/bash
-# awake — macOS sleep 명시적 차단 (caffeinate wrapper).
-#
-# 사용:
-#   awake on [duration]    sleep 차단 시작. duration 없으면 기본 2h.
-#                          duration 형식: 30s / 5m / 2h / 1h30m / 90 (초)
-#   awake off              차단 해제 (caffeinate 종료).
-#   awake status           실행 여부 + 남은 시간.
-#   awake extend <dur>     남은 시간에 추가하여 재시작.
-#
-# 동작:
-#   - `caffeinate -dimsu -t SECS` 를 nohup + disown 으로 백그라운드 실행.
-#   - PID는 $AWAKE_STATE_DIR/awake.pid, 만료 epoch는 awake.expires.
-#   - sudo 불필요. caffeinate 종료 시 sleep 복귀 자동.
-#
-# Env (테스트):
-#   AWAKE_CAFFEINATE_BIN  caffeinate 바이너리 경로 (default /usr/bin/caffeinate)
-#   AWAKE_STATE_DIR       PID/expires 저장 경로 (default ~/.config/sazo-ai-harness)
+
+# awake — macOS closed-lid 실행 유지용 pmset wrapper.
 
 set -u
 
-CAFFEINATE_BIN="${AWAKE_CAFFEINATE_BIN:-/usr/bin/caffeinate}"
-STATE_DIR="${AWAKE_STATE_DIR:-$HOME/.config/sazo-ai-harness}"
-PID_FILE="$STATE_DIR/awake.pid"
-EXPIRES_FILE="$STATE_DIR/awake.expires"
+HELPER_BIN="${AWAKE_HELPER_BIN-/usr/local/libexec/sazo-ai-harness/awake-helper}"
+SUDO_BIN="${AWAKE_SUDO_BIN-sudo}"
+STATE_DIR="${AWAKE_STATE_DIR-$HOME/.config/sazo-ai-harness}"
+STATE_FILE="$STATE_DIR/awake.state"
+LEGACY_PID_FILE="$STATE_DIR/awake.pid"
+LEGACY_EXPIRES_FILE="$STATE_DIR/awake.expires"
 DEFAULT_DURATION="2h"
-# 24h cap — 실수로 큰 값 넣어 며칠씩 sleep 차단되는 사고 방지. extend로 늘림.
 MAX_DURATION_SECS=86400
+PMSET_BIN="${AWAKE_PMSET_BIN-/usr/bin/pmset}"
 
 usage() {
     cat <<EOF
 Usage: awake <command> [args]
 
 Commands:
-  on [duration]    Start sleep prevention (default: $DEFAULT_DURATION)
-  off              Stop sleep prevention
-  status           Show running state + remaining time
+  on [duration]    Keep running with lid closed (default: $DEFAULT_DURATION)
+  off              Restore previous sleep setting
+  status           Show current awake state
   extend <dur>     Add to remaining time
+  reset            Force disablesleep 0 and clear awake state
 
 Duration: 30s / 5m / 2h / 1h30m / 90 (plain int = seconds)
 EOF
@@ -43,9 +31,63 @@ EOF
 
 err() { echo "$@" >&2; }
 
-# parse_duration "30s" → 30 (stdout). 실패 시 비-zero 종료.
+clean_legacy_state() {
+    rm -f "$LEGACY_PID_FILE" "$LEGACY_EXPIRES_FILE"
+}
+
+clean_state() {
+    rm -f "$STATE_FILE"
+}
+
+write_state() {
+    local token="$1"
+    local expires_epoch="$2"
+    local tmp
+
+    mkdir -p "$STATE_DIR"
+    tmp="$(mktemp "$STATE_DIR/awake.state.tmp.XXXXXX")" || return 1
+    cat > "$tmp" <<EOF
+version=1
+token=$token
+expires_epoch=$expires_epoch
+helper_bin=$HELPER_BIN
+EOF
+    mv "$tmp" "$STATE_FILE"
+}
+
+read_state_value() {
+    local key="$1"
+    local file="${2:-$STATE_FILE}"
+    local line value
+
+    [ -f "$file" ] || return 1
+
+    while IFS= read -r line; do
+        case "$line" in
+            "$key"=*)
+                value="${line#*=}"
+                printf '%s\n' "$value"
+                return 0
+                ;;
+        esac
+    done < "$file"
+    return 1
+}
+
+now_epoch() {
+    date +%s
+}
+
+generate_token() {
+    if command -v uuidgen >/dev/null 2>&1; then
+        uuidgen | tr '[:upper:]' '[:lower:]'
+        return 0
+    fi
+    printf 'awake-%s-%s-%s\n' "$(now_epoch)" "$$" "${RANDOM:-0}"
+}
+
 parse_duration() {
-    local input="$1" rest="$1" total=0 num unit
+    local rest="$1" total=0 num unit
     [ -z "$rest" ] && return 1
     if [[ "$rest" =~ ^[0-9]+$ ]]; then
         [ "$rest" -gt 0 ] || return 1
@@ -72,146 +114,188 @@ parse_duration() {
     echo "$total"
 }
 
-read_pid() {
-    [ -f "$PID_FILE" ] || return 1
-    local p; p=$(cat "$PID_FILE" 2>/dev/null || true)
-    case "$p" in
-        ''|*[!0-9]*) return 1 ;;
-    esac
-    echo "$p"
-}
-
-is_running() {
-    local pid
-    pid=$(read_pid) || return 1
-    kill -0 "$pid" 2>/dev/null
-}
-
-clean_state() {
-    rm -f "$PID_FILE" "$EXPIRES_FILE"
-}
-
-start_caffeinate() {
-    # $1 = seconds
-    local secs="$1"
-    # 사전 검증 — bin이 실행 가능해야 fork 시도. 부재/non-exec 시 fork 후 좀비 PID
-    # 기록되는 race 방지. nohup은 exec 실패 후에도 잠시 alive로 보일 수 있음.
-    if [ ! -x "$CAFFEINATE_BIN" ]; then
+require_darwin() {
+    if [ "$(uname -s)" != "Darwin" ]; then
+        err "awake is only supported on macOS"
         return 1
     fi
-    mkdir -p "$STATE_DIR"
-    nohup "$CAFFEINATE_BIN" -dimsu -t "$secs" >/dev/null 2>&1 &
-    local pid=$!
-    disown "$pid" 2>/dev/null || true
-    # liveness 검증 — fork 후 짧은 시점에서 죽었는지 확인 (signal 등). 좀비
-    # 윈도우 보강 차원. 50ms × 5 = 250ms 안에 살아있어야 OK.
-    local i
-    for i in 1 2 3 4 5; do
-        kill -0 "$pid" 2>/dev/null && break
-        sleep 0.05
-    done
-    unset i  # bash special var $_와의 혼동 방지 차원에서 정리
-    if ! kill -0 "$pid" 2>/dev/null; then
+}
+
+run_helper() {
+    local command="$1"
+    shift
+
+    if [ ! -x "$HELPER_BIN" ]; then
+        err "awake helper not installed: $HELPER_BIN"
+        err "Reinstall ai-harness and enable awake helper setup."
         return 1
     fi
-    echo "$pid" > "$PID_FILE"
-    echo $(( $(date +%s) + secs )) > "$EXPIRES_FILE"
-    echo "$pid"
+
+    if [ -n "$SUDO_BIN" ]; then
+        "$SUDO_BIN" "$HELPER_BIN" "$command" "$@"
+    else
+        "$HELPER_BIN" "$command" "$@"
+    fi
+}
+
+read_pmset_disablesleep() {
+    local line value
+    [ -x "$PMSET_BIN" ] || return 1
+    while IFS= read -r line; do
+        case "$line" in
+            *SleepDisabled*)
+                value="${line##* }"
+                case "$value" in
+                    0|1) printf '%s\n' "$value"; return 0 ;;
+                esac
+                ;;
+        esac
+    done < <("$PMSET_BIN" -g 2>/dev/null)
+    return 1
 }
 
 cmd_on() {
     local dur="${1:-$DEFAULT_DURATION}"
-    local secs
-    if ! secs=$(parse_duration "$dur"); then
+    local secs token expires_epoch
+
+    require_darwin || return 1
+    clean_legacy_state
+
+    if ! secs="$(parse_duration "$dur")"; then
         err "Invalid duration: $dur"
         return 2
     fi
 
-    if is_running; then
-        local oldpid
-        oldpid=$(read_pid)
-        echo "Replacing existing awake (pid $oldpid)"
-        kill "$oldpid" 2>/dev/null || true
-        # 짧게 대기 — 동일 PID 재사용 가능성 회피.
-        # `_` 대신 명시적 var 사용: bash $_ (last-arg)와 혼동 회피.
-        local wait_i
-        for wait_i in 1 2 3 4 5; do
-            kill -0 "$oldpid" 2>/dev/null || break
-            sleep 0.05
-        done
-        # 죽은 oldpid 가 PID 파일에 남지 않도록 정리. start_caffeinate 실패 시
-        # 파일에 stale pid가 잔존하는 hygiene 문제 방지.
-        clean_state
-    fi
+    token="$(generate_token)"
+    expires_epoch=$(( $(now_epoch) + secs ))
 
-    local pid
-    if ! pid=$(start_caffeinate "$secs"); then
-        err "Failed to start caffeinate ($CAFFEINATE_BIN)"
+    if ! run_helper start "$secs" "$token" "$expires_epoch"; then
+        err "Failed to enable closed-lid awake mode"
         return 1
     fi
-    echo "awake on (pid $pid, ${secs}s)"
+
+    write_state "$token" "$expires_epoch" || {
+        err "Failed to write awake state"
+        return 1
+    }
+
+    echo "awake on (${secs}s)"
 }
 
 cmd_off() {
-    if ! is_running; then
+    local token
+
+    require_darwin || return 1
+    clean_legacy_state
+
+    if ! token="$(read_state_value token)"; then
         clean_state
         echo "awake: not running"
         return 0
     fi
-    local pid; pid=$(read_pid)
-    kill "$pid" 2>/dev/null || true
+
+    if ! run_helper restore "$token"; then
+        err "Failed to restore previous sleep setting"
+        err "If state looks stuck, run 'awake reset'."
+        return 1
+    fi
+
     clean_state
     echo "awake off"
 }
 
 cmd_status() {
-    if ! is_running; then
-        clean_state
-        echo "awake: off"
+    local token expires_epoch now remain pmset_value
+
+    clean_legacy_state
+    now="$(now_epoch)"
+    token="$(read_state_value token 2>/dev/null || true)"
+    expires_epoch="$(read_state_value expires_epoch 2>/dev/null || true)"
+    pmset_value="$(read_pmset_disablesleep 2>/dev/null || true)"
+
+    if [ -n "$token" ] && [ -n "$expires_epoch" ] && [[ "$expires_epoch" =~ ^[0-9]+$ ]]; then
+        remain=$(( expires_epoch - now ))
+        [ "$remain" -lt 0 ] && remain=0
+
+        if [ "$remain" -eq 0 ] && [ "$pmset_value" != "1" ]; then
+            clean_state
+            echo "awake: off"
+            return 0
+        fi
+
+        echo "awake: on (${remain}s remaining${pmset_value:+, SleepDisabled=$pmset_value})"
         return 0
     fi
-    local pid expires now remain
-    pid=$(read_pid)
-    expires=$(cat "$EXPIRES_FILE" 2>/dev/null || echo 0)
-    case "$expires" in
-        ''|*[!0-9]*) expires=0 ;;
-    esac
-    now=$(date +%s)
-    remain=$(( expires - now ))
-    [ "$remain" -lt 0 ] && remain=0
-    echo "awake: on (pid $pid, ${remain}s remaining)"
+
+    if [ "$pmset_value" = "1" ]; then
+        echo "awake: unmanaged (SleepDisabled=1)"
+        return 0
+    fi
+
+    clean_state
+    echo "awake: off"
 }
 
 cmd_extend() {
     local dur="${1:-}"
+    local add token expires_epoch now remain new_secs new_token new_expires_epoch
+
+    require_darwin || return 1
+    clean_legacy_state
+
     if [ -z "$dur" ]; then
         err "Usage: awake extend <duration>"
         return 2
     fi
-    local add
-    if ! add=$(parse_duration "$dur"); then
+    if ! add="$(parse_duration "$dur")"; then
         err "Invalid duration: $dur"
         return 2
     fi
-    if ! is_running; then
+    if ! token="$(read_state_value token)"; then
         err "awake not running — use 'awake on' first"
         return 1
     fi
-    local expires now remain new_secs
-    expires=$(cat "$EXPIRES_FILE" 2>/dev/null || echo 0)
-    case "$expires" in
-        ''|*[!0-9]*) expires=0 ;;
+    expires_epoch="$(read_state_value expires_epoch)"
+    case "$expires_epoch" in
+        ''|*[!0-9]*) expires_epoch=0 ;;
     esac
-    now=$(date +%s)
-    remain=$(( expires - now ))
+
+    now="$(now_epoch)"
+    remain=$(( expires_epoch - now ))
     [ "$remain" -lt 0 ] && remain=0
     new_secs=$(( remain + add ))
-    # cap clamp — extend가 cmd_on 통해 parse_duration의 cap을 우회하지 못하도록.
     if [ "$new_secs" -gt "$MAX_DURATION_SECS" ]; then
         echo "awake: extend clamped to max ${MAX_DURATION_SECS}s (24h)" >&2
         new_secs=$MAX_DURATION_SECS
     fi
-    cmd_on "$new_secs"
+
+    new_token="$(generate_token)"
+    new_expires_epoch=$(( now + new_secs ))
+
+    if ! run_helper start "$new_secs" "$new_token" "$new_expires_epoch"; then
+        err "Failed to extend awake session"
+        return 1
+    fi
+
+    write_state "$new_token" "$new_expires_epoch" || {
+        err "Failed to write awake state"
+        return 1
+    }
+
+    echo "awake extended (${new_secs}s remaining)"
+}
+
+cmd_reset() {
+    require_darwin || return 1
+    clean_legacy_state
+
+    if ! run_helper reset; then
+        err "Failed to force awake reset"
+        return 1
+    fi
+
+    clean_state
+    echo "awake reset"
 }
 
 case "${1:-}" in
@@ -219,8 +303,9 @@ case "${1:-}" in
     off)     shift; cmd_off "$@" ;;
     status)  shift; cmd_status "$@" ;;
     extend)  shift; cmd_extend "$@" ;;
-    __parse) shift; parse_duration "${1:-}" ;;  # 테스트용 — 외부 노출 X
+    reset)   shift; cmd_reset "$@" ;;
+    __parse) shift; parse_duration "${1:-}" ;;
     -h|--help|help) usage ;;
-    "")      usage; exit 2 ;;
+    "")     usage; exit 2 ;;
     *)       err "Unknown command: $1"; usage; exit 2 ;;
 esac
