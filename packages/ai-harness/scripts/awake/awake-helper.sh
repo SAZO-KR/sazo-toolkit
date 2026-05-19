@@ -168,6 +168,10 @@ cmd_start() {
         ''|*[!0-9]*) rollback_pid=0 ;;
     esac
     if [ "$rollback_pid" -eq 0 ]; then
+        if [ "$had_existing_state" -eq 0 ]; then
+            apply_disablesleep "$original_disablesleep" || true
+            clear_state
+        fi
         return 1
     fi
     write_state "$token" "$expires_epoch" "$original_disablesleep" "$rollback_pid" "$started_epoch" || return 1

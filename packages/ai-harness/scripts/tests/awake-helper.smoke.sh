@@ -254,8 +254,58 @@ EOF
     bash "$HELPER_BIN" reset >/dev/null 2>&1 || fail "helper reset should still succeed"
 }
 
+test_helper_start_failure_restores_fresh_session_state() {
+    local tmpdir pmset_bin state_dir lock_dir state_file
+    tmpdir="$(mktemp -d)"
+    pmset_bin="$tmpdir/fake-pmset.sh"
+    state_dir="$tmpdir/root-state"
+    lock_dir="$tmpdir/lockdir"
+    state_file="$state_dir/awake-root.state"
+
+    cat > "$pmset_bin" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+state_file="$AWAKE_TEST_PMSET_STATE"
+log_file="$AWAKE_TEST_PMSET_LOG"
+current="0"
+[ -f "$state_file" ] && current="$(cat "$state_file")"
+
+if [ "${1:-}" = "-g" ]; then
+    printf ' SleepDisabled %s\n' "$current"
+    exit 0
+fi
+
+if [ "${1:-}" = "-a" ] && [ "${2:-}" = "disablesleep" ]; then
+    printf '%s\n' "$3" > "$state_file"
+    printf 'set %s\n' "$3" >> "$log_file"
+    exit 0
+fi
+
+exit 1
+EOF
+    chmod +x "$pmset_bin"
+
+    export AWAKE_HELPER_PMSET_BIN="$pmset_bin"
+    export AWAKE_HELPER_STATE_DIR="$state_dir"
+    export AWAKE_HELPER_LOCK_DIR="$lock_dir"
+    export AWAKE_HELPER_SLEEP_BIN="$tmpdir/missing-sleep"
+    export AWAKE_TEST_PMSET_STATE="$tmpdir/pmset.state"
+    export AWAKE_TEST_PMSET_LOG="$tmpdir/pmset.log"
+
+    printf '0\n' > "$AWAKE_TEST_PMSET_STATE"
+
+    if bash "$HELPER_BIN" start 1800 token-fresh 4102445800 >/dev/null 2>&1; then
+        fail "helper start should fail when fresh-session rollback spawn fails"
+    fi
+
+    [ ! -f "$state_file" ] || fail "expected provisional helper state to be removed"
+    assert_file_contains "$AWAKE_TEST_PMSET_LOG" '^set 1$'
+    assert_file_contains "$AWAKE_TEST_PMSET_LOG" '^set 0$'
+}
+
 test_helper_start_and_restore
 test_helper_reset_and_token_mismatch_rollback
 test_helper_restore_failure_keeps_rollback_alive
 test_helper_start_failure_preserves_existing_rollback
+test_helper_start_failure_restores_fresh_session_state
 echo "ok - helper start and restore"
