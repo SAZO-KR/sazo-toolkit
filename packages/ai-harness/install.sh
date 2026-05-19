@@ -13,9 +13,10 @@ set -euo pipefail
 
 REPO_URL="https://github.com/SAZO-KR/sazo-toolkit.git"
 INSTALL_DIR="$HOME/.config/sazo-ai-harness"
+CREATED_INSTALL_DIR=0
 
 cleanup() {
-    if [ "${INSTALL_FAILED:-}" = "1" ] && [ -d "$INSTALL_DIR" ]; then
+    if [ "${INSTALL_FAILED:-}" = "1" ] && [ "$CREATED_INSTALL_DIR" = "1" ] && [ -d "$INSTALL_DIR" ]; then
         rm -rf "$INSTALL_DIR"
     fi
 }
@@ -80,6 +81,7 @@ else
     echo "Installing to $INSTALL_DIR..."
     rm -rf "$INSTALL_DIR"
     mkdir -p "$(dirname "$INSTALL_DIR")"
+    CREATED_INSTALL_DIR=1
 
     git clone --sparse --filter=blob:none --depth=1 --single-branch -b main "$REPO_URL" "$INSTALL_DIR"
     cd "$INSTALL_DIR"
