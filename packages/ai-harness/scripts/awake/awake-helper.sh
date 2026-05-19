@@ -210,9 +210,6 @@ cmd_start() {
         fi
         return 1
     fi
-    if [ "$had_existing_state" -eq 1 ]; then
-        kill_rollback_pid "$existing_pid"
-    fi
 }
 
 cmd_restore() {
@@ -227,9 +224,7 @@ cmd_restore() {
     [ "$current_token" = "$token" ] || return 1
 
     original_disablesleep="$(read_state_value original_disablesleep)" || return 1
-    rollback_pid="$(read_state_value rollback_pid 2>/dev/null || true)"
     apply_disablesleep "$original_disablesleep" || return 1
-    kill_rollback_pid "$rollback_pid"
     clear_state
 }
 
@@ -267,11 +262,7 @@ cmd_rollback() {
 }
 
 cmd_reset() {
-    local rollback_pid
-
     acquire_lock || return 1
-    rollback_pid="$(read_state_value rollback_pid 2>/dev/null || true)"
-    kill_rollback_pid "$rollback_pid"
     apply_disablesleep 0 || return 1
     clear_state
 }
