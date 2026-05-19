@@ -154,6 +154,7 @@ acquire_cli_lock() {
             rm -f "$CLI_LOCK_PID_FILE" 2>/dev/null || true
             rmdir "$CLI_LOCK_DIR" 2>/dev/null || true
             if mkdir "$CLI_LOCK_DIR" 2>/dev/null; then
+                printf '%s\n' "$$" > "$CLI_LOCK_PID_FILE"
                 trap 'release_cli_lock' EXIT INT TERM
                 return 0
             fi

@@ -453,6 +453,49 @@ EOF
     [ ! -f "$tmpdir/helper.log" ] || fail "expected no helper call while another live lock owner exists"
 }
 
+test_awake_on_reclaimed_stale_lock_records_owner_pid() {
+    local tmpdir helper state_dir stdout1 stderr1 stdout2 stderr2 lock_dir
+    tmpdir="$(mktemp -d)"
+    helper="$tmpdir/fake-helper.sh"
+    state_dir="$tmpdir/state"
+    stdout1="$tmpdir/stdout1"
+    stderr1="$tmpdir/stderr1"
+    stdout2="$tmpdir/stdout2"
+    stderr2="$tmpdir/stderr2"
+    lock_dir="$tmpdir/lock.d"
+
+cat > "$helper" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$AWAKE_TEST_HELPER_LOG"
+sleep 5
+exit 0
+EOF
+    chmod +x "$helper"
+
+    mkdir -p "$state_dir" "$lock_dir"
+    touch -t 200001010000 "$lock_dir"
+
+    export AWAKE_HELPER_BIN="$helper"
+    export AWAKE_SUDO_BIN=""
+    export AWAKE_STATE_DIR="$state_dir"
+    export AWAKE_LOCK_DIR="$lock_dir"
+    export AWAKE_UNAME="Darwin"
+    export AWAKE_STAT_FLAVOR="$(uname -s)"
+    export AWAKE_TEST_HELPER_LOG="$tmpdir/helper.log"
+
+    bash "$AWAKE_BIN" on 30m >"$stdout1" 2>"$stderr1" &
+    pid1=$!
+    sleep 0.2
+    if bash "$AWAKE_BIN" on 30m >"$stdout2" 2>"$stderr2"; then
+        fail "second awake on should not steal a reclaimed stale lock while first owner is still active"
+    fi
+    wait "$pid1" || fail "first reclaimed stale-lock awake on should succeed"
+
+    assert_file_contains "$tmpdir/helper.log" '^start 1800 '
+    [ "$(wc -l < "$tmpdir/helper.log")" -eq 1 ] || fail "expected only one helper start while reclaimed lock owner is active"
+}
+
 test_awake_on_uses_helper_and_writes_state
 test_awake_off_restores_and_cleans_state
 test_awake_off_stops_legacy_caffeinate_before_cleanup
@@ -464,4 +507,5 @@ test_awake_on_restores_helper_when_local_state_write_fails
 test_awake_extend_restores_helper_when_local_state_write_fails
 test_awake_on_serializes_local_state_writes
 test_awake_on_does_not_steal_live_lock_with_old_mtime
+test_awake_on_reclaimed_stale_lock_records_owner_pid
 echo "ok - awake on uses helper and writes state"
