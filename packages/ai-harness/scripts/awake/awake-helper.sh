@@ -160,7 +160,11 @@ cmd_start() {
     started_epoch="$(now_epoch)"
 
     if [ "$had_existing_state" -eq 0 ]; then
-        write_state "$token" "$expires_epoch" "$original_disablesleep" 0 "$started_epoch" || return 1
+        if ! write_state "$token" "$expires_epoch" "$original_disablesleep" 0 "$started_epoch"; then
+            apply_disablesleep "$original_disablesleep" || true
+            clear_state
+            return 1
+        fi
     fi
 
     rollback_pid="$(spawn_rollback "$token" "$expires_epoch" 2>/dev/null || true)"

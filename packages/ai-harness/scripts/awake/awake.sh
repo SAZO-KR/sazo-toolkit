@@ -189,6 +189,7 @@ cmd_on() {
     fi
 
     write_state "$token" "$expires_epoch" || {
+        run_helper restore "$token" >/dev/null 2>&1 || true
         err "Failed to write awake state"
         return 1
     }

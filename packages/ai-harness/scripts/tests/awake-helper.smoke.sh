@@ -303,9 +303,59 @@ EOF
     assert_file_contains "$AWAKE_TEST_PMSET_LOG" '^set 0$'
 }
 
+test_helper_start_failure_restores_when_state_write_fails() {
+    local tmpdir pmset_bin bad_state_dir lock_dir
+    tmpdir="$(mktemp -d)"
+    pmset_bin="$tmpdir/fake-pmset.sh"
+    bad_state_dir="$tmpdir/not-a-dir"
+    lock_dir="$tmpdir/lockdir"
+
+    cat > "$pmset_bin" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+state_file="$AWAKE_TEST_PMSET_STATE"
+log_file="$AWAKE_TEST_PMSET_LOG"
+current="0"
+[ -f "$state_file" ] && current="$(cat "$state_file")"
+
+if [ "${1:-}" = "-g" ]; then
+    printf ' SleepDisabled %s\n' "$current"
+    exit 0
+fi
+
+if [ "${1:-}" = "-a" ] && [ "${2:-}" = "disablesleep" ]; then
+    printf '%s\n' "$3" > "$state_file"
+    printf 'set %s\n' "$3" >> "$log_file"
+    exit 0
+fi
+
+exit 1
+EOF
+    chmod +x "$pmset_bin"
+
+    printf 'not-a-dir\n' > "$bad_state_dir"
+
+    export AWAKE_HELPER_PMSET_BIN="$pmset_bin"
+    export AWAKE_HELPER_STATE_DIR="$bad_state_dir"
+    export AWAKE_HELPER_LOCK_DIR="$lock_dir"
+    export AWAKE_HELPER_SLEEP_BIN="/bin/sleep"
+    export AWAKE_TEST_PMSET_STATE="$tmpdir/pmset.state"
+    export AWAKE_TEST_PMSET_LOG="$tmpdir/pmset.log"
+
+    printf '0\n' > "$AWAKE_TEST_PMSET_STATE"
+
+    if bash "$HELPER_BIN" start 1800 token-state-write 4102445800 >/dev/null 2>&1; then
+        fail "helper start should fail when helper state write fails"
+    fi
+
+    assert_file_contains "$AWAKE_TEST_PMSET_LOG" '^set 1$'
+    assert_file_contains "$AWAKE_TEST_PMSET_LOG" '^set 0$'
+}
+
 test_helper_start_and_restore
 test_helper_reset_and_token_mismatch_rollback
 test_helper_restore_failure_keeps_rollback_alive
 test_helper_start_failure_preserves_existing_rollback
 test_helper_start_failure_restores_fresh_session_state
+test_helper_start_failure_restores_when_state_write_fails
 echo "ok - helper start and restore"
