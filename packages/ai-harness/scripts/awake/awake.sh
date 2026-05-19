@@ -142,6 +142,16 @@ run_helper() {
     fi
 }
 
+helper_active_state() {
+    local status_output
+    status_output="$(run_helper status 2>/dev/null || true)"
+    case "$status_output" in
+        *$'\n'active=1|active=1|active=1$'\n'*) printf '1\n'; return 0 ;;
+        *$'\n'active=0|active=0|active=0$'\n'*) printf '0\n'; return 0 ;;
+    esac
+    return 1
+}
+
 read_pmset_disablesleep() {
     local line value
     [ -x "$PMSET_BIN" ] || return 1
@@ -187,7 +197,7 @@ cmd_on() {
 }
 
 cmd_off() {
-    local token expires_epoch now
+    local token expires_epoch now helper_active
 
     require_darwin || return 1
     clean_legacy_state
@@ -206,9 +216,12 @@ cmd_off() {
 
     if ! run_helper restore "$token"; then
         if [ "$expires_epoch" -gt 0 ] && [ "$expires_epoch" -le "$now" ]; then
-            clean_state
-            echo "awake: off"
-            return 0
+            helper_active="$(helper_active_state 2>/dev/null || true)"
+            if [ "$helper_active" = "0" ]; then
+                clean_state
+                echo "awake: off"
+                return 0
+            fi
         fi
         err "Failed to restore previous sleep setting"
         err "If state looks stuck, run 'awake reset'."
@@ -220,7 +233,7 @@ cmd_off() {
 }
 
 cmd_status() {
-    local token expires_epoch now remain pmset_value
+    local token expires_epoch now remain pmset_value helper_active
 
     clean_legacy_state
     now="$(now_epoch)"
@@ -233,9 +246,12 @@ cmd_status() {
         [ "$remain" -lt 0 ] && remain=0
 
         if [ "$remain" -eq 0 ]; then
-            clean_state
-            echo "awake: off"
-            return 0
+            helper_active="$(helper_active_state 2>/dev/null || true)"
+            if [ "$helper_active" = "0" ]; then
+                clean_state
+                echo "awake: off"
+                return 0
+            fi
         fi
 
         echo "awake: on (${remain}s remaining${pmset_value:+, SleepDisabled=$pmset_value})"
