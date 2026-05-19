@@ -1,24 +1,26 @@
-# AI Harness (Archived)
+# AI Harness
 
-> **이 패키지의 hook/workflow 시스템은 폐기되었습니다.**
-> Agent 정의, 스킬, 커맨드(awake, weekly-report)만 보존됩니다.
+Agent 정의, 스킬, 커맨드를 `~/.claude/`에 심볼릭 링크로 설치합니다.
 
-## 기존 설치 제거
+## 설치
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/ai-harness/install.sh | bash
+```
+
+설치 내용:
+- `~/.claude/{commands,skills,agents}/` 에 심볼릭 링크 생성
+- `~/.local/bin/awake` — macOS closed-lid 실행 유지 CLI
+- 선택 시 `/usr/local/libexec/sazo-ai-harness/awake-helper` 설치
+  - `pmset disablesleep` 제어용 root helper
+  - hooks / launchd watchdog 없이 명시적 `awake on|off|status|extend|reset`만 지원
+- OpenCode 설치 시 `~/.config/opencode/commands/` 에도 링크 생성
+
+## 제거
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/ai-harness/uninstall.sh | bash
 ```
-
-제거 대상:
-- `~/.config/sazo-ai-harness/` (설치 디렉토리)
-- `~/.claude/{commands,skills,agents}/` 내 sazo-ai-harness 심볼릭 링크
-- `~/.claude/settings.json` 내 hook 항목
-- `~/.claude/CLAUDE.md` 내 managed block
-- `~/.local/bin/{awake,sazo-workflow,claude-sync-notify.sh}`
-- `~/.claude/session-state/`, 로그 파일
-- LaunchAgent (claude-sync)
-
-OpenCode 플러그인/모델 설정, RTK, claude-sync는 별도 관리이므로 보존됩니다.
 
 ## 보존된 콘텐츠
 
@@ -56,4 +58,4 @@ OpenCode 플러그인/모델 설정, RTK, claude-sync는 별도 관리이므로 
 | 커맨드 | 설명 |
 |---|---|
 | `/weekly-report` | 주간 업무 보고서 생성 |
-| `/awake` | macOS sleep 차단 CLI |
+| `/awake` | macOS closed-lid 실행 유지 CLI |
