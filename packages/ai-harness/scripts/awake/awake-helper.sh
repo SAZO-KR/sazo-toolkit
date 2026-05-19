@@ -33,10 +33,34 @@ ensure_dirs() {
     mkdir -p "$STATE_DIR"
 }
 
+read_mtime() {
+    local target="$1"
+    local mtime=""
+    if [ "$(uname -s)" = "Darwin" ]; then
+        mtime="$(stat -f %m "$target" 2>/dev/null || true)"
+    else
+        mtime="$(stat -c %Y "$target" 2>/dev/null || true)"
+    fi
+    case "$mtime" in
+        ''|*[!0-9]*) printf '0\n' ;;
+        *) printf '%s\n' "$mtime" ;;
+    esac
+}
+
 acquire_lock() {
-    local attempt=0
+    local attempt=0 lock_mtime now age
     while ! mkdir "$LOCK_DIR" 2>/dev/null; do
         attempt=$((attempt + 1))
+        lock_mtime="$(read_mtime "$LOCK_DIR")"
+        now="$(now_epoch)"
+        age=$(( now - lock_mtime ))
+        if [ "$age" -gt 30 ]; then
+            rmdir "$LOCK_DIR" 2>/dev/null || true
+            if mkdir "$LOCK_DIR" 2>/dev/null; then
+                trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+                return 0
+            fi
+        fi
         [ "$attempt" -ge 50 ] && return 1
         "$SLEEP_BIN" 0.05 2>/dev/null || sleep 1
     done

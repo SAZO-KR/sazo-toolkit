@@ -269,6 +269,45 @@ EOF
     assert_file_contains "$AWAKE_TEST_HELPER_LOG" '^restore '
 }
 
+test_awake_extend_restores_helper_when_local_state_write_fails() {
+    local tmpdir helper state_dir stdout_file stderr_file
+    tmpdir="$(mktemp -d)"
+    helper="$tmpdir/fake-helper.sh"
+    state_dir="$tmpdir/state"
+    stdout_file="$tmpdir/stdout"
+    stderr_file="$tmpdir/stderr"
+
+    cat > "$helper" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$AWAKE_TEST_HELPER_LOG"
+exit 0
+EOF
+    chmod +x "$helper"
+
+    mkdir -p "$state_dir"
+    cat > "$state_dir/awake.state" <<EOF
+version=1
+token=token-extend
+expires_epoch=4102445800
+helper_bin=$helper
+EOF
+    chmod 500 "$state_dir"
+
+    export AWAKE_HELPER_BIN="$helper"
+    export AWAKE_SUDO_BIN=""
+    export AWAKE_STATE_DIR="$state_dir"
+    export AWAKE_UNAME="Darwin"
+    export AWAKE_TEST_HELPER_LOG="$tmpdir/helper.log"
+
+    if bash "$AWAKE_BIN" extend 30m >"$stdout_file" 2>"$stderr_file"; then
+        fail "awake extend should fail when local state write fails"
+    fi
+
+    assert_file_contains "$AWAKE_TEST_HELPER_LOG" '^start '
+    assert_file_contains "$AWAKE_TEST_HELPER_LOG" '^restore '
+}
+
 test_awake_on_uses_helper_and_writes_state
 test_awake_off_restores_and_cleans_state
 test_awake_on_respects_platform_override
@@ -276,4 +315,5 @@ test_awake_status_cleans_expired_state_even_when_sleepdisabled_is_one
 test_awake_off_cleans_expired_state_when_helper_restore_is_missing
 test_awake_off_preserves_state_when_helper_restore_fails_and_helper_is_still_active
 test_awake_on_restores_helper_when_local_state_write_fails
+test_awake_extend_restores_helper_when_local_state_write_fails
 echo "ok - awake on uses helper and writes state"

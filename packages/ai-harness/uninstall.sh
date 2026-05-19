@@ -237,11 +237,13 @@ echo "[7/8] CLI 도구 및 상태 파일 제거..."
 AWAKE_HELPER_ROOT="/usr/local/libexec/sazo-ai-harness/awake-helper"
 AWAKE_HELPER_ROOT_DIR="/usr/local/libexec/sazo-ai-harness"
 AWAKE_HELPER_STATE_DIR="/var/db/sazo-ai-harness"
+AWAKE_HELPER_LOCK_DIR="/var/run/sazo-ai-harness-awake.lock.d"
 AWAKE_SUDOERS_FILE="/etc/sudoers.d/sazo-ai-harness-awake"
 AWAKE_HELPER_MANAGED=0
 
 [ -x "$AWAKE_HELPER_ROOT" ] && AWAKE_HELPER_MANAGED=1
 [ -d "$AWAKE_HELPER_STATE_DIR" ] && AWAKE_HELPER_MANAGED=1
+[ -d "$AWAKE_HELPER_LOCK_DIR" ] && AWAKE_HELPER_MANAGED=1
 [ -f "$AWAKE_SUDOERS_FILE" ] && AWAKE_HELPER_MANAGED=1
 
 for f in "$HOME/.local/bin/awake" \
@@ -289,6 +291,10 @@ fi
 
 if [ "$AWAKE_HELPER_MANAGED" -eq 1 ] && sudo test -d "$AWAKE_HELPER_STATE_DIR" >/dev/null 2>&1; then
     sudo rm -rf "$AWAKE_HELPER_STATE_DIR" && info "awake helper state 제거" && removed=$((removed + 1))
+fi
+
+if [ "$AWAKE_HELPER_MANAGED" -eq 1 ] && sudo test -d "$AWAKE_HELPER_LOCK_DIR" >/dev/null 2>&1; then
+    sudo rm -rf "$AWAKE_HELPER_LOCK_DIR" && info "awake helper lock 제거" && removed=$((removed + 1))
 fi
 
 if [ "$AWAKE_HELPER_MANAGED" -eq 1 ] && sudo test -f "$AWAKE_SUDOERS_FILE" >/dev/null 2>&1; then

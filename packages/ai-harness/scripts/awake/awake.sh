@@ -190,6 +190,7 @@ cmd_on() {
 
     write_state "$token" "$expires_epoch" || {
         run_helper restore "$token" >/dev/null 2>&1 || true
+        clean_state
         err "Failed to write awake state"
         return 1
     }
@@ -310,6 +311,8 @@ cmd_extend() {
     fi
 
     write_state "$new_token" "$new_expires_epoch" || {
+        run_helper restore "$new_token" >/dev/null 2>&1 || true
+        clean_state
         err "Failed to write awake state"
         return 1
     }
