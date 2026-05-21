@@ -1,19 +1,21 @@
 #!/bin/bash
 #
-# AI Harness Installer (Lite)
-# Commands, Skills, Agents 심볼릭 링크 + awake CLI 설치.
+# AI Harness Root Installer
+# Interactive menu for selecting and installing individual tools.
 #
-# 사용법:
+# Usage:
 #   curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/ai-harness/install.sh | bash
-#   # 또는
-#   bash packages/ai-harness/install.sh
+#   # Or install specific tools non-interactively:
+#   curl -fsSL ... | bash -s -- --tools awake
+#   bash packages/ai-harness/install.sh --tools awake
 #
-
 set -euo pipefail
 
 REPO_URL="https://github.com/SAZO-KR/sazo-toolkit.git"
 INSTALL_DIR="$HOME/.config/sazo-ai-harness"
 CREATED_INSTALL_DIR=0
+INSTALL_FAILED=0
+export SAZO_ROOT_INSTALL=1
 
 cleanup() {
     if [ "${INSTALL_FAILED:-}" = "1" ] && [ "$CREATED_INSTALL_DIR" = "1" ] && [ -d "$INSTALL_DIR" ]; then
@@ -22,83 +24,202 @@ cleanup() {
 }
 trap cleanup EXIT
 
-ask_yes_no() {
-    local prompt="$1"
-    local default="${2:-y}"
+LIB_PATH=""
+HARNESS_DIR=""
 
-    if [ ! -t 0 ] && [ -e /dev/tty ]; then
-        exec 3</dev/tty
-    elif [ -t 0 ]; then
-        exec 3<&0
-    else
-        [ "$default" = "y" ] && return 0 || return 1
-    fi
-
-    local yn
-    if [ "$default" = "y" ]; then
-        printf "%s [Y/n] " "$prompt"
-    else
-        printf "%s [y/N] " "$prompt"
-    fi
-    read -r yn <&3 2>/dev/null || yn=""
-    exec 3<&- 2>/dev/null || true
-
-    case "$yn" in
-        [Yy]*) return 0 ;;
-        [Nn]*) return 1 ;;
-        "") [ "$default" = "y" ] && return 0 || return 1 ;;
-        *) [ "$default" = "y" ] && return 0 || return 1 ;;
-    esac
+discover_tools() {
+    local tools_dir="$HARNESS_DIR/tools"
+    local tool_name
+    for tool_dir in "$tools_dir"/*/; do
+        [ -d "$tool_dir" ] || continue
+        [ -f "$tool_dir/tool.sh" ] || continue
+        tool_name="$(basename "$tool_dir")"
+        printf '%s\n' "$tool_name"
+    done
 }
 
+load_tool_metadata() {
+    local tool_name="$1"
+    local tool_sh="$HARNESS_DIR/tools/$tool_name/tool.sh"
+    [ -f "$tool_sh" ] || return 1
+    (
+        TOOL_NAME="" TOOL_DESC="" TOOL_VERSION="" TOOL_PLATFORM="" TOOL_REQUIRES_SUDO=""
+        source "$tool_sh"
+        printf '%s\t%s\t%s\t%s\t%s\n' "$TOOL_NAME" "$TOOL_DESC" "$TOOL_VERSION" "$TOOL_PLATFORM" "$TOOL_REQUIRES_SUDO"
+    )
+}
+
+parse_args() {
+    local tools_arg=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --tools)
+                shift
+                tools_arg="${1:-}"
+                [ -z "$tools_arg" ] && { echo "Error: --tools requires a comma-separated list" >&2; exit 1; }
+                SELECTED_TOOLS="$(echo "$tools_arg" | tr ',' ' ')"
+                export SAZO_NON_INTERACTIVE=1
+                shift
+                ;;
+            --yes|-y)
+                export SAZO_NON_INTERACTIVE=1
+                shift
+                ;;
+            --help|-h)
+                echo "Usage: install.sh [--tools tool1,tool2] [--yes]"
+                echo "  --tools   Comma-separated list of tools to install (non-interactive)"
+                echo "  --yes     Accept all defaults (non-interactive)"
+                echo "  --help    Show this help"
+                exit 0
+                ;;
+            *)
+                echo "Unknown option: $1" >&2
+                exit 1
+                ;;
+        esac
+    done
+}
+
+SELECTED_TOOLS=""
+
 echo "==================================="
-echo "  AI Harness Installer (Lite)"
+echo "  AI Harness Installer"
 echo "==================================="
 echo ""
 
 # --- Prerequisites ---
 
-if ! command -v git &> /dev/null; then
-    echo "Error: git is required."
+if ! command -v git &>/dev/null; then
+    echo "Error: git is required." >&2
     INSTALL_FAILED=1
     exit 1
 fi
 
-# --- Clone / Update ---
+parse_args "$@"
 
+# --- Source common library ---
+
+# Clone/update first to get the library
 if [ -d "$INSTALL_DIR/.git" ]; then
     echo "Updating existing installation..."
     cd "$INSTALL_DIR"
-
-    # Migrate from ai-prompts sparse-checkout to ai-harness
     SPARSE_LIST=$(git sparse-checkout list 2>/dev/null || echo "")
     if echo "$SPARSE_LIST" | grep -q "packages/ai-prompts"; then
         git sparse-checkout set packages/ai-harness
     fi
-
-    git pull --ff-only || echo "Warning: Could not update (local changes?)" >&2
+    git pull --ff-only 2>/dev/null || echo "Warning: Could not update (local changes?)" >&2
+    cd - >/dev/null
 else
     echo "Installing to $INSTALL_DIR..."
     rm -rf "$INSTALL_DIR"
     mkdir -p "$(dirname "$INSTALL_DIR")"
     CREATED_INSTALL_DIR=1
-
     git clone --sparse --filter=blob:none --depth=1 --single-branch -b main "$REPO_URL" "$INSTALL_DIR"
     cd "$INSTALL_DIR"
     git sparse-checkout set packages/ai-harness
+    cd - >/dev/null
 fi
 
 HARNESS_DIR="$INSTALL_DIR/packages/ai-harness"
 
-if [ ! -d "$HARNESS_DIR/commands" ]; then
-    echo "Error: ai-harness package not found or incomplete"
+if [ ! -d "$HARNESS_DIR/tools" ]; then
+    echo "Error: ai-harness package not found or incomplete" >&2
     INSTALL_FAILED=1
     exit 1
 fi
 
-# --- Symlinks ---
+LIB_PATH="$HARNESS_DIR/lib/installer-common.sh"
+if [ ! -f "$LIB_PATH" ]; then
+    echo "Error: installer-common.sh not found" >&2
+    INSTALL_FAILED=1
+    exit 1
+fi
+source "$LIB_PATH"
+
+# --- Discover available tools ---
+
+AVAILABLE_TOOLS=()
+TOOL_DESCS=()
+
+while IFS= read -r tool_name; do
+    [ -z "$tool_name" ] && continue
+    metadata="$(load_tool_metadata "$tool_name")" || continue
+    AVAILABLE_TOOLS+=("$tool_name")
+    desc="$(echo "$metadata" | cut -f2)"
+    TOOL_DESCS+=("$desc")
+done <<< "$(discover_tools)"
+
+if [ ${#AVAILABLE_TOOLS[@]} -eq 0 ]; then
+    log_error "No installable tools found"
+    INSTALL_FAILED=1
+    exit 1
+fi
+
+# --- Tool selection ---
+
+if [ -n "$SELECTED_TOOLS" ]; then
+    TOOLS_TO_INSTALL=()
+    for tool in $SELECTED_TOOLS; do
+        found=0
+        for available in "${AVAILABLE_TOOLS[@]}"; do
+            if [ "$tool" = "$available" ]; then
+                TOOLS_TO_INSTALL+=("$tool")
+                found=1
+                break
+            fi
+        done
+        if [ "$found" -eq 0 ]; then
+            log_warn "Unknown tool: $tool (skipping)"
+        fi
+    done
+elif [ "${SAZO_NON_INTERACTIVE:-0}" = "1" ]; then
+    TOOLS_TO_INSTALL=("${AVAILABLE_TOOLS[@]}")
+else
+    echo "Available tools:"
+    echo ""
+    for i in "${!AVAILABLE_TOOLS[@]}"; do
+        printf "  %2d) %-15s %s\n" "$((i + 1))" "${AVAILABLE_TOOLS[$i]}" "${TOOL_DESCS[$i]}"
+    done
+    echo ""
+    echo "Enter tool numbers to install (comma-separated), or 'all':"
+    printf "> "
+
+    if [ -e /dev/tty ]; then
+        exec 3</dev/tty
+        read -r selection <&3
+        exec 3<&-
+    elif [ -t 0 ]; then
+        read -r selection
+    else
+        selection="all"
+    fi
+
+    if [ "$selection" = "all" ] || [ "$selection" = "a" ]; then
+        TOOLS_TO_INSTALL=("${AVAILABLE_TOOLS[@]}")
+    else
+        TOOLS_TO_INSTALL=()
+        IFS=',' read -ra nums <<< "$selection"
+        for num in "${nums[@]}"; do
+            num=$(echo "$num" | tr -d ' ')
+            idx=$((num - 1))
+            if [ "$idx" -ge 0 ] && [ "$idx" -lt "${#AVAILABLE_TOOLS[@]}" ]; then
+                TOOLS_TO_INSTALL+=("${AVAILABLE_TOOLS[$idx]}")
+            fi
+        done
+    fi
+fi
+
+if [ ${#TOOLS_TO_INSTALL[@]} -eq 0 ]; then
+    echo "No tools selected. Exiting."
+    exit 0
+fi
 
 echo ""
+echo "Installing: ${TOOLS_TO_INSTALL[*]}"
+echo ""
+
+# --- Symlinks (commands, skills, agents) ---
+
 echo "Setting up symlinks..."
 
 mkdir -p "$HOME/.claude/commands"
@@ -119,7 +240,6 @@ link_files() {
         local filename
         filename=$(basename "$file")
 
-        # Skip template files/folders and .DS_Store
         if [[ "$filename" == _* ]] || [[ "$filename" == .* ]]; then
             continue
         fi
@@ -147,6 +267,14 @@ link_files "$HARNESS_DIR/skills" "$HOME/.claude/skills"
 echo "Agents:"
 link_files "$HARNESS_DIR/agents" "$HOME/.claude/agents"
 
+if [ -d "$HOME/.config/opencode" ]; then
+    local_oc_cmd_dir="$HOME/.config/opencode/commands"
+    mkdir -p "$local_oc_cmd_dir"
+    echo ""
+    echo "OpenCode commands:"
+    link_files "$HARNESS_DIR/commands" "$local_oc_cmd_dir"
+fi
+
 # --- Legacy agent cleanup ---
 
 OLD_AGENT_NAMES=(
@@ -163,102 +291,42 @@ done
 
 if [ ${#ORPHANS[@]} -gt 0 ]; then
     echo ""
-    echo "Legacy agent files detected (renamed or removed in this package):"
+    echo "Legacy agent files detected:"
     for f in "${ORPHANS[@]}"; do
         echo "  - $f"
     done
-    echo ""
-    if ask_yes_no "기존 에이전트 파일이 남아있으면 이름이 바뀐 새 에이전트를 가릴 수 있습니다. 삭제할까요?" n; then
+    if ask_yes_no "Remove these legacy files?" n; then
         rm -f "${ORPHANS[@]}"
-        echo "  제거 완료 (${#ORPHANS[@]}개)"
+        log_info "Removed ${#ORPHANS[@]} legacy files"
+    fi
+fi
+
+# --- Install selected tools ---
+
+INSTALL_RESULTS=()
+
+for tool in "${TOOLS_TO_INSTALL[@]}"; do
+    echo ""
+    echo "--- Installing $tool ---"
+    echo ""
+
+    TOOL_INSTALLER="$HARNESS_DIR/tools/$tool/install.sh"
+    if [ ! -f "$TOOL_INSTALLER" ]; then
+        log_warn "No installer found for $tool, skipping"
+        INSTALL_RESULTS+=("$tool: SKIPPED (no installer)")
+        continue
+    fi
+
+    if bash "$TOOL_INSTALLER"; then
+        INSTALL_RESULTS+=("$tool: OK")
     else
-        echo "  건너뜀. 구 이름('oracle', 'explore' 등)으로 호출 시 stale 프롬프트가 노출될 수 있음."
+        exit_code=$?
+        log_error "$tool installer failed (exit $exit_code)"
+        INSTALL_RESULTS+=("$tool: FAILED (exit $exit_code)")
     fi
-fi
+done
 
-# --- OpenCode commands (if installed) ---
-
-if [ -d "$HOME/.config/opencode" ]; then
-    local_oc_cmd_dir="$HOME/.config/opencode/commands"
-    mkdir -p "$local_oc_cmd_dir"
-    echo ""
-    echo "OpenCode commands:"
-    link_files "$HARNESS_DIR/commands" "$local_oc_cmd_dir"
-fi
-
-# --- awake CLI (macOS) ---
-
-AWAKE_SCRIPT="$HARNESS_DIR/scripts/awake/awake.sh"
-AWAKE_HELPER_SRC="$HARNESS_DIR/scripts/awake/awake-helper.sh"
-AWAKE_SYMLINK="$HOME/.local/bin/awake"
-AWAKE_HELPER_DST="/usr/local/libexec/sazo-ai-harness/awake-helper"
-AWAKE_SUDOERS_FILE="/etc/sudoers.d/sazo-ai-harness-awake"
-
-if [ -f "$AWAKE_SCRIPT" ] && [ "$(uname -s)" = "Darwin" ]; then
-    echo ""
-    echo "Installing awake CLI..."
-    mkdir -p "$HOME/.local/bin"
-
-    # BEGIN AWAKE_INSTALL_GUARD
-    install_awake=1
-    if [ -L "$AWAKE_SYMLINK" ]; then
-        existing_target=$(readlink "$AWAKE_SYMLINK" 2>/dev/null || true)
-        if ! echo "$existing_target" | grep -qE "sazo-ai-harness|sazo-ai-prompts"; then
-            echo "  Skip: awake (existing symlink → $existing_target, not managed by ai-harness)"
-            install_awake=0
-        fi
-    elif [ -e "$AWAKE_SYMLINK" ]; then
-        echo "  Skip: awake (local file exists at $AWAKE_SYMLINK)"
-        install_awake=0
-    fi
-
-    if [ "$install_awake" -eq 1 ]; then
-        ln -sfn "$AWAKE_SCRIPT" "$AWAKE_SYMLINK"
-        echo "  Installed: $AWAKE_SYMLINK"
-    fi
-    # END AWAKE_INSTALL_GUARD
-
-    case ":$PATH:" in
-        *":$HOME/.local/bin:"*) ;;
-        *)
-            echo "  Warning: $HOME/.local/bin is not in PATH"
-            echo "    echo 'export PATH=\$HOME/.local/bin:\$PATH' >> ~/.zshrc"
-            ;;
-    esac
-
-    if [ -f "$AWAKE_HELPER_SRC" ]; then
-        echo ""
-        echo "awake closed-lid helper (optional):"
-        echo "  - helper path: $AWAKE_HELPER_DST"
-        echo "  - needed for lid-closed execution persistence"
-        echo "  - requires sudo because pmset is global"
-
-        if ask_yes_no "Install root-owned awake helper now?" n; then
-            sudo install -d -o root -g wheel -m 0755 "$(dirname "$AWAKE_HELPER_DST")"
-            sudo install -o root -g wheel -m 0755 "$AWAKE_HELPER_SRC" "$AWAKE_HELPER_DST"
-            echo "  Installed helper: $AWAKE_HELPER_DST"
-
-            if ask_yes_no "Install passwordless sudoers entry for awake helper?" n; then
-                tmp_sudoers="$(mktemp)"
-                cat > "$tmp_sudoers" <<EOF
-# SAZO-AI-HARNESS-AWAKE
-${USER:-$(id -un)} ALL=(root) NOPASSWD: $AWAKE_HELPER_DST
-EOF
-                sudo visudo -cf "$tmp_sudoers" >/dev/null
-                sudo cp "$tmp_sudoers" "$AWAKE_SUDOERS_FILE"
-                sudo chmod 0440 "$AWAKE_SUDOERS_FILE"
-                rm -f "$tmp_sudoers"
-                echo "  Installed sudoers: $AWAKE_SUDOERS_FILE"
-            else
-                echo "  Skipped sudoers install. 'awake on/off' may require sudo in a terminal."
-            fi
-        else
-            echo "  Skipped helper install. closed-lid awake mode will not work until helper is installed."
-        fi
-    fi
-fi
-
-# --- Done ---
+# --- Summary ---
 
 VERSION=$(git -C "$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
@@ -269,10 +337,13 @@ echo "==================================="
 echo ""
 echo "Version: $VERSION"
 echo ""
-echo "Commands:"
-echo "  /awake on|off|status|extend|reset   macOS closed-lid 실행 유지"
-echo "  /weekly-report                주간 업무 보고서 생성"
+echo "Results:"
+for result in "${INSTALL_RESULTS[@]}"; do
+    echo "  $result"
+done
 echo ""
 echo "Update: re-run this script or reinstall."
 echo "Uninstall: bash $HARNESS_DIR/uninstall.sh"
 echo ""
+
+trap - EXIT

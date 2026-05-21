@@ -1,0 +1,28 @@
+Task 2 poll-new-reviews.sh verification
+
+Checks:
+- bash -n poll-new-reviews.sh
+- shebang present
+- set -euo pipefail present
+- SCRIPT_DIR present
+- DEFAULT_CONFIG present
+- MERGED_CONFIG present
+- GH_REPO_FLAG present
+- no hardcoded codex bot login
+- no hardcoded gemini bot login
+- SKILL.md references poll-new-reviews.sh
+
+Output:
+PASS: bash -n poll-new-reviews.sh
+PASS: has shebang
+PASS: has set -euo pipefail
+PASS: has SCRIPT_DIR
+PASS: has DEFAULT_CONFIG
+PASS: has MERGED_CONFIG
+PASS: has GH_REPO_FLAG
+PASS: no hardcoded codex login
+PASS: no hardcoded gemini login
+PASS: SKILL references poll-new-reviews.sh
+Result: PASS
+
+Result: PASS

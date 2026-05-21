@@ -1,25 +1,59 @@
 # AI Harness
 
-Agent 정의, 스킬, 커맨드를 `~/.claude/`에 심볼릭 링크로 설치합니다.
+Agent 정의, 스킬, 커맨드, 그리고 개별 도구를 설치합니다.
 
 ## 설치
+
+### 전체 설치 (인터랙티브 메뉴)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/ai-harness/install.sh | bash
 ```
 
-설치 내용:
+### 개별 도구 설치
+
+```bash
+# awake만 설치
+curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/ai-harness/install.sh | bash -s -- --tools awake
+
+# 비대화형으로 전체 설치
+curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/ai-harness/install.sh | bash -s -- --yes
+```
+
+### 설치 내용
+
 - `~/.claude/{commands,skills,agents}/` 에 심볼릭 링크 생성
-- `~/.local/bin/awake` — macOS closed-lid 실행 유지 CLI
-- 선택 시 `/usr/local/libexec/sazo-ai-harness/awake-helper` 설치
-  - `pmset disablesleep` 제어용 root helper
-  - hooks / launchd watchdog 없이 명시적 `awake on|off|status|extend|reset`만 지원
+- 선택한 도구의 개별 인스톨러 실행
 - OpenCode 설치 시 `~/.config/opencode/commands/` 에도 링크 생성
 
 ## 제거
 
 ```bash
+# 전체 제거
 curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/ai-harness/uninstall.sh | bash
+
+# 개별 도구 제거
+bash ~/.config/sazo-ai-harness/packages/ai-harness/tools/awake/uninstall.sh
+```
+
+## 사용 가능한 도구
+
+| 도구 | 설명 | 플랫폼 | sudo 필요 |
+|---|---|---|---|
+| `awake` | macOS 닫힌 뚜껑 실행 유지 CLI | darwin | 선택 |
+
+## 도구 구조
+
+각 도구는 `tools/<name>/` 아래에 자기완결형 패키지로 구성됩니다:
+
+```
+tools/<name>/
+├── tool.sh          # 매니페스트 (이름, 버전, 플랫폼)
+├── install.sh       # 개별 인스톨러
+├── uninstall.sh     # 개별 제거기
+├── scripts/         # 도구 스크립트
+├── commands/        # 커맨드 정의
+└── tests/           # 스모크 테스트
 ```
 
 ## 보존된 콘텐츠

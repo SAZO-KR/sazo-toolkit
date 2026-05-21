@@ -6,7 +6,7 @@
 
 ```
 packages/
-├── ai-harness/      # AI 에이전트/스킬/커맨드 (archived)
+├── ai-harness/      # AI 에이전트/스킬/커맨드 + 모듈형 인스톨러
 ├── translate-bot/   # 번역 봇 (Go + AWS Lambda)
 ├── bamboo-forest/   # 익명 게시판 봇 (Go + AWS Lambda)
 └── shuffle-bot/     # 셔플/룰렛 봇 (Go + AWS Lambda)
@@ -18,14 +18,18 @@ packages/
 
 | 패키지                                                | 검증 방법                                                          |
 | ----------------------------------------------------- | ------------------------------------------------------------------ |
-| ai-harness                                            | `bash -n packages/ai-harness/uninstall.sh` |
+| ai-harness                                            | `bash -n packages/ai-harness/install.sh && bash -n packages/ai-harness/uninstall.sh && bash packages/ai-harness/tests/installer.smoke.sh` |
 | Go 패키지 (translate-bot, bamboo-forest, shuffle-bot) | `cd packages/{name} && go build ./...`                             |
 
 ## 패키지별 규칙
 
-### ai-harness (archived)
+### ai-harness
 
-- Hook/workflow 시스템 폐기됨. Agent 정의, 스킬, 커맨드만 보존.
+- 모듈형 인스톨러 시스템: 각 도구는 `tools/<name>/` 아래 자기완결형 패키지
+- 루트 인스톨러: `install.sh` — 인터랙티브 메뉴 + `--tools` CLI 플래그
+- 개별 인스톨러: 각 도구는 독립적으로 `curl | bash` 설치 가능
+- 수령증(receipt) 기반 제거: `~/.config/sazo-ai-harness/receipts/`로 설치 추적
+- 공통 라이브러리: `lib/installer-common.sh` (로깅, 프롬프트, 잠금, 수령증 등)
 - 기존 설치 제거: `curl -fsSL https://raw.githubusercontent.com/SAZO-KR/sazo-toolkit/main/packages/ai-harness/uninstall.sh | bash`
 
 ### Go 패키지 (Slack 봇)

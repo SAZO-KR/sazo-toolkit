@@ -1,0 +1,79 @@
+# F3: Real QA — All Scenarios
+# Date: 2026-05-21
+# Agent: Sisyphus-Junior (unspecified-high)
+
+## Scenario 1: bash -n syntax check (all 5 scripts)
+  poll-new-reviews.sh:   PASS
+  fetch-reviews.sh:      PASS
+  check-codex-state.sh:  PASS
+  poll-labels.sh:        PASS
+  setup-labels.sh:       PASS
+
+## Scenario 2: Script references in SKILL.md
+  poll-new-reviews.sh:   2 refs — PASS (≥1)
+  fetch-reviews.sh:      2 refs — PASS (≥1)
+  check-codex-state.sh:  1 ref  — PASS (≥1)
+
+## Scenario 3: SKILL.md line count
+  743 lines — PASS (<750)
+
+## Scenario 4: Hardcoded bot-login absence in SKILL.md
+  BOT_LOGIN= occurrences:         0 — PASS
+  chatgpt-codex-connector:        0 — PASS
+  gemini-code-assist:             0 — PASS
+
+## Scenario 5: Step 0..7 headings preserved
+  Step 0: 1 — PASS
+  Step 1: 1 — PASS
+  Step 2: 1 — PASS
+  Step 3: 1 — PASS
+  Step 4: 1 — PASS
+  Step 5: 1 — PASS
+  Step 6: 1 — PASS
+  Step 7: 1 — PASS
+
+## Scenario 6: Pattern compliance (new scripts)
+  poll-new-reviews.sh:
+    shebang (#!/usr/bin/env bash): OK
+    set -euo pipefail:             OK
+    SCRIPT_DIR:                    OK
+    MERGED_CONFIG:                 OK
+    GH_REPO_FLAG:                  OK
+    hardcoded bot_login:           0 (PASS)
+  fetch-reviews.sh:
+    shebang (#!/usr/bin/env bash): OK
+    set -euo pipefail:             OK
+    SCRIPT_DIR:                    OK
+    MERGED_CONFIG:                 OK
+    GH_REPO_FLAG:                  OK
+    hardcoded bot_login:           0 (PASS)
+  check-codex-state.sh:
+    shebang (#!/usr/bin/env bash): OK
+    set -euo pipefail:             OK
+    SCRIPT_DIR:                    OK
+    MERGED_CONFIG:                 OK
+    GH_REPO_FLAG:                  OK
+    hardcoded bot_login:           0 (PASS)
+
+## Scenario 7: fetch-reviews.sh extended patterns
+  --paginate:      3 occurrences — PASS (≥3)
+  jq -s:           3 occurrences — PASS (≥2)
+  in_reply_to_id:  1 occurrence  — PASS
+
+## Scenario 8: check-codex-state.sh extended patterns
+  Race condition sweep: 1 — PASS
+  SWEEP_REVIEW_IDS:     2 — PASS
+  SWEEP_UNANSWERED:     6 — PASS
+  --push-time:          3 — PASS
+  3-state (approved/reviewing/pending): 6 — PASS
+
+## Scenario 9: config.json bot_login values match
+  codex:  chatgpt-codex-connector[bot] — OK
+  gemini: gemini-code-assist[bot]      — OK
+
+## Scenario 10: R1 rule updated to reference config.json
+  SKILL.md:36 mentions config.json — PASS
+
+---
+SUMMARY: 10/10 scenarios PASS
+VERDICT: APPROVE

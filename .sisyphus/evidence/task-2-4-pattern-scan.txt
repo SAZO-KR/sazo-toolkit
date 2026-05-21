@@ -1,0 +1,52 @@
+[poll]
+8 matches in 1 files:
+
+packages/.../scripts/poll-new-reviews.sh:19:set -euo pipefail
+packages/.../scripts/poll-new-reviews.sh:21:SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+packages/.../scripts/poll-new-reviews.sh:22:DEFAULT_CONFIG="$(cd "$SCRIPT_DIR/.." && pwd)/config.json"
+packages/.../scripts/poll-new-reviews.sh:58:MERGED_CONFIG=$(jq -n \
+packages/.../scripts/poll-new-reviews.sh:76:MERGED_CONFIG=$(jq '.' "$CONFIG_PATH")
+packages/.../scripts/poll-new-reviews.sh:87:GH_REPO_FLAG=()
+packages/.../scripts/poll-new-reviews.sh:93:[[ -n "$REPO_SLUG" ]] && GH_REPO_FLAG=(-R "$REPO_SLUG")
+packages/.../scripts/poll-new-reviews.sh:97:[[ -n "$REPO_SLUG" ]] && GH_REPO_FLAG=(-R "$REPO_SLUG")
+[fetch]
+12 matches in 1 files:
+
+packages/.../scripts/fetch-reviews.sh:18:set -euo pipefail
+packages/.../scripts/fetch-reviews.sh:20:SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+packages/.../scripts/fetch-reviews.sh:21:DEFAULT_CONFIG="$(cd "$SCRIPT_DIR/.." && pwd)/config.json"
+packages/.../scripts/fetch-reviews.sh:53:MERGED_CONFIG=$(jq -n \
+packages/.../scripts/fetch-reviews.sh:71:MERGED_CONFIG=$(jq '.' "$CONFIG_PATH")
+packages/.../scripts/fetch-reviews.sh:102:gh api "repos/$REPO_SLUG/pulls/$PR_NUM/reviews" --paginate \
+packages/.../scripts/fetch-reviews.sh:104:| jq -s --arg bot "$bot_login" '[.[] | select(.login == $bot)] | sort_by(.sub...
+packages/.../scripts/fetch-reviews.sh:113:comments=$(gh api "repos/$REPO_SLUG/pulls/$PR_NUM/reviews/$review_id/comments...
+packages/.../scripts/fetch-reviews.sh:115:| jq -s '.')
+packages/.../scripts/fetch-reviews.sh:137:REPLIED_IDS=$(gh api "repos/$REPO_SLUG/pulls/$PR_NUM/comments" --paginate \
+packages/.../scripts/fetch-reviews.sh:138:--jq '.[] | select(.in_reply_to_id != null) | .in_reply_to_id' \
+packages/.../scripts/fetch-reviews.sh:139:| jq -s '.')
+[state]
+23 matches in 7 files:
+
+133:0:Race condition sweep — do not simplify.
+153:0:-0}" -eq 0 ]]; then
+160:0:${SWEEP_UNANSWERED_COUNT} unanswered comments" >&2
+4:0:check-codex-state.sh --pr <num> --push-time <iso8601> [--gemini-enabled true|...
+51:0:--push-time <iso8601> required" >&2
+8:0:"approved|reviewing|pending",
+packages/.../scripts/check-codex-state.sh:22:set -euo pipefail
+packages/.../scripts/check-codex-state.sh:24:SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+packages/.../scripts/check-codex-state.sh:25:DEFAULT_CONFIG="$(cd "$SCRIPT_DIR/.." && pwd)/config.json"
+packages/.../scripts/check-codex-state.sh:37:--push-time)              PUSH_TIME="$2"; shift 2 ;;
+packages/.../scripts/check-codex-state.sh:66:MERGED_CONFIG=$(jq -n \
+packages/.../scripts/check-codex-state.sh:84:MERGED_CONFIG=$(jq '.' "$CONFIG_PATH")
+packages/.../scripts/check-codex-state.sh:119:CODEX_STATE="pending"
+packages/.../scripts/check-codex-state.sh:121:"+1") CODEX_STATE="approved" ;;
+packages/.../scripts/check-codex-state.sh:122:eyes) CODEX_STATE="reviewing" ;;
+packages/.../scripts/check-codex-state.sh:123:*) CODEX_STATE="pending" ;;
+packages/.../scripts/check-codex-state.sh:132:if [[ "$CODEX_STATE" == "approved" ]]; then
+packages/.../scripts/check-codex-state.sh:134:SWEEP_REVIEW_IDS=$(gh api "repos/$REPO_SLUG/pulls/$PR_NUM/reviews" --paginate \
+packages/.../scripts/check-codex-state.sh:139:for REVIEW_ID in $(echo "$SWEEP_REVIEW_IDS" | jq -r '.[]'); do
+packages/.../scripts/check-codex-state.sh:150:SWEEP_UNANSWERED=$(echo "$SWEEP_COMMENTS" | jq --argjson replied "$REPLIED_ID...
+packages/.../scripts/check-codex-state.sh:151:SWEEP_UNANSWERED_COUNT=$(echo "$SWEEP_UNANSWERED" | jq 'length')
+packages/.../scripts/check-codex-state.sh:158:OVERRIDE_UNANSWERED_CODEX="$SWEEP_UNANSWERED"
+packages/.../scripts/check-codex-state.sh:159:OVERRIDE_UNANSWERED_CODEX_COUNT="$SWEEP_UNANSWERED_COUNT"

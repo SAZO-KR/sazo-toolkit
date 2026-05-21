@@ -1,0 +1,4 @@
+codex_config=chatgpt-codex-connector[bot]
+gemini_config=gemini-code-assist[bot]
+historical_constants_removed_from_skill=YES
+current_skill_hardcoded_bot_login_occurrences=0
