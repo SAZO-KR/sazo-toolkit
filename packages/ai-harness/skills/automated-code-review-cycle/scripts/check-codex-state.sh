@@ -23,6 +23,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_CONFIG="$(cd "$SCRIPT_DIR/.." && pwd)/config.json"
+source "$SCRIPT_DIR/utils.sh"
 
 # ── argument parsing ──────────────────────────────────────
 PR_NUM=""
@@ -60,33 +61,8 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
     exit 1
 fi
 
-# ── load + merge config (same logic as poll-labels.sh/setup-labels.sh) ────────
-REPO_OVERRIDE=""
-if [[ -n "$REPO_DIR" && -f "$REPO_DIR/.github/sazo-bot-review.json" ]]; then
-    REPO_OVERRIDE="$REPO_DIR/.github/sazo-bot-review.json"
-fi
-
-if [[ -n "$REPO_OVERRIDE" ]]; then
-    MERGED_CONFIG=$(jq -n \
-        --slurpfile base "$CONFIG_PATH" \
-        --slurpfile ovr "$REPO_OVERRIDE" \
-        '
-        ($base[0].active_reviewers // {}) as $br |
-        ($ovr[0].active_reviewers // {}) as $or |
-        $base[0]
-        | .active_reviewers = (
-            ($br + $or)
-            | to_entries
-            | map(.value = (($br[.key] // {}) * ($or[.key] // {})))
-            | from_entries
-          )
-        | .labels = ($base[0].labels * ($ovr[0].labels // {}))
-        | .override_label = ($ovr[0].override_label // $base[0].override_label)
-        | .polling = ($base[0].polling * ($ovr[0].polling // {}))
-        ')
-else
-    MERGED_CONFIG=$(jq '.' "$CONFIG_PATH")
-fi
+# ── load + merge config ───────────────────────────────────
+MERGED_CONFIG=$(merge_review_config "$CONFIG_PATH" "$REPO_DIR")
 
 CODEX_BOT_LOGIN=$(echo "$MERGED_CONFIG" | jq -r '.active_reviewers.codex.bot_login // empty')
 if [[ -z "$CODEX_BOT_LOGIN" ]]; then
@@ -96,11 +72,7 @@ fi
 
 # ── resolve target repository ─────────────────────────────
 _resolve_dir="${REPO_DIR:-.}"
-REPO_SLUG=$(cd "$_resolve_dir" && gh repo view --json owner,name -q '.owner.login + "/" + .name' 2>/dev/null) || true
-if [[ -z "$REPO_SLUG" ]]; then
-    _remote_url=$(git -C "$_resolve_dir" remote get-url origin 2>/dev/null || true)
-    REPO_SLUG=$(echo "$_remote_url" | sed -E 's|^.*[:/]([^/]+/[^/]+?)(\.git)?$|\1|')
-fi
+REPO_SLUG=$(resolve_repo_slug "$_resolve_dir")
 
 if [[ -z "$REPO_SLUG" ]]; then
     echo "ERROR: could not resolve GitHub repository slug" >&2
@@ -133,13 +105,12 @@ if [[ "$CODEX_STATE" == "approved" ]]; then
         --jq '.[] | {id: .id, submitted_at: .submitted_at, login: .user.login}' \
         | jq -s --arg bot "$CODEX_BOT_LOGIN" '[.[] | select(.login == $bot)] | sort_by(.submitted_at) | [.[].id]')
 
-    SWEEP_COMMENTS='[]'
-    for REVIEW_ID in $(echo "$SWEEP_REVIEW_IDS" | jq -r '.[]'); do
-        SC=$(gh api "repos/$REPO_SLUG/pulls/$PR_NUM/reviews/$REVIEW_ID/comments" --paginate \
-            --jq ".[] | {id, body: .body[0:500], path, line, reviewer_login: .user.login, review_id: $REVIEW_ID}" \
-            | jq -s '.')
-        SWEEP_COMMENTS=$(echo "$SWEEP_COMMENTS" | jq --argjson c "$SC" '. + $c')
-    done
+    SWEEP_COMMENTS=$(
+        for REVIEW_ID in $(echo "$SWEEP_REVIEW_IDS" | jq -r '.[]'); do
+            gh api "repos/$REPO_SLUG/pulls/$PR_NUM/reviews/$REVIEW_ID/comments" --paginate \
+                --jq ".[] | {id, body: .body[0:500], path, line, reviewer_login: .user.login, review_id: $REVIEW_ID}"
+        done | jq -s '.'
+    )
 
     REPLIED_IDS_FRESH=$(gh api "repos/$REPO_SLUG/pulls/$PR_NUM/comments" --paginate \
         --jq '.[] | select(.in_reply_to_id != null) | .in_reply_to_id' \
