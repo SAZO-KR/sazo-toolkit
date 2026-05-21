@@ -19,6 +19,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_CONFIG="$(cd "$SCRIPT_DIR/.." && pwd)/config.json"
+source "$SCRIPT_DIR/utils.sh"
 
 # ── argument parsing ──────────────────────────────────────
 CONFIG_PATH="$DEFAULT_CONFIG"
@@ -36,37 +37,8 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
     exit 1
 fi
 
-# ── load + merge config (same logic as poll-labels.sh) ───────────────────────
-# CRITICAL: merge repo override so custom label_prefix values produce the same
-# label names that the poller waits for. Without this, setup creates default
-# labels while the poller (and Step 4-8) uses custom-prefix labels → gh issue
-# edit --add-label fails because the label doesn't exist.
-REPO_OVERRIDE=""
-if [[ -n "$REPO_DIR" && -f "$REPO_DIR/.github/sazo-bot-review.json" ]]; then
-    REPO_OVERRIDE="$REPO_DIR/.github/sazo-bot-review.json"
-fi
-
-if [[ -n "$REPO_OVERRIDE" ]]; then
-    MERGED_CONFIG=$(jq -n \
-        --slurpfile base "$CONFIG_PATH" \
-        --slurpfile ovr "$REPO_OVERRIDE" \
-        '
-        ($base[0].active_reviewers // {}) as $br |
-        ($ovr[0].active_reviewers // {}) as $or |
-        $base[0]
-        | .active_reviewers = (
-            ($br + $or)
-            | to_entries
-            | map(.value = (($br[.key] // {}) * ($or[.key] // {})))
-            | from_entries
-          )
-        | .labels = ($base[0].labels * ($ovr[0].labels // {}))
-        | .override_label = ($ovr[0].override_label // $base[0].override_label)
-        | .polling = ($base[0].polling * ($ovr[0].polling // {}))
-        ')
-else
-    MERGED_CONFIG=$(jq '.' "$CONFIG_PATH")
-fi
+# ── load + merge config ───────────────────────────────────
+MERGED_CONFIG=$(merge_review_config "$CONFIG_PATH" "$REPO_DIR")
 
 # ── extract fields ─────────────────────────────────────────
 OVERRIDE_LABEL=$(echo "$MERGED_CONFIG" | jq -r '.override_label // "bot-review/override"')
@@ -78,12 +50,8 @@ OVERRIDE_LABEL=$(echo "$MERGED_CONFIG" | jq -r '.override_label // "bot-review/o
 # Derive the slug explicitly from REPO_DIR so this script is cwd-independent.
 GH_REPO_FLAG=()
 if [[ -n "$REPO_DIR" ]]; then
-    _remote_url=$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null || true)
-    if [[ -n "$_remote_url" ]]; then
-        # Strip protocol/host, trailing .git — keep OWNER/REPO
-        _slug=$(echo "$_remote_url" | sed -E 's|.*github\.com[:/]||; s|\.git$||')
-        [[ -n "$_slug" ]] && GH_REPO_FLAG=(-R "$_slug")
-    fi
+    _slug=$(resolve_repo_slug "$REPO_DIR")
+    [[ -n "$_slug" ]] && GH_REPO_FLAG=(-R "$_slug")
 fi
 
 # ── create labels per active reviewer × suffix ────────────
