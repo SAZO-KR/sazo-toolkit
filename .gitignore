@@ -48,3 +48,8 @@ bootstrap
 
 # Git worktrees
 .worktrees/
+.sisyphus/
+# Go compiled binaries
+packages/bamboo-forest/bamboo-forest
+packages/shuffle-bot/shuffle-bot
+packages/translate-bot/translate-bot
