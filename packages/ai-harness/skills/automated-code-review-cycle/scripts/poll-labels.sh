@@ -17,6 +17,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_CONFIG="$(cd "$SCRIPT_DIR/.." && pwd)/config.json"
+source "$SCRIPT_DIR/utils.sh"
 
 # ── argument parsing ──────────────────────────────────────
 PR_NUM=""
@@ -50,37 +51,7 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
     exit 1
 fi
 
-# Merge repo override (deep merge for active_reviewers per-reviewer + labels/polling)
-# CRITICAL: active_reviewers must be merged at the field level, not the reviewer level.
-# A shallow `base + ovr` replaces the entire reviewer object when the key exists in both,
-# causing fields present only in base (e.g. bot_login) to be silently dropped. Deep-merge
-# each reviewer's fields individually so partial overrides (e.g. label_prefix only) are safe.
-REPO_OVERRIDE=""
-if [[ -n "$REPO_DIR" && -f "$REPO_DIR/.github/sazo-bot-review.json" ]]; then
-    REPO_OVERRIDE="$REPO_DIR/.github/sazo-bot-review.json"
-fi
-
-if [[ -n "$REPO_OVERRIDE" ]]; then
-    MERGED_CONFIG=$(jq -n \
-        --slurpfile base "$CONFIG_PATH" \
-        --slurpfile ovr "$REPO_OVERRIDE" \
-        '
-        ($base[0].active_reviewers // {}) as $br |
-        ($ovr[0].active_reviewers // {}) as $or |
-        $base[0]
-        | .active_reviewers = (
-            ($br + $or)
-            | to_entries
-            | map(.value = (($br[.key] // {}) * ($or[.key] // {})))
-            | from_entries
-          )
-        | .labels = ($base[0].labels * ($ovr[0].labels // {}))
-        | .override_label = ($ovr[0].override_label // $base[0].override_label)
-        | .polling = ($base[0].polling * ($ovr[0].polling // {}))
-        ')
-else
-    MERGED_CONFIG=$(jq '.' "$CONFIG_PATH")
-fi
+MERGED_CONFIG=$(merge_review_config "$CONFIG_PATH" "$REPO_DIR")
 
 # ── resolve -R OWNER/REPO from REPO_DIR (or cwd fallback) ────────────────────
 # CRITICAL: gh pr view resolves the repo from cwd by default. When poll-labels.sh
@@ -89,11 +60,8 @@ fi
 # Derive the slug explicitly from REPO_DIR so this script is cwd-independent.
 GH_REPO_FLAG=()
 if [[ -n "$REPO_DIR" ]]; then
-    _remote_url=$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null || true)
-    if [[ -n "$_remote_url" ]]; then
-        _slug=$(echo "$_remote_url" | sed -E 's|.*github\.com[:/]||; s|\.git$||')
-        [[ -n "$_slug" ]] && GH_REPO_FLAG=(-R "$_slug")
-    fi
+    _slug=$(resolve_repo_slug "$REPO_DIR")
+    [[ -n "$_slug" ]] && GH_REPO_FLAG=(-R "$_slug")
 fi
 
 # ── extract polling params ────────────────────────────────
