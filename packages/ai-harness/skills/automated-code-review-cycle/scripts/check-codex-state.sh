@@ -102,16 +102,8 @@ OVERRIDE_UNANSWERED_CODEX_COUNT='null'
 
 if [[ "$CODEX_STATE" == "approved" ]]; then
     # CRITICAL: Race condition sweep — do not simplify.
-    SWEEP_REVIEW_IDS=$(gh api "repos/$REPO_SLUG/pulls/$PR_NUM/reviews" --paginate \
-        --jq '.[] | {id: .id, submitted_at: .submitted_at, login: .user.login}' \
-        | jq -s --arg bot "$CODEX_BOT_LOGIN" '[.[] | select(.login == $bot)] | sort_by(.submitted_at) | [.[].id]')
-
-    SWEEP_COMMENTS=$(
-        for REVIEW_ID in $(echo "$SWEEP_REVIEW_IDS" | jq -r '.[]'); do
-            gh api "repos/$REPO_SLUG/pulls/$PR_NUM/reviews/$REVIEW_ID/comments" --paginate \
-                --jq ".[] | {id, body: .body[0:500], path, line, reviewer_login: .user.login, review_id: $REVIEW_ID}"
-        done | jq -s '.'
-    )
+    SWEEP_REVIEW_IDS=$(fetch_review_ids "$REPO_SLUG" "$PR_NUM" "$CODEX_BOT_LOGIN")
+    SWEEP_COMMENTS=$(fetch_comments_for_reviews "$REPO_SLUG" "$PR_NUM" "$SWEEP_REVIEW_IDS")
 
     REPLIED_IDS_FRESH=$(gh api "repos/$REPO_SLUG/pulls/$PR_NUM/comments" --paginate \
         --jq '.[] | select(.in_reply_to_id != null) | .in_reply_to_id' \

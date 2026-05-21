@@ -172,12 +172,16 @@ HARNESS="${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}"
 REPO_DIR=$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
 POLL_RESULT=$(bash "$HARNESS/skills/automated-code-review-cycle/scripts/poll-new-reviews.sh" \
   --pr "$PR_NUM" \
+  --cycle-start-time "$CYCLE_START_TIME" \
   --repo-dir "$REPO_DIR")
 
 PUSH_TIME=$(echo "$POLL_RESULT" | jq -r '.push_time')
 NEW_REVIEW_FOUND=$(echo "$POLL_RESULT" | jq -r '.new_review_found')
 CODEX_REACTION=$(echo "$POLL_RESULT" | jq -r '.codex_reaction')
 NEW_REVIEWS=$(echo "$POLL_RESULT" | jq -r '.new_review_count')
+QUOTA_HIT=$(echo "$POLL_RESULT" | jq -r '.quota_hit')
+CODEX_QUOTA=$(echo "$POLL_RESULT" | jq -r '.codex_quota_count')
+GEMINI_QUOTA=$(echo "$POLL_RESULT" | jq -r '.gemini_quota_count')
 ```
 
 **Quota 감지 (CYCLE_START_TIME 이후만):**

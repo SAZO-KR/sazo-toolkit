@@ -72,3 +72,25 @@ resolve_repo_slug() {
 
     return 0
 }
+
+fetch_review_ids() {
+    local repo_slug="$1"
+    local pr_num="$2"
+    local bot_login="$3"
+
+    gh api "repos/$repo_slug/pulls/$pr_num/reviews" --paginate \
+        --jq '.[] | {id: .id, submitted_at: .submitted_at, login: .user.login}' \
+        | jq -s --arg bot "$bot_login" '[.[] | select(.login == $bot)] | sort_by(.submitted_at) | [.[].id]'
+}
+
+fetch_comments_for_reviews() {
+    local repo_slug="$1"
+    local pr_num="$2"
+    local review_ids="$3"
+    local review_id
+
+    for review_id in $(echo "$review_ids" | jq -r '.[]'); do
+        gh api "repos/$repo_slug/pulls/$pr_num/reviews/$review_id/comments" --paginate \
+            --jq ".[] | {id, body: .body[0:500], path, line, reviewer_login: .user.login, review_id: $review_id}"
+    done | jq -s '.'
+}

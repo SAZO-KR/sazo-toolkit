@@ -67,25 +67,8 @@ if [[ -z "$REPO_SLUG" ]]; then
     exit 1
 fi
 
-fetch_review_ids() {
-    local bot_login="$1"
-    gh api "repos/$REPO_SLUG/pulls/$PR_NUM/reviews" --paginate \
-        --jq '.[] | {id: .id, submitted_at: .submitted_at, login: .user.login}' \
-        | jq -s --arg bot "$bot_login" '[.[] | select(.login == $bot)] | sort_by(.submitted_at) | [.[].id]'
-}
-
-fetch_comments_for_reviews() {
-    local review_ids="$1"
-    local review_id
-
-    for review_id in $(echo "$review_ids" | jq -r '.[]'); do
-        gh api "repos/$REPO_SLUG/pulls/$PR_NUM/reviews/$review_id/comments" --paginate \
-            --jq ".[] | {id, body: .body[0:500], path, line, reviewer_login: .user.login, review_id: $review_id}"
-    done | jq -s '.'
-}
-
-ALL_CODEX_REVIEW_IDS=$(fetch_review_ids "$CODEX_BOT_LOGIN")
-ALL_GEMINI_REVIEW_IDS=$(fetch_review_ids "$GEMINI_BOT_LOGIN")
+ALL_CODEX_REVIEW_IDS=$(fetch_review_ids "$REPO_SLUG" "$PR_NUM" "$CODEX_BOT_LOGIN")
+ALL_GEMINI_REVIEW_IDS=$(fetch_review_ids "$REPO_SLUG" "$PR_NUM" "$GEMINI_BOT_LOGIN")
 
 LATEST_GEMINI_REVIEW=$(echo "$ALL_GEMINI_REVIEW_IDS" | jq 'last')
 GEMINI_ENABLED=false
@@ -93,10 +76,10 @@ if [[ -n "$LATEST_GEMINI_REVIEW" && "$LATEST_GEMINI_REVIEW" != "null" ]]; then
     GEMINI_ENABLED=true
 fi
 
-CODEX_ALL_COMMENTS=$(fetch_comments_for_reviews "$ALL_CODEX_REVIEW_IDS")
+CODEX_ALL_COMMENTS=$(fetch_comments_for_reviews "$REPO_SLUG" "$PR_NUM" "$ALL_CODEX_REVIEW_IDS")
 GEMINI_ALL_COMMENTS='[]'
 if [[ "$GEMINI_ENABLED" = true ]]; then
-    GEMINI_ALL_COMMENTS=$(fetch_comments_for_reviews "$ALL_GEMINI_REVIEW_IDS")
+    GEMINI_ALL_COMMENTS=$(fetch_comments_for_reviews "$REPO_SLUG" "$PR_NUM" "$ALL_GEMINI_REVIEW_IDS")
 fi
 
 REPLIED_IDS=$(gh api "repos/$REPO_SLUG/pulls/$PR_NUM/comments" --paginate \
