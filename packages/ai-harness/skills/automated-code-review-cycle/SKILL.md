@@ -131,11 +131,14 @@ CYCLE_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 ```bash
 # 0. [R1] Bot login은 config.json에서 읽음 (각 스크립트 내부에서 처리).
-# GEMINI_ENABLED 초기값은 false. Step 3 fetch-reviews.sh가 실제 Gemini 리뷰
-# 존재 여부로 판정해 덮어쓴다 (원래 인라인 로직과 동일).
+# Step 2 quota/fallback 분기도 Gemini 활성 여부를 필요로 하므로, Step 1에서
+# fetch-reviews.sh로 초기 상태를 한 번 읽어 GEMINI_ENABLED를 먼저 확정한다.
 HARNESS="${SAZO_HARNESS_DIR:-$HOME/.config/sazo-ai-harness/packages/ai-harness}"
 REPO_DIR=$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
-GEMINI_ENABLED=false
+INITIAL_FETCH_RESULT=$(bash "$HARNESS/skills/automated-code-review-cycle/scripts/fetch-reviews.sh" \
+  --pr "$PR_NUM" \
+  --repo-dir "$REPO_DIR")
+GEMINI_ENABLED=$(echo "$INITIAL_FETCH_RESULT" | jq -r '.gemini_enabled')
 
 # 2. 전체 미답변 코멘트 수 확인 (모든 리뷰의 코멘트에서)
 # → Step 3에서 상세 조회

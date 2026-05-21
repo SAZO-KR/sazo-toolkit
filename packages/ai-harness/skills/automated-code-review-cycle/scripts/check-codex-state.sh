@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # check-codex-state.sh — evaluate Codex/Gemini pass state from reactions/comments.
 #
-# Usage: check-codex-state.sh --pr <num> --push-time <iso8601> [--gemini-enabled true|false] [--unanswered-gemini-count <n>] [--config <path>] [--repo-dir <path>]
+# Usage: check-codex-state.sh --pr <num> [--push-time <iso8601>] [--gemini-enabled true|false] [--unanswered-gemini-count <n>] [--config <path>] [--repo-dir <path>]
 #
 # Outputs JSON on stdout:
 #   {
@@ -52,10 +52,6 @@ if ! [[ "$PR_NUM" =~ ^[0-9]+$ ]]; then
     echo "ERROR: --pr must be a positive integer, got '$PR_NUM'" >&2
     exit 1
 fi
-if [[ -z "$PUSH_TIME" ]]; then
-    echo "ERROR: --push-time <iso8601> required" >&2
-    exit 1
-fi
 if [[ ! -f "$CONFIG_PATH" ]]; then
     echo "ERROR: config not found: $CONFIG_PATH" >&2
     exit 1
@@ -79,12 +75,17 @@ if [[ -z "$REPO_SLUG" ]]; then
     exit 1
 fi
 
-# Codex reaction 3-state.
-CODEX_LATEST=$(gh api "repos/$REPO_SLUG/issues/$PR_NUM/reactions" --paginate \
-    --jq '.[] | {content: .content, created_at: .created_at, login: .user.login}' \
-    | jq -rs --arg bot "$CODEX_BOT_LOGIN" --arg since "$PUSH_TIME" \
-        '[.[] | select(.login == $bot and .created_at > $since)]
-         | sort_by(.created_at) | last.content // "none"')
+# Codex reaction 3-state. Step 3 can be entered before Step 2 establishes
+# PUSH_TIME; in that path we cannot trust any reaction for current-push approval,
+# so report pending and let unanswered feedback handling continue.
+CODEX_LATEST="none"
+if [[ -n "$PUSH_TIME" ]]; then
+    CODEX_LATEST=$(gh api "repos/$REPO_SLUG/issues/$PR_NUM/reactions" --paginate \
+        --jq '.[] | {content: .content, created_at: .created_at, login: .user.login}' \
+        | jq -rs --arg bot "$CODEX_BOT_LOGIN" --arg since "$PUSH_TIME" \
+            '[.[] | select(.login == $bot and .created_at > $since)]
+             | sort_by(.created_at) | last.content // "none"')
+fi
 
 CODEX_STATE="pending"
 case "$CODEX_LATEST" in
