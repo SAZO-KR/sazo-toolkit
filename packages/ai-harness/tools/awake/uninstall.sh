@@ -155,8 +155,8 @@ done
 echo ""
 echo "[6/6] Removing command links..."
 
-remove_harness_symlinks "$HOME/.claude/commands" "~/.claude/commands"
-remove_harness_symlinks "$HOME/.config/opencode/commands" "~/.config/opencode/commands"
+remove_harness_symlinks "$HOME/.claude/commands" "~/.claude/commands" "awake.md"
+remove_harness_symlinks "$HOME/.config/opencode/commands" "~/.config/opencode/commands" "awake.md"
 
 echo ""
 echo "==================================="

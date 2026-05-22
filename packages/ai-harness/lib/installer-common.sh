@@ -86,10 +86,12 @@ safe_symlink() {
 }
 
 # Removes symlinks pointing to sazo-ai-harness or sazo-ai-prompts.
+# Optional additional arguments limit removal to specific link basenames.
 remove_harness_symlinks() {
     local dir="$1"
     local label="$2"
     local count=0
+    shift 2
 
     if [ ! -d "$dir" ]; then
         return 0
@@ -97,6 +99,17 @@ remove_harness_symlinks() {
 
     for item in "$dir"/*; do
         [ -L "$item" ] || continue
+        if [ "$#" -gt 0 ]; then
+            local basename matched=0
+            basename="$(basename "$item")"
+            for allowed in "$@"; do
+                if [ "$basename" = "$allowed" ]; then
+                    matched=1
+                    break
+                fi
+            done
+            [ "$matched" -eq 1 ] || continue
+        fi
         local target
         target=$(readlink "$item" 2>/dev/null || true)
         if echo "$target" | grep -qE "sazo-ai-harness|sazo-ai-prompts"; then

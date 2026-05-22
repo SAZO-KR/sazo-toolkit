@@ -56,6 +56,30 @@ source_lib() {
         info()  { printf "  ✓ %s\n" "$1"; }
         skip()  { printf "  - %s (not found)\n" "$1"; }
         warn()  { printf "  ⚠ %s\n" "$1" >&2; }
+        remove_harness_symlinks() {
+            local dir="$1"
+            local label="$2"
+            local count=0
+
+            if [ ! -d "$dir" ]; then
+                return 0
+            fi
+
+            for item in "$dir"/*; do
+                [ -L "$item" ] || continue
+                local target
+                target=$(readlink "$item" 2>/dev/null || true)
+                if echo "$target" | grep -qE "sazo-ai-harness|sazo-ai-prompts"; then
+                    rm -f "$item"
+                    count=$((count + 1))
+                fi
+            done
+
+            if [ "$count" -gt 0 ]; then
+                info "$label: ${count} symlinks removed"
+            fi
+            return 0
+        }
     fi
 }
 

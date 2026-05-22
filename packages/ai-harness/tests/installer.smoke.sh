@@ -101,6 +101,42 @@ test_receipt_clear() {
     echo "ok - receipt clear works"
 }
 
+test_remove_harness_symlinks_can_filter_basenames() {
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+
+    ln -s "$HOME/.config/sazo-ai-harness/packages/ai-harness/tools/awake/commands/awake.md" "$tmpdir/awake.md"
+    ln -s "$HOME/.config/sazo-ai-harness/packages/ai-harness/commands/weekly-report.md" "$tmpdir/weekly-report.md"
+
+    bash -c "
+        source '$LIB_PATH'
+        remove_harness_symlinks '$tmpdir' test awake.md
+    " || fail "filtered symlink cleanup should not fail"
+
+    [ ! -e "$tmpdir/awake.md" ] || fail "awake.md should be removed"
+    [ -L "$tmpdir/weekly-report.md" ] || fail "unrelated command symlink should be preserved"
+
+    rm -rf "$tmpdir"
+    echo "ok - remove_harness_symlinks can filter by basename"
+}
+
+test_root_uninstaller_fallback_removes_symlinks_without_lib() {
+    local tmpdir stdout_file
+    tmpdir="$(mktemp -d)"
+    stdout_file="$tmpdir/out.log"
+
+    mkdir -p "$tmpdir/.claude/commands"
+    ln -s "$tmpdir/.config/sazo-ai-harness/packages/ai-harness/commands/test.md" "$tmpdir/.claude/commands/test.md"
+
+    HOME="$tmpdir" bash "$ROOT_DIR/uninstall.sh" >"$stdout_file" 2>&1 || fail "root uninstall should tolerate missing installer-common.sh"
+
+    [ ! -e "$tmpdir/.claude/commands/test.md" ] || fail "fallback cleanup should remove harness symlink"
+    ! grep -q "command not found" "$stdout_file" || fail "fallback cleanup should avoid command not found"
+
+    rm -rf "$tmpdir"
+    echo "ok - root uninstaller fallback removes symlinks without shared lib"
+}
+
 # --- tool.sh manifest tests ---
 
 test_tool_sh_manifest() {
@@ -179,6 +215,8 @@ test_check_platform_unsupported
 test_ask_yes_no_noninteractive
 test_receipt_round_trip
 test_receipt_clear
+test_remove_harness_symlinks_can_filter_basenames
+test_root_uninstaller_fallback_removes_symlinks_without_lib
 test_tool_sh_manifest
 test_awake_installer_exists
 test_awake_uninstaller_exists

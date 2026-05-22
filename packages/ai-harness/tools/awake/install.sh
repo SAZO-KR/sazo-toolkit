@@ -11,6 +11,24 @@ HARNESS_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 LIB_PATH="$HARNESS_DIR/lib/installer-common.sh"
 if [ ! -f "$LIB_PATH" ]; then
+    if [ "${SAZO_ROOT_INSTALL:-0}" != "1" ] && [ "${SAZO_AWAKE_BOOTSTRAPPED:-0}" != "1" ]; then
+        SAZO_BASE_DIR="${SAZO_BASE_DIR:-$HOME/.config/sazo-ai-harness}"
+        SAZO_REPO_URL="${SAZO_REPO_URL:-https://github.com/SAZO-KR/sazo-toolkit.git}"
+
+        if ! command -v git >/dev/null 2>&1; then
+            echo "Error: git is required" >&2
+            exit 1
+        fi
+
+        echo "Installing awake to $SAZO_BASE_DIR..."
+        rm -rf "$SAZO_BASE_DIR"
+        mkdir -p "$(dirname "$SAZO_BASE_DIR")"
+        git clone --filter=blob:none --sparse "$SAZO_REPO_URL" "$SAZO_BASE_DIR"
+        git -C "$SAZO_BASE_DIR" sparse-checkout set packages/ai-harness
+
+        exec env SAZO_AWAKE_BOOTSTRAPPED=1 bash "$SAZO_BASE_DIR/packages/ai-harness/tools/awake/install.sh" "$@"
+    fi
+
     echo "Error: installer-common.sh not found at $LIB_PATH" >&2
     exit 1
 fi
