@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-AWAKE_BIN="$ROOT_DIR/scripts/awake/awake.sh"
+ROOT_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+AWAKE_BIN="$ROOT_DIR/tools/awake/scripts/awake.sh"
 
 fail() {
     echo "not ok - $1" >&2
