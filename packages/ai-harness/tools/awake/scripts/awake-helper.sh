@@ -8,6 +8,7 @@ STATE_FILE="$STATE_DIR/awake-root.state"
 LOCK_DIR="${AWAKE_HELPER_LOCK_DIR-/var/run/sazo-ai-harness-awake.lock.d}"
 LOCK_PID_FILE="$LOCK_DIR/owner.pid"
 SLEEP_BIN="${AWAKE_HELPER_SLEEP_BIN-/bin/sleep}"
+IOREG_BIN="${AWAKE_HELPER_IOREG_BIN-/usr/sbin/ioreg}"
 SELF_BIN="${AWAKE_HELPER_SELF_BIN-$0}"
 MAX_DURATION_SECS=86400
 
@@ -156,6 +157,22 @@ apply_disablesleep() {
     "$PMSET_BIN" -a disablesleep "$value" >/dev/null 2>&1
 }
 
+is_clamshell_closed() {
+    local line
+    [ -x "$IOREG_BIN" ] || return 1
+    line="$("$IOREG_BIN" -r -k AppleClamshellState -d 4 2>/dev/null | grep AppleClamshellState || true)"
+    case "$line" in
+        *Yes*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+sleepnow_if_clamshell_closed() {
+    if is_clamshell_closed; then
+        "$PMSET_BIN" sleepnow 2>/dev/null || true
+    fi
+}
+
 kill_rollback_pid() {
     local pid="$1"
     local cmd=""
@@ -302,6 +319,7 @@ cmd_rollback() {
     original_disablesleep="$(read_state_value original_disablesleep)" || return 1
     apply_disablesleep "$original_disablesleep" || return 1
     clear_state
+    sleepnow_if_clamshell_closed
 }
 
 cmd_reset() {
