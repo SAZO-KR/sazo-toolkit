@@ -319,7 +319,9 @@ cmd_rollback() {
     original_disablesleep="$(read_state_value original_disablesleep)" || return 1
     apply_disablesleep "$original_disablesleep" || return 1
     clear_state
-    sleepnow_if_clamshell_closed
+    if [ "$original_disablesleep" = "0" ]; then
+        sleepnow_if_clamshell_closed
+    fi
 }
 
 cmd_reset() {
