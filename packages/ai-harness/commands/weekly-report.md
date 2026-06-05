@@ -535,19 +535,18 @@ jq '[.[] | {
 규칙:
 - **세부 항목이 2개 이상**이면 토글로. `<summary>` 다음과 `</details>` 앞에는 **빈 줄**이 있어야 하위 bullet이 렌더된다.
 - **한 줄로 충분**하면 일반 bullet로 (토글 강제 금지).
-- 대표 PR/Linear 링크는 토글 내부 **마지막 bullet**에 모아 둔다.
+- **PR/Linear 링크는 각 하위 bullet 끝에** 그 항목에 해당하는 것만 붙인다 (`— [PR #N](URL)` 형식). 한 항목이 여러 PR이면 그 항목에 함께 나열. **마지막에 한꺼번에 몰지 말 것.** 특정 항목에 매핑되지 않는 공통 이슈 링크만 관련 항목 끝에 괄호로 덧붙인다.
 
 ```
 **✨ 신기능**
 <details>
 <summary><strong>Naver SmartStore 판매연동 인증/구독 골격 완성</strong></summary>
 
-- 솔루션앱 SELF/SELLER 토큰 계정 분리 + 자격증명 슬롯 분리
-- 솔루션 사용연결 JWT 승인·판매자 커머스ID JWE 해석 콜백
-- 구독 lifecycle 이벤트 훅 수신
-- 솔루션 ingress를 webhook 호스트로 격리
-- 마켓 심사 전엔 `NAVER.TOKEN_TYPE=SELF`로 본인 스토어 테스트 가능
-- [PR #871](URL), [PR #872](URL), [PR #874](URL) ([DAT-799](URL), [DAT-825](URL))
+- 솔루션앱 SELF/SELLER 토큰 계정 분리 + 자격증명 슬롯 분리 — [PR #871](URL)
+- 솔루션 사용연결 JWT 승인·판매자 커머스ID JWE 해석 콜백 — [PR #872](URL), [PR #874](URL)
+- 구독 lifecycle 이벤트 훅 수신 — [PR #875](URL)
+- 솔루션 ingress를 webhook 호스트로 격리 — [PR #877](URL)
+- 마켓 심사 전엔 `NAVER.TOKEN_TYPE=SELF`로 본인 스토어 테스트 가능 ([DAT-799](URL), [DAT-825](URL))
 
 </details>
 
@@ -561,7 +560,7 @@ jq '[.[] | {
 이모지: 🔐보안 ⚡성능 🏷️카테고리 🤖AI/번역 📦상품 🔔알림 🐛버그 ✨신기능 🔧리팩토링 🔄동기화 🔍검색 🌍배송 🔜진행중
 
 **CRITICAL 링크 규칙:**
-- 모든 항목에 관련 PR, Linear 이슈 중 대표 1~2개의 **클릭 가능한 마크다운 링크** 필수
+- 모든 항목(토글이면 **각 하위 bullet**)에 해당하는 PR/Linear 링크를 **클릭 가능한 마크다운**으로 항목 끝에 붙인다 (한 곳에 몰지 않기)
 - 형식: `[PR #N](https://github.com/OWNER/REPO/pull/N)` 또는 `[PROJ-N](https://linear.app/TEAM/issue/PROJ-N)`
 - `PR #587` (plain text) ← **금지**. 반드시 `[PR #587](URL)` 형태여야 함
 - 데이터의 `url` 필드(`gh search` 결과)와 Linear issue URL을 그대로 링크로 사용 — 수동 조립 금지
