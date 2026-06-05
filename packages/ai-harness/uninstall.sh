@@ -110,7 +110,36 @@ if [ -n "$TOOL_TO_REMOVE" ]; then
     echo "Uninstalling tool: $TOOL_TO_REMOVE"
     echo ""
     bash "$TOOL_UNINSTALLER"
-    exit $?
+    tool_rc=$?
+
+    # Root owns ~/.claude linking (mirror of install.sh's per-tool linking), so
+    # remove this tool's command/skill/agent symlinks too. Filter by the tool's own
+    # basenames so shared/other-tool artifacts stay intact; remove_harness_symlinks
+    # only deletes symlinks that resolve into the harness.
+    TOOL_SRC="$HARNESS_DIR/tools/$TOOL_TO_REMOVE"
+    for sub in commands skills agents; do
+        [ -d "$TOOL_SRC/$sub" ] || continue
+        names=()
+        for f in "$TOOL_SRC/$sub"/*; do
+            [ -e "$f" ] || continue
+            names+=("$(basename "$f")")
+        done
+        [ ${#names[@]} -gt 0 ] || continue
+        case "$sub" in
+            commands)
+                remove_harness_symlinks "$HOME/.claude/commands" "~/.claude/commands" "${names[@]}"
+                remove_harness_symlinks "$HOME/.config/opencode/commands" "~/.config/opencode/commands" "${names[@]}"
+                ;;
+            skills)
+                remove_harness_symlinks "$HOME/.claude/skills" "~/.claude/skills" "${names[@]}"
+                ;;
+            agents)
+                remove_harness_symlinks "$HOME/.claude/agents" "~/.claude/agents" "${names[@]}"
+                ;;
+        esac
+    done
+
+    exit $tool_rc
 fi
 
 # --- Full uninstall ---

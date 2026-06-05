@@ -381,6 +381,23 @@ packages/ai-harness/agents/
 - 파일 이름 = 에이전트 이름
 - `install.sh`의 `link_files()`가 `agents/` 하위 파일을 `~/.claude/agents/`에 자동 연결
 
+### 도구 전용 커맨드/스킬/에이전트 (tool-provided)
+
+도구가 자기 패키지 안에 커맨드/스킬/에이전트를 동봉할 수 있다:
+
+```
+tools/<name>/
+├── commands/<name>.md    # 도구 전용 커맨드 (예: tools/awake/commands/awake.md)
+├── skills/...            # 도구 전용 스킬 (선택)
+└── agents/...            # 도구 전용 에이전트 (선택)
+```
+
+**규칙**:
+- 루트 `commands/`·`skills/`·`agents/`(공유)와 달리, 이들은 **해당 도구가 설치될 때만** 링크된다.
+- `install.sh`가 `TOOLS_TO_INSTALL` 각각에 대해 `tools/<name>/{commands,skills,agents}`를 `~/.claude/`(+OpenCode)로 연결한다.
+- 제거 시: `uninstall.sh --all`은 전역 sweep으로, `uninstall.sh --tool <name>`은 해당 도구의 basename만 골라 `remove_harness_symlinks`로 제거한다.
+- **공유 커맨드와 파일명 중복 금지** — 도구 커맨드는 `tools/<name>/commands/`에만 두고 루트 `commands/`에 복제하지 않는다.
+
 ### 추가 후 확인
 
 스킬/커맨드/에이전트를 추가한 후:
