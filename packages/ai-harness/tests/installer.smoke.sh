@@ -207,6 +207,31 @@ test_discover_tools_finds_awake() {
     echo "ok - discover_tools finds awake"
 }
 
+# --- Tool-provided artifact linking tests ---
+
+test_awake_command_is_tool_provided() {
+    [ -f "$ROOT_DIR/tools/awake/commands/awake.md" ] || fail "awake command should live under tools/awake/commands/"
+    [ ! -e "$ROOT_DIR/commands/awake.md" ] || fail "awake command must not duplicate under shared commands/"
+    echo "ok - awake command is tool-provided under tools/awake/commands/"
+}
+
+test_install_links_tool_commands() {
+    assert_file_contains "$ROOT_DIR/install.sh" "Tool-provided commands/skills/agents"
+    assert_file_contains "$ROOT_DIR/install.sh" "link_files .*tool_src/commands"
+    # Linking must be gated on successful install (INSTALLED_OK), not on mere
+    # selection — else a failed/skipped tool installer leaves an orphan command.
+    assert_file_contains "$ROOT_DIR/install.sh" "INSTALLED_OK"
+    echo "ok - install.sh links tool-provided commands (success-gated)"
+}
+
+test_uninstall_cleans_tool_symlinks() {
+    # TOOL_SRC= marker is unique to the per-tool symlink cleanup added alongside
+    # install.sh's tool-command linking (full uninstall already swept shared dirs).
+    assert_file_contains "$ROOT_DIR/uninstall.sh" "TOOL_SRC="
+    assert_file_contains "$ROOT_DIR/uninstall.sh" "remove_harness_symlinks .*\\.claude/commands"
+    echo "ok - uninstall.sh cleans tool symlinks on per-tool removal"
+}
+
 # --- Run all tests ---
 
 test_lib_sources_cleanly
@@ -223,6 +248,9 @@ test_awake_uninstaller_exists
 test_root_installer_exists
 test_root_uninstaller_exists
 test_discover_tools_finds_awake
+test_awake_command_is_tool_provided
+test_install_links_tool_commands
+test_uninstall_cleans_tool_symlinks
 
 echo ""
 echo "All installer smoke tests passed!"
