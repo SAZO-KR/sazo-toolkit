@@ -92,17 +92,6 @@ if [[ -z "$ACTIVE_REVIEWERS" ]]; then
     exit 5
 fi
 
-# ── Phase 2 prep: read label_authority (Phase 1 informational only) ─────────
-# label_authority="skill"    → LLM (SKILL.md Step 4-8) attaches labels (Phase 1 default)
-# label_authority="actions"  → GitHub Actions auto-attaches labels (Phase 2)
-# Phase 1 logs this value for observability but does NOT branch on it.
-# Evaluated per-reviewer inside the polling loop to support per-reviewer config.
-while IFS= read -r _ar; do
-    [[ -z "$_ar" ]] && continue
-    _la=$(echo "$MERGED_CONFIG" | jq -r --arg k "$_ar" '.active_reviewers[$k].label_authority // "skill"')
-    echo "INFO: reviewer=$_ar label_authority=$_la" >&2
-done <<< "$ACTIVE_REVIEWERS"
-
 # ── polling loop ──────────────────────────────────────────
 iter=0
 while true; do
