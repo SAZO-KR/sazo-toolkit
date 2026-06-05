@@ -218,7 +218,10 @@ test_awake_command_is_tool_provided() {
 test_install_links_tool_commands() {
     assert_file_contains "$ROOT_DIR/install.sh" "Tool-provided commands/skills/agents"
     assert_file_contains "$ROOT_DIR/install.sh" "link_files .*tool_src/commands"
-    echo "ok - install.sh links tool-provided commands"
+    # Linking must be gated on successful install (INSTALLED_OK), not on mere
+    # selection — else a failed/skipped tool installer leaves an orphan command.
+    assert_file_contains "$ROOT_DIR/install.sh" "INSTALLED_OK"
+    echo "ok - install.sh links tool-provided commands (success-gated)"
 }
 
 test_uninstall_cleans_tool_symlinks() {

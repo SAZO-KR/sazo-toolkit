@@ -275,31 +275,6 @@ if [ -d "$HOME/.config/opencode" ]; then
     link_files "$HARNESS_DIR/commands" "$local_oc_cmd_dir"
 fi
 
-# --- Tool-provided commands/skills/agents ---
-# A tool may ship its own commands/skills/agents under tools/<name>/. The root
-# installer owns ~/.claude linking (see CLAUDE.md §3), so link them here, gated on
-# the tools actually being installed — a tool's command only appears when the tool
-# is. Without this, /<tool> commands are never linked for fresh installs.
-for tool in "${TOOLS_TO_INSTALL[@]}"; do
-    tool_src="$HARNESS_DIR/tools/$tool"
-    if [ -d "$tool_src/commands" ]; then
-        echo "Tool commands ($tool):"
-        link_files "$tool_src/commands" "$HOME/.claude/commands"
-        if [ -d "$HOME/.config/opencode" ]; then
-            mkdir -p "$HOME/.config/opencode/commands"
-            link_files "$tool_src/commands" "$HOME/.config/opencode/commands"
-        fi
-    fi
-    if [ -d "$tool_src/skills" ]; then
-        echo "Tool skills ($tool):"
-        link_files "$tool_src/skills" "$HOME/.claude/skills"
-    fi
-    if [ -d "$tool_src/agents" ]; then
-        echo "Tool agents ($tool):"
-        link_files "$tool_src/agents" "$HOME/.claude/agents"
-    fi
-done
-
 # --- Legacy agent cleanup ---
 
 OLD_AGENT_NAMES=(
@@ -329,6 +304,7 @@ fi
 # --- Install selected tools ---
 
 INSTALL_RESULTS=()
+INSTALLED_OK=()
 
 for tool in "${TOOLS_TO_INSTALL[@]}"; do
     echo ""
@@ -344,10 +320,37 @@ for tool in "${TOOLS_TO_INSTALL[@]}"; do
 
     if bash "$TOOL_INSTALLER"; then
         INSTALL_RESULTS+=("$tool: OK")
+        INSTALLED_OK+=("$tool")
     else
         exit_code=$?
         log_error "$tool installer failed (exit $exit_code)"
         INSTALL_RESULTS+=("$tool: FAILED (exit $exit_code)")
+    fi
+done
+
+# --- Tool-provided commands/skills/agents ---
+# A tool may ship its own commands/skills/agents under tools/<name>/. The root
+# installer owns ~/.claude linking (see CLAUDE.md §3). Link these AFTER the tool
+# installers run and ONLY for tools that installed successfully — otherwise a tool
+# whose installer failed or was skipped (e.g. awake on non-macOS via check_platform)
+# would leave a visible but non-functional /<tool> command behind.
+for tool in "${INSTALLED_OK[@]+"${INSTALLED_OK[@]}"}"; do
+    tool_src="$HARNESS_DIR/tools/$tool"
+    if [ -d "$tool_src/commands" ]; then
+        echo "Tool commands ($tool):"
+        link_files "$tool_src/commands" "$HOME/.claude/commands"
+        if [ -d "$HOME/.config/opencode" ]; then
+            mkdir -p "$HOME/.config/opencode/commands"
+            link_files "$tool_src/commands" "$HOME/.config/opencode/commands"
+        fi
+    fi
+    if [ -d "$tool_src/skills" ]; then
+        echo "Tool skills ($tool):"
+        link_files "$tool_src/skills" "$HOME/.claude/skills"
+    fi
+    if [ -d "$tool_src/agents" ]; then
+        echo "Tool agents ($tool):"
+        link_files "$tool_src/agents" "$HOME/.claude/agents"
     fi
 done
 
