@@ -4,14 +4,12 @@
     "codex": {
       "label_prefix": "bot-review/codex/",
       "comment_pattern": "Codex Review",
-      "bot_login": "chatgpt-codex-connector[bot]",
-      "label_authority": "skill"
+      "bot_login": "chatgpt-codex-connector[bot]"
     },
     "gemini": {
       "label_prefix": "bot-review/gemini/",
       "comment_pattern": "@gemini-code-review",
-      "bot_login": "gemini-code-assist[bot]",
-      "label_authority": "skill"
+      "bot_login": "gemini-code-assist[bot]"
     }
   },
   "labels": {
