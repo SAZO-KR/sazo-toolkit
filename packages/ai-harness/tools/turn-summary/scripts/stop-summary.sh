@@ -17,6 +17,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 INPUT="$(cat)"
+[ -n "$INPUT" ] || exit 0
 
 # jq is how we read the payload and emit valid JSON. Absent jq => inert.
 command -v jq >/dev/null 2>&1 || exit 0

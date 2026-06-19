@@ -31,6 +31,9 @@ if [ ! -f "$LIB_PATH" ]; then
             git -C "$SAZO_BASE_DIR" pull --ff-only || true
         else
             echo "Installing turn-summary to $SAZO_BASE_DIR..."
+            # No .git but possibly a non-empty/broken dir (interrupted install) —
+            # clean it so `git clone` (under set -e) doesn't fail on a non-empty path.
+            rm -rf "$SAZO_BASE_DIR"
             mkdir -p "$(dirname "$SAZO_BASE_DIR")"
             git clone --filter=blob:none --sparse "$SAZO_REPO_URL" "$SAZO_BASE_DIR"
             git -C "$SAZO_BASE_DIR" sparse-checkout set packages/ai-harness

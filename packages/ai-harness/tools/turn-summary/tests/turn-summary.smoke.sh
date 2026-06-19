@@ -114,6 +114,10 @@ test_hook_output() {
     out="$(printf '{"stop_hook_active":false}' | bash "$HOOK")"
     [ -z "$out" ] && ok "hook: no transcript => silent" || fail "hook missing transcript"
 
+    # Empty stdin => silent exit 0 (no jq syntax noise).
+    out="$(printf '' | bash "$HOOK")"
+    [ -z "$out" ] && ok "hook: empty stdin => silent" || fail "hook empty stdin"
+
     rm -rf "$d"
 }
 
