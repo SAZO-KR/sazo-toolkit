@@ -32,7 +32,7 @@ command -v jq >/dev/null 2>&1 || exit 1
 # Slurp the JSONL transcript into an array, find the index of the last genuine
 # user message, then over the assistant blocks after it check (a) a work tool_use
 # is present and (b) the concatenated visible text meets the length threshold.
-result="$(jq -s --argjson min "$MIN_CHARS" '
+result="$(jq -s --arg min "$MIN_CHARS" '
   def is_real_user:
     .type == "user"
     and .message != null
@@ -48,8 +48,8 @@ result="$(jq -s --argjson min "$MIN_CHARS" '
       | .message.content[]? ] as $blocks
   | ([ $blocks[] | select(.type == "tool_use") | .name ]
        | any(.[]; . == "Edit" or . == "MultiEdit" or . == "Write" or . == "NotebookEdit" or . == "Agent" or . == "Task")) as $did_work
-  | ([ $blocks[] | select(.type == "text") | .text ] | join("\n") | length) as $textlen
-  | ($did_work and ($textlen >= $min))
+  | ([ $blocks[] | select(.type == "text" and .text != null) | .text | length ] | add // 0) as $textlen
+  | ($did_work and ($textlen >= ($min | tonumber)))
 ' "$TRANSCRIPT" 2>/dev/null)" || exit 1
 
 [ "$result" = "true" ] && exit 0

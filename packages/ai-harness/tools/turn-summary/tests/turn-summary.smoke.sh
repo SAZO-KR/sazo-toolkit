@@ -70,6 +70,11 @@ test_gate_behavior() {
     [ "$(SAZO_TURN_SUMMARY_MIN_CHARS=1 gate_rc "$d/A2.jsonl")" = "0" ] \
         && ok "gate: MIN_CHARS override lowers bar" || fail "gate A2-override"
 
+    # Leading-zero threshold must NOT break jq (tonumber, not JSON literal).
+    # "0001" parses to 1, so the short turn qualifies instead of silently inerting.
+    [ "$(SAZO_TURN_SUMMARY_MIN_CHARS=0001 gate_rc "$d/A2.jsonl")" = "0" ] \
+        && ok "gate: leading-zero MIN_CHARS parsed via tonumber" || fail "gate A2-leadingzero"
+
     printf '%s\n%s\n%s\n%s\n' "$U_REAL" "$A_BASH" "$U_TOOLRESULT" "$A_TEXT_LONG" > "$d/B.jsonl"
     [ "$(gate_rc "$d/B.jsonl")" = "1" ] && ok "gate: Bash only (no work tool) => skip" || fail "gate B"
 
