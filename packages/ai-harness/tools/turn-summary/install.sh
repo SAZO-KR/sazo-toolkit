@@ -26,11 +26,15 @@ if [ ! -f "$LIB_PATH" ]; then
             exit 1
         fi
 
-        echo "Installing turn-summary to $SAZO_BASE_DIR..."
-        rm -rf "$SAZO_BASE_DIR"
-        mkdir -p "$(dirname "$SAZO_BASE_DIR")"
-        git clone --filter=blob:none --sparse "$SAZO_REPO_URL" "$SAZO_BASE_DIR"
-        git -C "$SAZO_BASE_DIR" sparse-checkout set packages/ai-harness
+        if [ -d "$SAZO_BASE_DIR/.git" ]; then
+            echo "Updating existing installation at $SAZO_BASE_DIR..."
+            git -C "$SAZO_BASE_DIR" pull --ff-only || true
+        else
+            echo "Installing turn-summary to $SAZO_BASE_DIR..."
+            mkdir -p "$(dirname "$SAZO_BASE_DIR")"
+            git clone --filter=blob:none --sparse "$SAZO_REPO_URL" "$SAZO_BASE_DIR"
+            git -C "$SAZO_BASE_DIR" sparse-checkout set packages/ai-harness
+        fi
 
         exec env SAZO_TURN_SUMMARY_BOOTSTRAPPED=1 bash "$SAZO_BASE_DIR/packages/ai-harness/tools/turn-summary/install.sh" "$@"
     fi

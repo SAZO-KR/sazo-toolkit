@@ -3,8 +3,8 @@
 # gate.sh <transcript_path>
 #
 # Decides whether the just-finished turn did real work that warrants a summary.
-# "Real work" = an Edit / Write / NotebookEdit / Task (subagent) tool_use issued
-# by the assistant since the last genuine user message (a user message whose
+# "Real work" = an Edit / Write / NotebookEdit / Agent (subagent; legacy Task)
+# tool_use issued by the assistant since the last genuine user message (whose
 # content is a string or text — NOT a tool_result, which is mid-turn plumbing).
 #
 # Exit 0  -> work happened this turn (caller should trigger the summary)
@@ -26,7 +26,7 @@ result="$(jq -s '
   def is_real_user:
     .type == "user"
     and ((.message.content | type) == "string"
-         or (([.message.content[]?.type] | index("tool_result")) | not));
+         or (any(.message.content[]?; .type == "tool_result") | not));
 
   . as $arr
   | (reduce range(0; ($arr | length)) as $i (-1;
@@ -36,7 +36,7 @@ result="$(jq -s '
       | (.message.content // [])[]?
       | select(.type == "tool_use")
       | .name ]
-  | any(.[]; . == "Edit" or . == "Write" or . == "NotebookEdit" or . == "Task")
+  | any(.[]; . == "Edit" or . == "Write" or . == "NotebookEdit" or . == "Agent" or . == "Task")
 ' "$TRANSCRIPT" 2>/dev/null)" || exit 1
 
 [ "$result" = "true" ] && exit 0

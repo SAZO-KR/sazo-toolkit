@@ -22,10 +22,10 @@ INPUT="$(cat)"
 command -v jq >/dev/null 2>&1 || exit 0
 
 # Loop guard: don't re-block the summary turn.
-STOP_ACTIVE="$(printf '%s' "$INPUT" | jq -r '.stop_hook_active // false' 2>/dev/null)"
+STOP_ACTIVE="$(jq -r '.stop_hook_active // false' <<< "$INPUT" 2>/dev/null)"
 [ "$STOP_ACTIVE" = "true" ] && exit 0
 
-TRANSCRIPT="$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)"
+TRANSCRIPT="$(jq -r '.transcript_path // empty' <<< "$INPUT" 2>/dev/null)"
 [ -n "$TRANSCRIPT" ] || exit 0
 
 # Gate: only summarize turns that actually did work.

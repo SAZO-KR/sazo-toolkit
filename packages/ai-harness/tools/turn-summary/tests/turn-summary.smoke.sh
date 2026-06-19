@@ -24,6 +24,7 @@ U_REAL='{"type":"user","message":{"role":"user","content":"please do the thing"}
 U_TOOLRESULT='{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"ok"}]}}'
 A_EDIT='{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Edit","input":{}}]}}'
 A_WRITE='{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Write","input":{}}]}}'
+A_AGENT='{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Agent","input":{}}]}}'
 A_TASK='{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Task","input":{}}]}}'
 A_BASH='{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{}}]}}'
 A_TEXT='{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}'
@@ -59,8 +60,11 @@ test_gate_behavior() {
     printf '%s\n%s\n%s\n%s\n' "$U_REAL" "$A_BASH" "$U_TOOLRESULT" "$A_TEXT" > "$d/B.jsonl"
     [ "$(gate_rc "$d/B.jsonl")" = "1" ] && ok "gate: only Bash+text => no work" || fail "gate B"
 
-    printf '%s\n%s\n' "$U_REAL" "$A_TASK" > "$d/C.jsonl"
-    [ "$(gate_rc "$d/C.jsonl")" = "0" ] && ok "gate: Task (subagent) => work" || fail "gate C"
+    printf '%s\n%s\n' "$U_REAL" "$A_AGENT" > "$d/C.jsonl"
+    [ "$(gate_rc "$d/C.jsonl")" = "0" ] && ok "gate: Agent (subagent) => work" || fail "gate C"
+
+    printf '%s\n%s\n' "$U_REAL" "$A_TASK" > "$d/C2.jsonl"
+    [ "$(gate_rc "$d/C2.jsonl")" = "0" ] && ok "gate: Task (legacy subagent) => work" || fail "gate C2"
 
     # Edit happened in a PRIOR turn; nothing after the latest user message.
     printf '%s\n%s\n%s\n%s\n' "$U_REAL" "$A_EDIT" "$U_REAL" "$A_TEXT" > "$d/D.jsonl"

@@ -5,8 +5,8 @@
 # Manage this tool's Claude Code "Stop" hook entry in a settings.json file.
 #   add    <file> <cmd>    Register a Stop hook with command=<cmd> (idempotent).
 #                          Creates <file> (and its parent dir) if absent.
-#   remove <file> <match>  Remove Stop hook entries whose command matches the
-#                          <match> regex (jq `test`). Prunes empty groups/keys.
+#   remove <file> <match>  Remove Stop hook entries whose command contains the
+#                          <match> substring (jq `contains`). Prunes empty keys.
 #
 # Writes <file> in place atomically (mktemp + validate + mv). jq is required.
 # Exit 0 success | 1 failure (no jq / parse / empty output) | 2 bad usage.
@@ -26,7 +26,7 @@ trap 'rm -f "$tmp_in" "$tmp_out"' EXIT
 case "$action" in
     add)
         mkdir -p "$(dirname "$file")"
-        if [ -f "$file" ]; then cp "$file" "$tmp_in"; else echo '{}' > "$tmp_in"; fi
+        if [ -s "$file" ]; then cp "$file" "$tmp_in"; else echo '{}' > "$tmp_in"; fi
         jq --arg c "$arg" '
             .hooks = (.hooks // {})
             | .hooks.Stop = (.hooks.Stop // [])
@@ -37,12 +37,12 @@ case "$action" in
         ' "$tmp_in" > "$tmp_out" 2>/dev/null || exit 1
         ;;
     remove)
-        [ -f "$file" ] || exit 0
+        [ -s "$file" ] || exit 0
         cp "$file" "$tmp_in"
         jq --arg m "$arg" '
             if .hooks.Stop then
               .hooks.Stop |= [ .[]
-                | .hooks = ((.hooks // []) | map(select((.command // "") | test($m) | not)))
+                | .hooks = ((.hooks // []) | map(select((.command // "") | contains($m) | not)))
                 | select((.hooks | length) > 0) ]
               | if (.hooks.Stop | length) == 0 then del(.hooks.Stop) else . end
               | if (.hooks == {}) then del(.hooks) else . end
