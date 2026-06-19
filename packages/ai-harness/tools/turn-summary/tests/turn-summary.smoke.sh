@@ -118,6 +118,14 @@ test_hook_output() {
     out="$(printf '' | bash "$HOOK")"
     [ -z "$out" ] && ok "hook: empty stdin => silent" || fail "hook empty stdin"
 
+    # Home-relative (~) transcript_path must be expanded, else the hook never fires.
+    local hd; hd="$(mktemp -d)"
+    cp "$d/work.jsonl" "$hd/work.jsonl"
+    out="$(HOME="$hd" bash -c 'printf "{\"stop_hook_active\":false,\"transcript_path\":\"~/work.jsonl\"}" | bash "$1"' _ "$HOOK")"
+    printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1 \
+        && ok "hook: ~ transcript path expanded => block" || fail "hook tilde expansion"
+    rm -rf "$hd"
+
     rm -rf "$d"
 }
 

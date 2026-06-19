@@ -29,6 +29,13 @@ STOP_ACTIVE="$(jq -r '.stop_hook_active // false' <<< "$INPUT" 2>/dev/null)"
 TRANSCRIPT="$(jq -r '.transcript_path // empty' <<< "$INPUT" 2>/dev/null)"
 [ -n "$TRANSCRIPT" ] || exit 0
 
+# transcript_path may be home-relative (e.g. ~/.claude/projects/...). Bash does
+# not expand a leading ~ stored in a variable, so normalize it before use.
+case "$TRANSCRIPT" in
+    "~")   TRANSCRIPT="$HOME" ;;
+    "~/"*) TRANSCRIPT="$HOME/${TRANSCRIPT#"~/"}" ;;
+esac
+
 # Gate: only summarize turns that actually did work.
 bash "$SCRIPT_DIR/gate.sh" "$TRANSCRIPT" || exit 0
 
