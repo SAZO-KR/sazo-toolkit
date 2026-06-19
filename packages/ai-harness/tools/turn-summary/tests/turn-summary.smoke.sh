@@ -29,8 +29,12 @@ A_AGENT='{"type":"assistant","message":{"role":"assistant","content":[{"type":"t
 A_TASK='{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Task","input":{}}]}}'
 A_BASH='{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{}}]}}'
 A_TEXT='{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}'
+# Long visible output: clears the default 1500-char threshold so a working turn
+# passes the gate. Short A_TEXT alone stays under and must NOT trigger.
+LONG_TEXT="$(printf 'x%.0s' {1..1600})"
+A_TEXT_LONG='{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"'"$LONG_TEXT"'"}]}}'
 
-# gate exit: 0 = work, 1 = no work. Returns the actual exit code without aborting.
+# gate exit: 0 = summarize, 1 = skip. Returns the actual exit code without aborting.
 gate_rc() { local f="$1"; if bash "$GATE" "$f"; then echo 0; else echo $?; fi; }
 
 # --- 1. Manifest + syntax ---
@@ -55,20 +59,33 @@ test_gate_behavior() {
     fi
     local d; d="$(mktemp -d)"
 
-    printf '%s\n%s\n' "$U_REAL" "$A_EDIT" > "$d/A.jsonl"
-    [ "$(gate_rc "$d/A.jsonl")" = "0" ] && ok "gate: Edit after user => work" || fail "gate A"
+    printf '%s\n%s\n%s\n' "$U_REAL" "$A_EDIT" "$A_TEXT_LONG" > "$d/A.jsonl"
+    [ "$(gate_rc "$d/A.jsonl")" = "0" ] && ok "gate: Edit + long output => summarize" || fail "gate A"
 
-    printf '%s\n%s\n%s\n%s\n' "$U_REAL" "$A_BASH" "$U_TOOLRESULT" "$A_TEXT" > "$d/B.jsonl"
-    [ "$(gate_rc "$d/B.jsonl")" = "1" ] && ok "gate: only Bash+text => no work" || fail "gate B"
+    # Work happened but the visible output is short => already its own summary.
+    printf '%s\n%s\n%s\n' "$U_REAL" "$A_EDIT" "$A_TEXT" > "$d/A2.jsonl"
+    [ "$(gate_rc "$d/A2.jsonl")" = "1" ] && ok "gate: Edit + short output => skip" || fail "gate A2"
 
-    printf '%s\n%s\n' "$U_REAL" "$A_AGENT" > "$d/C.jsonl"
-    [ "$(gate_rc "$d/C.jsonl")" = "0" ] && ok "gate: Agent (subagent) => work" || fail "gate C"
+    # Override the threshold low: the same short turn now qualifies.
+    [ "$(SAZO_TURN_SUMMARY_MIN_CHARS=1 gate_rc "$d/A2.jsonl")" = "0" ] \
+        && ok "gate: MIN_CHARS override lowers bar" || fail "gate A2-override"
 
-    printf '%s\n%s\n' "$U_REAL" "$A_TASK" > "$d/C2.jsonl"
-    [ "$(gate_rc "$d/C2.jsonl")" = "0" ] && ok "gate: Task (legacy subagent) => work" || fail "gate C2"
+    # Leading-zero threshold must NOT break jq (tonumber, not JSON literal).
+    # "0001" parses to 1, so the short turn qualifies instead of silently inerting.
+    [ "$(SAZO_TURN_SUMMARY_MIN_CHARS=0001 gate_rc "$d/A2.jsonl")" = "0" ] \
+        && ok "gate: leading-zero MIN_CHARS parsed via tonumber" || fail "gate A2-leadingzero"
 
-    printf '%s\n%s\n' "$U_REAL" "$A_MULTIEDIT" > "$d/C3.jsonl"
-    [ "$(gate_rc "$d/C3.jsonl")" = "0" ] && ok "gate: MultiEdit => work" || fail "gate C3"
+    printf '%s\n%s\n%s\n%s\n' "$U_REAL" "$A_BASH" "$U_TOOLRESULT" "$A_TEXT_LONG" > "$d/B.jsonl"
+    [ "$(gate_rc "$d/B.jsonl")" = "1" ] && ok "gate: Bash only (no work tool) => skip" || fail "gate B"
+
+    printf '%s\n%s\n%s\n' "$U_REAL" "$A_AGENT" "$A_TEXT_LONG" > "$d/C.jsonl"
+    [ "$(gate_rc "$d/C.jsonl")" = "0" ] && ok "gate: Agent (subagent) => summarize" || fail "gate C"
+
+    printf '%s\n%s\n%s\n' "$U_REAL" "$A_TASK" "$A_TEXT_LONG" > "$d/C2.jsonl"
+    [ "$(gate_rc "$d/C2.jsonl")" = "0" ] && ok "gate: Task (legacy subagent) => summarize" || fail "gate C2"
+
+    printf '%s\n%s\n%s\n' "$U_REAL" "$A_MULTIEDIT" "$A_TEXT_LONG" > "$d/C3.jsonl"
+    [ "$(gate_rc "$d/C3.jsonl")" = "0" ] && ok "gate: MultiEdit => summarize" || fail "gate C3"
 
     # Edit happened in a PRIOR turn; nothing after the latest user message.
     printf '%s\n%s\n%s\n%s\n' "$U_REAL" "$A_EDIT" "$U_REAL" "$A_TEXT" > "$d/D.jsonl"
@@ -90,7 +107,7 @@ test_hook_output() {
         return
     fi
     local d; d="$(mktemp -d)"
-    printf '%s\n%s\n' "$U_REAL" "$A_EDIT" > "$d/work.jsonl"
+    printf '%s\n%s\n%s\n' "$U_REAL" "$A_EDIT" "$A_TEXT_LONG" > "$d/work.jsonl"
     printf '%s\n%s\n%s\n%s\n' "$U_REAL" "$A_BASH" "$U_TOOLRESULT" "$A_TEXT" > "$d/nowork.jsonl"
     local out
 
