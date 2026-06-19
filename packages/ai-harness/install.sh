@@ -155,6 +155,92 @@ if [ ${#AVAILABLE_TOOLS[@]} -eq 0 ]; then
     exit 1
 fi
 
+# --- Interactive checkbox multi-select ---
+# Renders AVAILABLE_TOOLS/TOOL_DESCS as a togglable checkbox list driven from the
+# terminal (/dev/tty), since stdin is the curl|bash pipe. On success sets
+# CHECKBOX_RESULT to a space-separated list of chosen tool names (may be empty)
+# and returns 0. Returns 1 when there is no usable TTY so the caller can fall
+# back to the plain numbered prompt.
+CHECKBOX_RESULT=""
+select_tools_checkbox() {
+    [ -e /dev/tty ] || return 1
+    command -v stty >/dev/null 2>&1 || return 1
+    local saved
+    saved="$(stty -g </dev/tty 2>/dev/null)" || return 1
+
+    local n=${#AVAILABLE_TOOLS[@]}
+    local -a checked=()
+    local i
+    for ((i = 0; i < n; i++)); do checked[i]=0; done
+    local cur=0 key rest cols
+
+    if ! stty -echo -icanon min 1 time 0 </dev/tty 2>/dev/null; then
+        stty "$saved" </dev/tty 2>/dev/null
+        return 1
+    fi
+    # Always restore the terminal, even on interrupt.
+    trap 'stty "$saved" </dev/tty 2>/dev/null; printf "\033[?25h" >/dev/tty' INT TERM
+    printf '\033[?25l' >/dev/tty   # hide cursor
+
+    cols="$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2)"
+    { [ -n "$cols" ] && [ "$cols" -gt 20 ]; } 2>/dev/null || cols=80
+
+    printf '\r\n  Select tools — \033[1m↑/↓\033[0m move  \033[1mspace\033[0m toggle  \033[1ma\033[0m all  \033[1menter\033[0m confirm  \033[1mq\033[0m cancel\r\n\r\n' >/dev/tty
+
+    local drawn=0
+    while true; do
+        [ "$drawn" -eq 1 ] && printf '\033[%dA' "$n" >/dev/tty
+        for ((i = 0; i < n; i++)); do
+            local mark=" " ptr="  " line
+            [ "${checked[i]}" -eq 1 ] && mark="x"
+            [ "$i" -eq "$cur" ] && ptr="❯ "
+            line="$(printf '%s[%s] %-14s %s' "$ptr" "$mark" "${AVAILABLE_TOOLS[i]}" "${TOOL_DESCS[i]}")"
+            line="${line:0:$((cols - 1))}"
+            if [ "$i" -eq "$cur" ]; then
+                printf '\r\033[K\033[7m%s\033[0m\r\n' "$line" >/dev/tty
+            else
+                printf '\r\033[K%s\r\n' "$line" >/dev/tty
+            fi
+        done
+        drawn=1
+
+        IFS= read -rsn1 key </dev/tty
+        case "$key" in
+            $'\x1b')
+                IFS= read -rsn2 -t 0.5 rest </dev/tty
+                case "$rest" in
+                    '[A') cur=$(((cur - 1 + n) % n)) ;;
+                    '[B') cur=$(((cur + 1) % n)) ;;
+                esac
+                ;;
+            k) cur=$(((cur - 1 + n) % n)) ;;
+            j) cur=$(((cur + 1) % n)) ;;
+            ' ') checked[cur]=$((1 - checked[cur])) ;;
+            a | A)
+                local all=1
+                for ((i = 0; i < n; i++)); do [ "${checked[i]}" -eq 0 ] && { all=0; break; }; done
+                for ((i = 0; i < n; i++)); do checked[i]=$((1 - all)); done
+                ;;
+            '' | $'\n' | $'\r')
+                trap - INT TERM
+                stty "$saved" </dev/tty 2>/dev/null
+                printf '\033[?25h\r\n' >/dev/tty
+                local out=""
+                for ((i = 0; i < n; i++)); do [ "${checked[i]}" -eq 1 ] && out="$out ${AVAILABLE_TOOLS[i]}"; done
+                CHECKBOX_RESULT="${out# }"
+                return 0
+                ;;
+            q | Q | $'\x03')
+                trap - INT TERM
+                stty "$saved" </dev/tty 2>/dev/null
+                printf '\033[?25h\r\n' >/dev/tty
+                CHECKBOX_RESULT=""
+                return 0
+                ;;
+        esac
+    done
+}
+
 # --- Tool selection ---
 
 if [ -n "$SELECTED_TOOLS" ]; then
@@ -175,6 +261,10 @@ if [ -n "$SELECTED_TOOLS" ]; then
 elif [ "${SAZO_NON_INTERACTIVE:-0}" = "1" ]; then
     TOOLS_TO_INSTALL=("${AVAILABLE_TOOLS[@]}")
 else
+    if select_tools_checkbox; then
+        read -ra TOOLS_TO_INSTALL <<< "$CHECKBOX_RESULT"
+    else
+    # Fallback: plain numbered prompt when there is no usable TTY for the checkbox UI.
     echo "Available tools:"
     echo ""
     for i in "${!AVAILABLE_TOOLS[@]}"; do
@@ -206,6 +296,7 @@ else
                 TOOLS_TO_INSTALL+=("${AVAILABLE_TOOLS[$idx]}")
             fi
         done
+    fi
     fi
 fi
 
