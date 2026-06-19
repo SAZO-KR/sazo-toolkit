@@ -156,6 +156,34 @@ EOF
     jq -e '.hooks.Stop[0].hooks[0].command == "'"$cmd"'"' "$s2" >/dev/null \
         && ok "settings: created from absent file" || fail "settings create absent"
 
+    # Empty (0-byte) settings file => initialized to {} instead of jq parse error.
+    local s3="$d/empty/settings.json"; mkdir -p "$d/empty"; : > "$s3"
+    bash "$SETTINGS_HOOK" add "$s3" "$cmd" || fail "settings add to empty file error"
+    jq -e '.hooks.Stop[0].hooks[0].command == "'"$cmd"'"' "$s3" >/dev/null \
+        && ok "settings: empty file initialized safely" || fail "settings empty-file"
+
+    rm -rf "$d"
+}
+
+test_settings_symlink_preserved() {
+    if ! has_jq; then
+        printf 'skip - settings symlink preservation (jq not installed)\n'
+        return
+    fi
+    local d; d="$(mktemp -d)"
+    local real="$d/dotfiles/settings.json"
+    local link="$d/.claude/settings.json"
+    local cmd="/base/tools/turn-summary/scripts/stop-summary.sh"
+    mkdir -p "$d/dotfiles" "$d/.claude"
+    echo '{}' > "$real"
+    ln -s "$real" "$link"
+
+    # Operate through the symlink; it must stay a symlink and the real target updates.
+    bash "$SETTINGS_HOOK" add "$link" "$cmd" || fail "symlink add error"
+    [ -L "$link" ] && ok "settings: symlink preserved (not replaced)" || fail "symlink replaced by regular file"
+    jq -e '.hooks.Stop[0].hooks[0].command == "'"$cmd"'"' "$real" >/dev/null \
+        && ok "settings: write reached symlink target" || fail "symlink target not updated"
+
     rm -rf "$d"
 }
 
@@ -163,6 +191,7 @@ test_manifest_and_syntax
 test_gate_behavior
 test_hook_output
 test_settings_merge
+test_settings_symlink_preserved
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

@@ -97,20 +97,26 @@ if [ ! -d "$HARNESS_DIR/tools/turn-summary/scripts" ]; then
     exit 1
 fi
 
-HOOK_CMD="$HARNESS_DIR/tools/turn-summary/scripts/stop-summary.sh"
+HOOK_PATH="$HARNESS_DIR/tools/turn-summary/scripts/stop-summary.sh"
 chmod +x "$HARNESS_DIR/tools/turn-summary/scripts/"*.sh 2>/dev/null || true
+
+# Claude Code runs a command hook through the shell when no args are given, so the
+# stored command must be shell-safe. Single-quote the path (escaping any embedded
+# single quotes) so install dirs with whitespace still launch the hook correctly.
+shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+HOOK_CMD="$(shell_quote "$HOOK_PATH")"
 
 # --- Register the Stop hook in settings.json (jq, idempotent) ---
 
 echo ""
 echo "Registering Stop hook in ~/.claude/settings.json..."
 
+# Pass the raw path; settings-hook.sh resolves symlinks portably (no readlink -f).
 SETTINGS_FILE="$HOME/.claude/settings.json"
-[ -L "$SETTINGS_FILE" ] && SETTINGS_FILE=$(readlink -f "$SETTINGS_FILE" 2>/dev/null || readlink "$SETTINGS_FILE")
 
 if command -v jq >/dev/null 2>&1; then
     if bash "$HARNESS_DIR/tools/turn-summary/scripts/settings-hook.sh" add "$SETTINGS_FILE" "$HOOK_CMD"; then
-        log_info "Stop hook registered: $HOOK_CMD"
+        log_info "Stop hook registered: $HOOK_PATH"
     else
         log_warn "Failed to update settings.json — manual registration needed"
     fi

@@ -32,8 +32,8 @@ echo ""
 
 echo "[1/2] Cleaning settings.json Stop hook..."
 
+# Pass the raw path; settings-hook.sh resolves symlinks portably (no readlink -f).
 SETTINGS_FILE="$HOME/.claude/settings.json"
-[ -L "$SETTINGS_FILE" ] && SETTINGS_FILE=$(readlink -f "$SETTINGS_FILE" 2>/dev/null || readlink "$SETTINGS_FILE")
 
 if [ -f "$SETTINGS_FILE" ] && command -v jq >/dev/null 2>&1; then
     if bash "$HARNESS_DIR/tools/turn-summary/scripts/settings-hook.sh" remove "$SETTINGS_FILE" "$HOOK_MATCH"; then

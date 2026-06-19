@@ -17,6 +17,25 @@ file="${2:-}"
 arg="${3:-}"
 
 [ -n "$action" ] && [ -n "$file" ] && [ -n "$arg" ] || exit 2
+
+# If <file> is a symlink (e.g. settings.json kept in a dotfiles repo), resolve it
+# to its canonical target so the atomic `mv` writes through the link instead of
+# replacing it with a regular file. Portable (no `readlink -f`, which is GNU-only).
+resolve_symlink() {
+    local target="$1" link
+    while [ -L "$target" ]; do
+        link="$(readlink "$target")"
+        case "$link" in
+            /*) target="$link" ;;
+            *)  target="$(dirname "$target")/$link" ;;
+        esac
+    done
+    printf '%s' "$target"
+}
+if [ -L "$file" ]; then
+    file="$(resolve_symlink "$file")"
+fi
+
 command -v jq >/dev/null 2>&1 || exit 1
 
 tmp_in="$(mktemp)"
