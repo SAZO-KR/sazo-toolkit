@@ -178,8 +178,9 @@ select_tools_checkbox() {
         stty "$saved" </dev/tty 2>/dev/null
         return 1
     fi
-    # Always restore the terminal, even on interrupt.
-    trap 'stty "$saved" </dev/tty 2>/dev/null; printf "\033[?25h" >/dev/tty' INT TERM
+    # Always restore the terminal, even on interrupt — and abort, so an interrupted
+    # read does not fall through and confirm the current selection.
+    trap 'stty "$saved" </dev/tty 2>/dev/null; printf "\033[?25h\r\n" >/dev/tty; exit 130' INT TERM
     printf '\033[?25l' >/dev/tty   # hide cursor
 
     cols="$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2)"
