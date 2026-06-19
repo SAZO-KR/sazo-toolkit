@@ -207,6 +207,35 @@ test_discover_tools_finds_awake() {
     echo "ok - discover_tools finds awake"
 }
 
+test_discover_tools_finds_turn_summary() {
+    local tools_dir="$ROOT_DIR/tools"
+
+    local found=0
+    for tool_dir in "$tools_dir"/*/; do
+        [ -d "$tool_dir" ] || continue
+        [ -f "$tool_dir/tool.sh" ] || continue
+        local name
+        name="$(basename "$tool_dir")"
+        if [ "$name" = "turn-summary" ]; then
+            found=1
+            break
+        fi
+    done
+
+    [ "$found" -eq 1 ] || fail "discover_tools should find 'turn-summary'"
+    echo "ok - discover_tools finds turn-summary"
+}
+
+test_turn_summary_installer_exists() {
+    [ -f "$ROOT_DIR/tools/turn-summary/install.sh" ] || fail "turn-summary install.sh not found"
+    [ -x "$ROOT_DIR/tools/turn-summary/install.sh" ] || fail "turn-summary install.sh not executable"
+    bash -n "$ROOT_DIR/tools/turn-summary/install.sh" || fail "turn-summary install.sh has syntax errors"
+    [ -f "$ROOT_DIR/tools/turn-summary/uninstall.sh" ] || fail "turn-summary uninstall.sh not found"
+    [ -x "$ROOT_DIR/tools/turn-summary/uninstall.sh" ] || fail "turn-summary uninstall.sh not executable"
+    bash -n "$ROOT_DIR/tools/turn-summary/uninstall.sh" || fail "turn-summary uninstall.sh has syntax errors"
+    echo "ok - turn-summary installer/uninstaller exist and are syntactically valid"
+}
+
 # --- Tool-provided artifact linking tests ---
 
 test_awake_command_is_tool_provided() {
@@ -248,6 +277,8 @@ test_awake_uninstaller_exists
 test_root_installer_exists
 test_root_uninstaller_exists
 test_discover_tools_finds_awake
+test_discover_tools_finds_turn_summary
+test_turn_summary_installer_exists
 test_awake_command_is_tool_provided
 test_install_links_tool_commands
 test_uninstall_cleans_tool_symlinks
