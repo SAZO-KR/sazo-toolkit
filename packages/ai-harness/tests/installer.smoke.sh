@@ -101,6 +101,23 @@ test_receipt_clear() {
     echo "ok - receipt clear works"
 }
 
+test_receipt_idempotent() {
+    local tmpdir count
+    tmpdir="$(mktemp -d)"
+
+    # Re-installing (writing the same entries twice) must not duplicate lines.
+    count=$(SAZO_BASE_DIR="$tmpdir" bash -c "
+        source '$LIB_PATH'
+        write_receipt test-idem 'state:/x/foo.state' 'dir:/x'
+        write_receipt test-idem 'state:/x/foo.state' 'dir:/x'
+        wc -l < '$tmpdir/receipts/test-idem.receipt'
+    " | tr -d ' ')
+    [ "$count" = "2" ] || fail "receipt should have 2 unique lines after double write, got $count"
+
+    rm -rf "$tmpdir"
+    echo "ok - write_receipt is idempotent (no duplicate entries)"
+}
+
 test_remove_harness_symlinks_can_filter_basenames() {
     local tmpdir
     tmpdir="$(mktemp -d)"
@@ -170,6 +187,15 @@ test_awake_uninstaller_exists() {
     [ -x "$ROOT_DIR/tools/awake/uninstall.sh" ] || fail "awake uninstall.sh not executable"
     bash -n "$ROOT_DIR/tools/awake/uninstall.sh" || fail "awake uninstall.sh has syntax errors"
     echo "ok - awake uninstaller exists and is syntactically valid"
+}
+
+test_checkbox_multiselect_present() {
+    # Interactive checkbox multiselect, driven from /dev/tty (stdin is the curl|bash pipe).
+    assert_file_contains "$ROOT_DIR/install.sh" "select_tools_checkbox"
+    assert_file_contains "$ROOT_DIR/install.sh" "/dev/tty"
+    # The numbered prompt must remain as a fallback for non-TTY installs.
+    assert_file_contains "$ROOT_DIR/install.sh" "Enter tool numbers to install"
+    echo "ok - install.sh has checkbox multiselect with numbered fallback"
 }
 
 test_root_installer_exists() {
@@ -269,12 +295,14 @@ test_check_platform_unsupported
 test_ask_yes_no_noninteractive
 test_receipt_round_trip
 test_receipt_clear
+test_receipt_idempotent
 test_remove_harness_symlinks_can_filter_basenames
 test_root_uninstaller_fallback_removes_symlinks_without_lib
 test_tool_sh_manifest
 test_awake_installer_exists
 test_awake_uninstaller_exists
 test_root_installer_exists
+test_checkbox_multiselect_present
 test_root_uninstaller_exists
 test_discover_tools_finds_awake
 test_discover_tools_finds_turn_summary

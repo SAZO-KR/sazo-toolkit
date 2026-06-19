@@ -249,11 +249,12 @@ write_receipt() {
     local tmp
     tmp="$(mktemp "${receipt_file}.tmp.XXXXXX")" || return 1
 
-    # Append new entries to existing receipt
+    # Append new entries to the existing receipt, de-duplicating exact lines so a
+    # re-install does not grow the receipt with repeated entries (order preserved).
     {
         [ -f "$receipt_file" ] && cat "$receipt_file"
         printf '%s\n' "$@"
-    } > "$tmp"
+    } | awk 'NF && !seen[$0]++' > "$tmp"
 
     mv "$tmp" "$receipt_file"
 }
