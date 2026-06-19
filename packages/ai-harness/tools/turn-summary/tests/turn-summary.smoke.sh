@@ -169,6 +169,30 @@ EOF
     rm -rf "$d"
 }
 
+test_settings_stale_replace() {
+    if ! has_jq; then
+        printf 'skip - settings stale-replace (jq not installed)\n'
+        return
+    fi
+    local d; d="$(mktemp -d)"
+    local s="$d/settings.json"
+    local old="/old/base/tools/turn-summary/scripts/stop-summary.sh"
+    local new="/new/base/tools/turn-summary/scripts/stop-summary.sh"
+    echo '{}' > "$s"
+
+    bash "$SETTINGS_HOOK" add "$s" "$old" || fail "stale add(old) error"
+    # Reinstall after a path change (SAZO_BASE_DIR moved): old entry must be replaced.
+    bash "$SETTINGS_HOOK" add "$s" "$new" || fail "stale add(new) error"
+
+    local total ours
+    total="$(jq '[.hooks.Stop[].hooks[] | select(.command | contains("turn-summary/scripts/stop-summary.sh"))] | length' "$s")"
+    ours="$(jq -r '[.hooks.Stop[].hooks[].command] | map(select(contains("turn-summary"))) | .[0]' "$s")"
+    [ "$total" = "1" ] && [ "$ours" = "$new" ] \
+        && ok "settings: stale hook replaced on path change" || fail "stale-replace total=$total ours=$ours"
+
+    rm -rf "$d"
+}
+
 test_settings_symlink_preserved() {
     if ! has_jq; then
         printf 'skip - settings symlink preservation (jq not installed)\n'
@@ -195,6 +219,7 @@ test_manifest_and_syntax
 test_gate_behavior
 test_hook_output
 test_settings_merge
+test_settings_stale_replace
 test_settings_symlink_preserved
 
 echo ""

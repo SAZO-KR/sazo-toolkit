@@ -29,7 +29,14 @@ resolve_symlink() {
             echo "settings-hook: symlink chain too deep (loop?): $1" >&2
             return 1
         fi
-        link="$(readlink "$target")"
+        link="$(readlink "$target")" || {
+            echo "settings-hook: failed to read symlink: $target" >&2
+            return 1
+        }
+        [ -n "$link" ] || {
+            echo "settings-hook: empty symlink target: $target" >&2
+            return 1
+        }
         case "$link" in
             /*) target="$link" ;;
             *)  target="$(dirname "$target")/$link" ;;
@@ -51,13 +58,16 @@ case "$action" in
     add)
         mkdir -p "$(dirname "$file")"
         if [ -s "$file" ]; then cp "$file" "$tmp_in"; else echo '{}' > "$tmp_in"; fi
-        jq --arg c "$arg" '
+        jq --arg c "$arg" --arg s "turn-summary/scripts/stop-summary.sh" '
             .hooks = (.hooks // {})
             | .hooks.Stop = (.hooks.Stop // [])
-            | if ([.hooks.Stop[]?.hooks[]?.command] | index($c))
-              then .
-              else .hooks.Stop += [{"hooks": [{"type": "command", "command": $c}]}]
-              end
+            # Drop any existing turn-summary hook by stable suffix first, then append
+            # the current command. This stays correct even when the install path
+            # (SAZO_BASE_DIR) changes between installs — no stale duplicate is left.
+            | .hooks.Stop |= [ .[]
+                | .hooks = ((.hooks // []) | map(select((.command // "") | contains($s) | not)))
+                | select((.hooks | length) > 0) ]
+            | .hooks.Stop += [{"hooks": [{"type": "command", "command": $c}]}]
         ' "$tmp_in" > "$tmp_out" 2>/dev/null || exit 1
         ;;
     remove)

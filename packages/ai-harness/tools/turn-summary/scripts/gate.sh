@@ -25,6 +25,8 @@ command -v jq >/dev/null 2>&1 || exit 1
 result="$(jq -s '
   def is_real_user:
     .type == "user"
+    and .message != null
+    and .message.content != null
     and ((.message.content | type) == "string"
          or (any(.message.content[]?; .type == "tool_result") | not));
 
@@ -32,8 +34,8 @@ result="$(jq -s '
   | (reduce range(0; ($arr | length)) as $i (-1;
      if ($arr[$i] | is_real_user) then $i else . end)) as $start
   | [ $arr[($start + 1):][]
-      | select(.type == "assistant")
-      | (.message.content // [])[]?
+      | select(.type == "assistant" and .message != null and .message.content != null)
+      | .message.content[]?
       | select(.type == "tool_use")
       | .name ]
   | any(.[]; . == "Edit" or . == "MultiEdit" or . == "Write" or . == "NotebookEdit" or . == "Agent" or . == "Task")
