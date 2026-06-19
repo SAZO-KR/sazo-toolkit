@@ -50,13 +50,28 @@ fi
 
 command -v jq >/dev/null 2>&1 || exit 1
 
-tmp_in="$(mktemp)"
-tmp_out="$(mktemp)"
+case "$action" in add|remove) ;; *) exit 2 ;; esac
+
+# Init before the trap so a failed mktemp under `set -u` doesn't trip an
+# unbound-variable error inside the EXIT handler.
+tmp_in=""
+tmp_out=""
 trap 'rm -f "$tmp_in" "$tmp_out"' EXIT
+
+# Nothing to remove from a missing/empty file — skip before any temp I/O.
+if [ "$action" = "remove" ] && [ ! -s "$file" ]; then
+    exit 0
+fi
+
+# Create temps in the TARGET dir so the final `mv` is an atomic same-filesystem
+# rename (a system-temp dir may be on a different filesystem). jq stderr is left
+# visible so a corrupt settings.json surfaces a real error instead of silent exit.
+mkdir -p "$(dirname "$file")"
+tmp_in="$(mktemp "$(dirname "$file")/.settings.tmp.XXXXXX")"
+tmp_out="$(mktemp "$(dirname "$file")/.settings.tmp.XXXXXX")"
 
 case "$action" in
     add)
-        mkdir -p "$(dirname "$file")"
         if [ -s "$file" ]; then cp "$file" "$tmp_in"; else echo '{}' > "$tmp_in"; fi
         jq --arg c "$arg" --arg s "turn-summary/scripts/stop-summary.sh" '
             .hooks = (.hooks // {})
@@ -68,10 +83,9 @@ case "$action" in
                 | .hooks = ((.hooks // []) | map(select((.command // "") | contains($s) | not)))
                 | select((.hooks | length) > 0) ]
             | .hooks.Stop += [{"hooks": [{"type": "command", "command": $c}]}]
-        ' "$tmp_in" > "$tmp_out" 2>/dev/null || exit 1
+        ' "$tmp_in" > "$tmp_out" || exit 1
         ;;
     remove)
-        [ -s "$file" ] || exit 0
         cp "$file" "$tmp_in"
         jq --arg m "$arg" '
             if .hooks.Stop then
@@ -81,10 +95,7 @@ case "$action" in
               | if (.hooks.Stop | length) == 0 then del(.hooks.Stop) else . end
               | if (.hooks == {}) then del(.hooks) else . end
             else . end
-        ' "$tmp_in" > "$tmp_out" 2>/dev/null || exit 1
-        ;;
-    *)
-        exit 2
+        ' "$tmp_in" > "$tmp_out" || exit 1
         ;;
 esac
 

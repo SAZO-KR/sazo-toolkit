@@ -29,11 +29,16 @@ if [ ! -f "$LIB_PATH" ]; then
         if [ -d "$SAZO_BASE_DIR/.git" ]; then
             echo "Updating existing installation at $SAZO_BASE_DIR..."
             git -C "$SAZO_BASE_DIR" pull --ff-only || true
+            # Older/other sparse checkouts may not include our package — ensure it,
+            # else the re-exec below hits "No such file or directory".
+            git -C "$SAZO_BASE_DIR" sparse-checkout set packages/ai-harness 2>/dev/null || true
         else
             echo "Installing turn-summary to $SAZO_BASE_DIR..."
-            # No .git but possibly a non-empty/broken dir (interrupted install) —
-            # clean it so `git clone` (under set -e) doesn't fail on a non-empty path.
-            rm -rf "$SAZO_BASE_DIR"
+            # No .git but possibly a non-empty/broken dir (interrupted install) — clean it
+            # so `git clone` (under set -e) doesn't fail. Guard against unsafe targets.
+            if [ -n "${SAZO_BASE_DIR:-}" ] && [ "$SAZO_BASE_DIR" != "/" ] && [ "$SAZO_BASE_DIR" != "$HOME" ]; then
+                rm -rf "$SAZO_BASE_DIR"
+            fi
             mkdir -p "$(dirname "$SAZO_BASE_DIR")"
             git clone --filter=blob:none --sparse "$SAZO_REPO_URL" "$SAZO_BASE_DIR"
             git -C "$SAZO_BASE_DIR" sparse-checkout set packages/ai-harness
