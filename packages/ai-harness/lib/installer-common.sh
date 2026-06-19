@@ -213,6 +213,9 @@ sparse_clone_tool() {
         log_info "Updating existing installation..."
         cd "$target_dir"
         git pull --ff-only 2>/dev/null || log_warn "Could not update (local changes?)"
+        # Widen the sparse checkout too: an older clone may exclude this path, in
+        # which case `git pull` alone leaves the package missing on disk.
+        git sparse-checkout set "$sparse_path" 2>/dev/null || true
         cd - >/dev/null
     else
         log_info "Installing to $target_dir..."
