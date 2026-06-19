@@ -103,7 +103,7 @@ chmod +x "$HARNESS_DIR/tools/turn-summary/scripts/"*.sh 2>/dev/null || true
 # Claude Code runs a command hook through the shell when no args are given, so the
 # stored command must be shell-safe. Single-quote the path (escaping any embedded
 # single quotes) so install dirs with whitespace still launch the hook correctly.
-shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+shell_quote() { local q="'\''"; printf "'%s'" "${1//\'/$q}"; }
 HOOK_CMD="$(shell_quote "$HOOK_PATH")"
 
 # --- Register the Stop hook in settings.json (jq, idempotent) ---

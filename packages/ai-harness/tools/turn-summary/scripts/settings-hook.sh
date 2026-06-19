@@ -10,7 +10,7 @@
 #
 # Writes <file> in place atomically (mktemp + validate + mv). jq is required.
 # Exit 0 success | 1 failure (no jq / parse / empty output) | 2 bad usage.
-set -uo pipefail
+set -euo pipefail
 
 action="${1:-}"
 file="${2:-}"
@@ -22,8 +22,13 @@ arg="${3:-}"
 # to its canonical target so the atomic `mv` writes through the link instead of
 # replacing it with a regular file. Portable (no `readlink -f`, which is GNU-only).
 resolve_symlink() {
-    local target="$1" link
+    local target="$1" link depth=0
     while [ -L "$target" ]; do
+        depth=$((depth + 1))
+        if [ "$depth" -gt 40 ]; then
+            echo "settings-hook: symlink chain too deep (loop?): $1" >&2
+            return 1
+        fi
         link="$(readlink "$target")"
         case "$link" in
             /*) target="$link" ;;
@@ -33,7 +38,7 @@ resolve_symlink() {
     printf '%s' "$target"
 }
 if [ -L "$file" ]; then
-    file="$(resolve_symlink "$file")"
+    file="$(resolve_symlink "$file")" || exit 1
 fi
 
 command -v jq >/dev/null 2>&1 || exit 1
